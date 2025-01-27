@@ -1,4 +1,5 @@
 # The build cache
 zig-cache
+.zig-cache/
 .vscode/
 .idea/
