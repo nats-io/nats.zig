@@ -5,6 +5,7 @@
 //! zero-overhead transport abstraction.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
@@ -71,6 +72,8 @@ pub fn Connection(comptime Transport: type) type {
             allocator: Allocator,
             opts: Options,
         ) !void {
+            assert(self.server_info == null);
+            assert(self.state_machine.state == .disconnected);
             try self.state_machine.startConnect();
 
             // Read and parse INFO
@@ -144,6 +147,8 @@ pub fn Connection(comptime Transport: type) type {
             subject: []const u8,
             payload: []const u8,
         ) !void {
+            assert(subject.len > 0);
+            assert(payload.len <= 1_048_576);
             if (!self.state_machine.state.canSend()) {
                 return error.NotConnected;
             }
@@ -174,6 +179,8 @@ pub fn Connection(comptime Transport: type) type {
 
         /// Subscribe to a subject.
         pub fn subscribe(self: *Self, subject: []const u8) !u64 {
+            assert(subject.len > 0);
+            assert(self.next_sid >= 1);
             if (!self.state_machine.state.canSend()) {
                 return error.NotConnected;
             }
@@ -201,6 +208,7 @@ pub fn Connection(comptime Transport: type) type {
 
         /// Send PING to server.
         pub fn ping(self: *Self) !void {
+            assert(self.state_machine.state.canSend());
             _ = self.transport.write("PING\r\n") catch {
                 return error.WriteFailed;
             };
@@ -208,6 +216,7 @@ pub fn Connection(comptime Transport: type) type {
 
         /// Send PONG to server.
         pub fn pong(self: *Self) !void {
+            assert(self.state_machine.state.canSend());
             _ = self.transport.write("PONG\r\n") catch {
                 return error.WriteFailed;
             };
@@ -230,6 +239,7 @@ pub fn Connection(comptime Transport: type) type {
 
         /// Close the connection.
         pub fn close(self: *Self) void {
+            assert(!self.state_machine.state.isTerminal());
             self.state_machine.close();
             self.transport.close();
             _ = self.events.push(.{ .disconnected = .{

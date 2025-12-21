@@ -112,7 +112,9 @@ pub fn parse(data: []const u8) ParseResult {
         }
 
         // Find end of line
-        const line_end = std.mem.indexOfPos(u8, data, value_start, "\r\n") orelse {
+        const crlf = "\r\n";
+        const idx = std.mem.indexOfPos(u8, data, value_start, crlf);
+        const line_end = idx orelse {
             result.err = .incomplete;
             return result;
         };
@@ -219,7 +221,8 @@ test "parse with status" {
 
     try std.testing.expectEqual(@as(?ParseResult.ParseError, null), result.err);
     try std.testing.expectEqualSlices(u8, "503", result.status.?);
-    try std.testing.expectEqualSlices(u8, "No Responders", result.description.?);
+    const desc = "No Responders";
+    try std.testing.expectEqualSlices(u8, desc, result.description.?);
     try std.testing.expect(result.isNoResponders());
 }
 

@@ -50,14 +50,13 @@ pub fn main() !void {
         return err;
     };
 
-    std.debug.print("Received ({d} bytes):\n{s}\n", .{ info_data.len, info_data });
+    const len = info_data.len;
+    std.debug.print("Received ({d} bytes):\n{s}\n", .{ len, info_data });
     reader.interface.tossBuffered();
 
     // Send CONNECT
-    const connect_cmd =
-        \\CONNECT {"verbose":false,"pedantic":false,"lang":"zig","version":"0.1.0"}
-        \\
-    ;
+    const connect_cmd = "CONNECT {\"verbose\":false,\"pedantic\":false," ++
+        "\"lang\":\"zig\",\"version\":\"0.1.0\"}\r\n";
 
     writer.interface.writeAll(connect_cmd) catch |err| {
         std.debug.print("Write error: {}\n", .{err});

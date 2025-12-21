@@ -213,9 +213,8 @@ pub const HMsgArgs = struct {
 
 test "server info parse" {
     const allocator = std.testing.allocator;
-    const json =
-        \\{"server_id":"test","version":"2.10.0","proto":1,"max_payload":1048576}
-    ;
+    const json = "{\"server_id\":\"test\",\"version\":\"2.10.0\"," ++
+        "\"proto\":1,\"max_payload\":1048576}";
 
     var parsed = try ServerInfo.parse(allocator, json);
     defer parsed.deinit();

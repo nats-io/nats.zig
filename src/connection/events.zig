@@ -249,7 +249,8 @@ test "message event" {
         .message => |msg| {
             try std.testing.expectEqualSlices(u8, "test.subject", msg.subject);
             try std.testing.expectEqual(@as(u64, 42), msg.sid);
-            try std.testing.expectEqualSlices(u8, "_INBOX.reply", msg.reply_to.?);
+            const reply = "_INBOX.reply";
+            try std.testing.expectEqualSlices(u8, reply, msg.reply_to.?);
             try std.testing.expectEqualSlices(u8, "hello", msg.data);
         },
         else => return error.UnexpectedEvent,
@@ -269,8 +270,11 @@ test "disconnected event" {
     const popped = queue.pop().?;
     switch (popped) {
         .disconnected => |info| {
-            try std.testing.expectEqual(DisconnectReason.network_error, info.reason);
-            try std.testing.expectEqualSlices(u8, "connection reset", info.error_msg.?);
+            const expected_reason = DisconnectReason.network_error;
+            try std.testing.expectEqual(expected_reason, info.reason);
+            const expected_msg = "connection reset";
+            const err_msg = info.error_msg.?;
+            try std.testing.expectEqualSlices(u8, expected_msg, err_msg);
         },
         else => return error.UnexpectedEvent,
     }

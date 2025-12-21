@@ -22,19 +22,21 @@ pub fn main() !void {
     std.debug.print("Connecting to NATS...\n", .{});
 
     // Connect to NATS (pass io to client)
-    const client = nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    const url = "nats://localhost:4222";
+    const client = nats.Client.connect(allocator, io, url, .{
         .name = "zig-pubsub-example",
     }) catch |err| {
         std.debug.print("Connection failed: {}\n", .{err});
         return err;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io);
 
     std.debug.print("Connected!\n", .{});
 
     // Print server info
     if (client.getServerInfo()) |info| {
-        const name = if (info.server_name.len > 0) info.server_name else "unknown";
+        const has_name = info.server_name.len > 0;
+        const name = if (has_name) info.server_name else "unknown";
         const ver = if (info.version.len > 0) info.version else "unknown";
         std.debug.print("Server: {s} v{s}\n", .{ name, ver });
     }

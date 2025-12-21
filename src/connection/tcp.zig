@@ -5,6 +5,7 @@
 //! Transport interface for use with the Connection type.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const Io = std.Io;
 const net = Io.net;
 
@@ -29,6 +30,8 @@ pub const TcpTransport = struct {
         host: []const u8,
         port: u16,
     ) ConnectError!TcpTransport {
+        assert(host.len > 0);
+        assert(port > 0);
         const address = net.IpAddress.parse(host, port) catch {
             return error.InvalidAddress;
         };
@@ -65,6 +68,7 @@ pub const TcpTransport = struct {
 
     /// Reads data from the TCP connection.
     pub fn read(self: *TcpTransport, buf: []u8) ReadError!usize {
+        assert(buf.len > 0);
         if (!self.connected) return ReadError.ConnectionClosed;
 
         const n = self.reader.interface.readAll(buf) catch |err| {
@@ -85,6 +89,7 @@ pub const TcpTransport = struct {
 
     /// Writes data to the TCP connection.
     pub fn write(self: *TcpTransport, data: []const u8) WriteError!usize {
+        assert(data.len > 0);
         if (!self.connected) return WriteError.ConnectionClosed;
 
         self.writer.interface.writeAll(data) catch |err| {
@@ -104,6 +109,7 @@ pub const TcpTransport = struct {
 
     /// Flushes the write buffer.
     pub fn flush(self: *TcpTransport) WriteError!void {
+        assert(self.connected);
         if (!self.connected) return WriteError.ConnectionClosed;
 
         self.writer.interface.flush() catch {

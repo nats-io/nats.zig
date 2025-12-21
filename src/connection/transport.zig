@@ -4,6 +4,7 @@
 //! Uses comptime duck typing for zero-overhead abstraction.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const Io = std.Io;
 
 /// Transport capabilities and requirements.
@@ -59,7 +60,9 @@ pub const MockTransport = struct {
         self.write_buf.deinit(allocator);
     }
 
+    /// Reads data from mock transport buffer.
     pub fn read(self: *MockTransport, buf: []u8) ReadError!usize {
+        assert(buf.len > 0);
         if (self.closed) return ReadError.ConnectionClosed;
         if (self.read_pos >= self.read_data.len) return 0;
 
@@ -91,14 +94,17 @@ pub const MockTransport = struct {
         return WriteError.Unexpected;
     }
 
+    /// Closes the mock transport.
     pub fn close(self: *MockTransport) void {
         self.closed = true;
     }
 
+    /// Returns all data written to mock transport.
     pub fn written(self: *const MockTransport) []const u8 {
         return self.write_buf.items;
     }
 
+    /// Resets mock transport with new read data.
     pub fn reset(self: *MockTransport, new_read_data: []const u8) void {
         self.read_data = new_read_data;
         self.read_pos = 0;

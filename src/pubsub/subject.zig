@@ -125,9 +125,11 @@ test "validate publish subject" {
     try std.testing.expectError(error.EmptyToken, validatePublish("foo."));
     try std.testing.expectError(error.EmptyToken, validatePublish(".foo"));
     try std.testing.expectError(error.EmptyToken, validatePublish("foo..bar"));
-    try std.testing.expectError(error.InvalidCharacter, validatePublish("foo.*"));
-    try std.testing.expectError(error.InvalidCharacter, validatePublish("foo.>"));
-    try std.testing.expectError(error.SpaceInSubject, validatePublish("foo bar"));
+    const inv_char = error.InvalidCharacter;
+    try std.testing.expectError(inv_char, validatePublish("foo.*"));
+    try std.testing.expectError(inv_char, validatePublish("foo.>"));
+    const space_err = error.SpaceInSubject;
+    try std.testing.expectError(space_err, validatePublish("foo bar"));
 }
 
 test "validate subscribe subject" {
@@ -140,9 +142,11 @@ test "validate subscribe subject" {
 
     try std.testing.expectError(error.EmptySubject, validateSubscribe(""));
     try std.testing.expectError(error.EmptyToken, validateSubscribe("foo."));
-    try std.testing.expectError(error.WildcardNotLast, validateSubscribe("foo.>.bar"));
-    try std.testing.expectError(error.InvalidCharacter, validateSubscribe("foo.bar>"));
-    try std.testing.expectError(error.InvalidCharacter, validateSubscribe("foo.bar*"));
+    const wc_err = error.WildcardNotLast;
+    try std.testing.expectError(wc_err, validateSubscribe("foo.>.bar"));
+    const inv_char = error.InvalidCharacter;
+    try std.testing.expectError(inv_char, validateSubscribe("foo.bar>"));
+    try std.testing.expectError(inv_char, validateSubscribe("foo.bar*"));
 }
 
 test "subject matching" {

@@ -30,7 +30,8 @@ fn reportResult(name: []const u8, passed: bool, details: []const u8) void {
 }
 
 fn formatUrl(buf: []u8, port: u16) []const u8 {
-    return std.fmt.bufPrint(buf, "nats://127.0.0.1:{d}", .{port}) catch "invalid";
+    const fmt = "nats://127.0.0.1:{d}";
+    return std.fmt.bufPrint(buf, fmt, .{port}) catch "invalid";
 }
 
 fn formatAuthUrl(buf: []u8, port: u16, token: []const u8) []const u8 {
@@ -61,7 +62,7 @@ fn testConnectDisconnect(allocator: std.mem.Allocator) void {
         reportResult("connect_disconnect", false, msg);
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io.io());
 
     const connected = client.isConnected();
     reportResult("connect_disconnect", connected, "not connected");
@@ -79,7 +80,7 @@ fn testPublishSingle(allocator: std.mem.Allocator) void {
         reportResult("publish_single", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io.io());
 
     client.publish("test.subject", "Hello NATS!") catch {
         reportResult("publish_single", false, "publish failed");
@@ -106,7 +107,7 @@ fn testSubscribeUnsubscribe(allocator: std.mem.Allocator) void {
         reportResult("subscribe_unsubscribe", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io.io());
 
     const sub = client.subscribe(allocator, "test.>") catch {
         reportResult("subscribe_unsubscribe", false, "subscribe failed");
@@ -139,7 +140,7 @@ fn testPublishSubscribe(allocator: std.mem.Allocator) void {
         reportResult("publish_subscribe", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io.io());
 
     const sub = client.subscribe(allocator, "roundtrip.test") catch {
         reportResult("publish_subscribe", false, "subscribe failed");
@@ -193,7 +194,7 @@ fn testServerInfo(allocator: std.mem.Allocator) void {
         reportResult("server_info", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io.io());
 
     const info = client.getServerInfo();
     if (info == null) {
@@ -217,7 +218,7 @@ fn testMultipleSubscriptions(allocator: std.mem.Allocator) void {
         reportResult("multiple_subscriptions", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io.io());
 
     const sub1 = client.subscribe(allocator, "multi.one") catch {
         reportResult("multiple_subscriptions", false, "sub 1 failed");
@@ -255,7 +256,7 @@ fn testWildcardSubscribe(allocator: std.mem.Allocator) void {
         reportResult("wildcard_subscribe", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io.io());
 
     // Test * wildcard
     const sub1 = client.subscribe(allocator, "wild.*") catch {
@@ -291,9 +292,10 @@ fn testQueueGroups(allocator: std.mem.Allocator) void {
         reportResult("queue_groups", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io.io());
 
-    const sub = client.subscribeQueue(allocator, "queue.test", "workers") catch {
+    const queue = "workers";
+    const sub = client.subscribeQueue(allocator, "queue.test", queue) catch {
         reportResult("queue_groups", false, "queue subscribe failed");
         return;
     };
@@ -324,7 +326,7 @@ fn testRequestReply(allocator: std.mem.Allocator) void {
         reportResult("request_reply", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io.io());
 
     // Generate an inbox
     const inbox = nats.newInbox(allocator) catch {
@@ -369,7 +371,7 @@ fn testReconnection(
         reportResult("reconnection", false, "initial connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io.io());
 
     if (!client.isConnected()) {
         reportResult("reconnection", false, "not connected initially");
@@ -405,7 +407,7 @@ fn testAuthentication(allocator: std.mem.Allocator) void {
         reportResult("authentication", false, "auth connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io.io());
 
     const connected = client.isConnected();
     reportResult("authentication", connected, "auth not connected");

@@ -76,11 +76,13 @@ pub const Stats = struct {
     }
 
     pub fn kibPerSec(self: Stats) f64 {
-        return @as(f64, @floatFromInt(self.total_bytes)) / self.elapsedSec() / 1024.0;
+        const bytes: f64 = @floatFromInt(self.total_bytes);
+        return bytes / self.elapsedSec() / 1024.0;
     }
 
     pub fn avgLatencyUs(self: Stats) f64 {
-        return self.elapsedSec() * 1e6 / @as(f64, @floatFromInt(self.msg_count));
+        const count: f64 = @floatFromInt(self.msg_count);
+        return self.elapsedSec() * 1e6 / count;
     }
 
     /// Print stats in standard format.
@@ -121,8 +123,9 @@ test "Stats calculation" {
         .msg_count = 1000,
         .total_bytes = 128_000,
     };
-    try std.testing.expectApproxEqAbs(@as(f64, 1.0), stats.elapsedSec(), 0.001);
-    try std.testing.expectApproxEqAbs(@as(f64, 1000.0), stats.msgsPerSec(), 0.1);
-    try std.testing.expectApproxEqAbs(@as(f64, 125.0), stats.kibPerSec(), 0.1);
-    try std.testing.expectApproxEqAbs(@as(f64, 1000.0), stats.avgLatencyUs(), 0.1);
+    const expect = std.testing.expectApproxEqAbs;
+    try expect(@as(f64, 1.0), stats.elapsedSec(), 0.001);
+    try expect(@as(f64, 1000.0), stats.msgsPerSec(), 0.1);
+    try expect(@as(f64, 125.0), stats.kibPerSec(), 0.1);
+    try expect(@as(f64, 1000.0), stats.avgLatencyUs(), 0.1);
 }

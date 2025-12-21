@@ -14,8 +14,9 @@
 //!     defer _ = gpa.deinit();
 //!     const allocator = gpa.allocator();
 //!
-//!     var client = try nats.Client.connect(allocator, "nats://localhost:4222", .{});
-//!     defer client.deinit(allocator);
+//!     const url = "nats://localhost:4222";
+//!     var client = try nats.Client.connect(allocator, io, url, .{});
+//!     defer client.deinit(allocator, io);
 //!
 //!     try client.publish(allocator, "hello", "world");
 //! }
@@ -40,6 +41,7 @@ pub const memory = @import("memory.zig");
 // Re-export client
 pub const client = @import("client.zig");
 pub const Client = client.Client;
+pub const Stats = client.Stats;
 
 // Convenience re-exports for common types
 pub const Message = types.Message;

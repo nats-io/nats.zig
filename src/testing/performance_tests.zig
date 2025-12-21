@@ -118,10 +118,11 @@ pub fn main() !void {
 
     // Print summary
     std.debug.print("\n=== Summary ===\n", .{});
-    std.debug.print(
-        "{s:<20} {s:>10} {s:>10} {s:>10} {s:>10} {s:>10}\n",
-        .{ "Test", "pub msg/s", "sub msg/s", "pub KiB/s", "sub KiB/s", "latency" },
-    );
+    const hdr_fmt = "{s:<20} {s:>10} {s:>10} {s:>10} {s:>10} {s:>10}\n";
+    const headers = .{
+        "Test", "pub msg/s", "sub msg/s", "pub KiB/s", "sub KiB/s", "latency",
+    };
+    std.debug.print(hdr_fmt, headers);
     std.debug.print(
         "{s:-<20} {s:->10} {s:->10} {s:->10} {s:->10} {s:->10}\n",
         .{ "", "", "", "", "", "" },
@@ -346,7 +347,8 @@ fn runZigToZig(allocator: Allocator, config: TestConfig) !TestResult {
 
     // Read subscriber output and wait
     var sub_buf: [4096]u8 = undefined;
-    const sub_output = readPipeWithTimeout(sub.stderr, &sub_buf, 30_000_000_000);
+    const timeout_30s: u64 = 30_000_000_000;
+    const sub_output = readPipeWithTimeout(sub.stderr, &sub_buf, timeout_30s);
     _ = sub.wait() catch {};
 
     // Parse both outputs
@@ -429,12 +431,15 @@ fn runZigToNats(allocator: Allocator, config: TestConfig) !TestResult {
 
     // Read publisher output and wait
     var pub_buf: [4096]u8 = undefined;
-    const pub_output = readPipeWithTimeout(pub_proc.stderr, &pub_buf, 10_000_000_000);
+    const timeout_10s: u64 = 10_000_000_000;
+    const pipe = pub_proc.stderr;
+    const pub_output = readPipeWithTimeout(pipe, &pub_buf, timeout_10s);
     _ = pub_proc.wait() catch {};
 
     // Read subscriber output and wait
     var sub_buf: [4096]u8 = undefined;
-    const sub_output = readPipeWithTimeout(sub.stdout, &sub_buf, 30_000_000_000);
+    const timeout_30s: u64 = 30_000_000_000;
+    const sub_output = readPipeWithTimeout(sub.stdout, &sub_buf, timeout_30s);
     _ = sub.wait() catch {};
 
     // Parse both outputs
@@ -660,7 +665,8 @@ fn runNatsToZig(allocator: Allocator, config: TestConfig) !TestResult {
 
     // Read Zig sub output and wait
     var sub_buf: [4096]u8 = undefined;
-    const sub_output = readPipeWithTimeout(sub.stderr, &sub_buf, 30_000_000_000);
+    const timeout_30s: u64 = 30_000_000_000;
+    const sub_output = readPipeWithTimeout(sub.stderr, &sub_buf, timeout_30s);
     _ = sub.wait() catch {};
 
     // Parse both outputs
@@ -736,12 +742,15 @@ fn runNatsBench(allocator: Allocator, config: TestConfig) !TestResult {
 
     // Read publisher output and wait
     var pub_buf: [4096]u8 = undefined;
-    const pub_output = readPipeWithTimeout(pub_proc.stdout, &pub_buf, 10_000_000_000);
+    const timeout_10s: u64 = 10_000_000_000;
+    const pipe = pub_proc.stdout;
+    const pub_output = readPipeWithTimeout(pipe, &pub_buf, timeout_10s);
     _ = pub_proc.wait() catch {};
 
     // Read subscriber output and wait
     var sub_buf: [4096]u8 = undefined;
-    const sub_output = readPipeWithTimeout(sub.stdout, &sub_buf, 30_000_000_000);
+    const timeout_30s: u64 = 30_000_000_000;
+    const sub_output = readPipeWithTimeout(sub.stdout, &sub_buf, timeout_30s);
     _ = sub.wait() catch {};
 
     // Parse both outputs
@@ -833,7 +842,8 @@ fn parseNatsBenchLine(line: []const u8) ?BenchStats {
 }
 
 test "parseStatsLine" {
-    const line = "NATS publisher stats: 2891871 msgs/sec ~ 361484 KiB/sec ~ 0.35us";
+    const line = "NATS publisher stats: " ++
+        "2891871 msgs/sec ~ 361484 KiB/sec ~ 0.35us";
     const stats = parseStatsLine(line) orelse unreachable;
     try std.testing.expectApproxEqAbs(@as(f64, 2891871), stats.msgs_per_sec, 1);
     try std.testing.expectApproxEqAbs(@as(f64, 361484), stats.kib_per_sec, 1);

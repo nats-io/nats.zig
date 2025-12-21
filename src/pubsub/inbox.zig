@@ -17,7 +17,8 @@ pub const random_len = 22;
 pub const total_len = prefix.len + random_len;
 
 /// Characters used in inbox generation (base62).
-const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" ++
+    "abcdefghijklmnopqrstuvwxyz";
 
 /// Generates a new unique inbox subject.
 /// Caller owns returned memory.

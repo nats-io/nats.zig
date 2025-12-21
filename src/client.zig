@@ -43,6 +43,20 @@ pub const Options = struct {
     connect_timeout_ns: u64 = 5_000_000_000,
 };
 
+/// Connection statistics (Go client parity).
+pub const Stats = struct {
+    /// Total messages received.
+    msgs_in: u64 = 0,
+    /// Total messages sent.
+    msgs_out: u64 = 0,
+    /// Total bytes received.
+    bytes_in: u64 = 0,
+    /// Total bytes sent.
+    bytes_out: u64 = 0,
+    /// Number of reconnects.
+    reconnects: u32 = 0,
+};
+
 /// Parse result for NATS URL.
 pub const ParsedUrl = struct {
     host: []const u8,
@@ -122,7 +136,6 @@ pub const Client = struct {
     };
 
     stream: net.Stream,
-    io: Io,
     reader: net.Stream.Reader,
     writer: net.Stream.Writer,
     parser: Parser,
@@ -142,8 +155,8 @@ pub const Client = struct {
     free_slots: [MAX_SUBSCRIPTIONS]u16,
     free_count: u16,
 
-    // Legacy compatibility (will be removed)
-    subscriptions: std.AutoHashMapUnmanaged(u64, *Sub),
+    // Connection statistics
+    stats: Stats,
 
     /// Connects to a NATS server.
     /// URL format: nats://[user:pass@]host[:port]
@@ -161,8 +174,6 @@ pub const Client = struct {
         const client = try allocator.create(Client);
         errdefer allocator.destroy(client);
 
-        client.io = io;
-
         // Parse address (handle localhost specially)
         const host = if (std.mem.eql(u8, parsed.host, "localhost"))
             "127.0.0.1"
@@ -174,7 +185,7 @@ pub const Client = struct {
         };
 
         // Connect
-        client.stream = net.IpAddress.connect(address, client.io, .{
+        client.stream = net.IpAddress.connect(address, io, .{
             .mode = .stream,
             .protocol = .tcp,
         }) catch {
@@ -184,13 +195,12 @@ pub const Client = struct {
         // Initialize buffers and reader/writer
         client.read_buffer = undefined;
         client.write_buffer = undefined;
-        client.reader = client.stream.reader(client.io, &client.read_buffer);
-        client.writer = client.stream.writer(client.io, &client.write_buffer);
+        client.reader = client.stream.reader(io, &client.read_buffer);
+        client.writer = client.stream.writer(io, &client.write_buffer);
 
         // Initialize state
         client.parser = .{};
         client.server_info = null;
-        client.subscriptions = .{};
         client.events = .{};
         client.next_sid = 1;
         client.state = .connecting;
@@ -206,6 +216,7 @@ pub const Client = struct {
             client.free_slots[i] = @intCast(MAX_SUBSCRIPTIONS - 1 - i);
         }
         client.free_count = MAX_SUBSCRIPTIONS;
+        client.stats = .{};
 
         // Perform handshake
         try client.handshake(allocator, opts, parsed);
@@ -289,11 +300,11 @@ pub const Client = struct {
     }
 
     /// Closes the connection and frees resources.
-    /// Note: The Io instance is owned by the caller and not freed here.
-    pub fn deinit(self: *Client, allocator: Allocator) void {
+    /// The Io instance must be the same one used to connect.
+    pub fn deinit(self: *Client, allocator: Allocator, io: Io) void {
         assert(self.next_sid >= 1);
 
-        self.stream.close(self.io);
+        self.stream.close(io);
 
         // Tiger Style: Clean up subscriptions via slot array
         for (self.sub_ptrs) |maybe_sub| {
@@ -308,9 +319,6 @@ pub const Client = struct {
                 allocator.destroy(sub);
             }
         }
-
-        // Legacy: Also clean up HashMap
-        self.subscriptions.deinit(allocator);
 
         if (self.server_info) |*info| {
             info.deinit(allocator);
@@ -335,6 +343,9 @@ pub const Client = struct {
         }) catch {
             return error.EncodingFailed;
         };
+
+        self.stats.msgs_out += 1;
+        self.stats.bytes_out += payload.len;
     }
 
     /// Publishes with a reply-to subject.
@@ -356,6 +367,144 @@ pub const Client = struct {
         }) catch {
             return error.EncodingFailed;
         };
+
+        self.stats.msgs_out += 1;
+        self.stats.bytes_out += payload.len;
+    }
+
+    /// Sends request and waits for reply (Go client parity).
+    pub fn request(
+        self: *Client,
+        allocator: Allocator,
+        subject: []const u8,
+        payload: []const u8,
+        timeout_ms: u32,
+    ) !?DirectMsg {
+        assert(subject.len > 0);
+        assert(self.state.canSend());
+
+        // Generate unique inbox for reply
+        const inbox = try pubsub.newInbox(allocator);
+        defer allocator.free(inbox);
+
+        // Subscribe to inbox
+        const sub = try self.subscribe(allocator, inbox);
+        defer sub.deinit(allocator);
+
+        // Publish with reply-to
+        try self.publishRequest(subject, inbox, payload);
+        try self.flush();
+
+        // Wait for reply with timeout using pollDirect
+        return self.pollDirect(allocator, timeout_ms);
+    }
+
+    /// Flushes pending writes with timeout (Go client parity).
+    pub fn flushWithTimeout(self: *Client, timeout_ms: u32) !void {
+        assert(self.state.canSend());
+        assert(timeout_ms > 0);
+
+        const start = std.time.Instant.now() catch {
+            return error.TimerUnavailable;
+        };
+        const timeout_ns: u64 = @as(u64, timeout_ms) * std.time.ns_per_ms;
+
+        // Try to flush
+        self.writer.interface.flush() catch {
+            return error.WriteFailed;
+        };
+
+        // Verify with PING/PONG roundtrip
+        try self.ping();
+        self.writer.interface.flush() catch {
+            return error.WriteFailed;
+        };
+
+        // Wait for PONG response
+        while (true) {
+            const now = std.time.Instant.now() catch {
+                return error.TimerUnavailable;
+            };
+            const elapsed = now.since(start);
+            if (elapsed >= timeout_ns) return error.Timeout;
+
+            const remaining_ns = timeout_ns - elapsed;
+            const remaining_ms: u32 = @intCast(remaining_ns / std.time.ns_per_ms);
+
+            // Poll for response
+            var poll_fds = [_]std.posix.pollfd{.{
+                .fd = self.stream.socket.handle,
+                .events = std.posix.POLL.IN,
+                .revents = 0,
+            }};
+
+            const ready = std.posix.poll(&poll_fds, @intCast(remaining_ms)) catch {
+                return error.PollFailed;
+            };
+
+            if (ready == 0) return error.Timeout;
+
+            // Read and check for PONG
+            self.reader.interface.fillMore() catch |err| {
+                switch (err) {
+                    error.EndOfStream, error.ReadFailed => {
+                        self.state = .disconnected;
+                        return error.Disconnected;
+                    },
+                }
+            };
+
+            const data = self.reader.interface.buffered();
+            if (std.mem.indexOf(u8, data, "PONG\r\n")) |pos| {
+                self.reader.interface.toss(pos + 6);
+                return;
+            }
+        }
+    }
+
+    /// Gracefully drains subscriptions and closes (Go client parity).
+    pub fn drain(self: *Client, allocator: Allocator, io: Io) !void {
+        assert(self.state == .connected);
+
+        // Unsubscribe all active subscriptions
+        for (self.sub_ptrs, 0..) |maybe_sub, slot_idx| {
+            if (maybe_sub) |sub| {
+                // Send UNSUB
+                protocol.Encoder.encodeUnsub(&self.writer.interface, .{
+                    .sid = sub.sid,
+                    .max_msgs = null,
+                }) catch {};
+
+                // Remove from SidMap
+                _ = self.sidmap.remove(sub.sid);
+                self.sub_ptrs[slot_idx] = null;
+                self.free_slots[self.free_count] = @intCast(slot_idx);
+                self.free_count += 1;
+
+                // Clean up subscription
+                sub.messages.close();
+                sub.messages.deinit(allocator);
+                allocator.free(sub.subject);
+                if (sub.queue_group) |qg| allocator.free(qg);
+                allocator.destroy(sub);
+            }
+        }
+
+        // Flush remaining writes
+        self.writer.interface.flush() catch {};
+
+        // Update state
+        self.state = .draining;
+
+        // Close connection
+        self.stream.close(io);
+        self.state = .closed;
+    }
+
+    /// Returns connection statistics (Go client parity).
+    pub fn getStats(self: *const Client) Stats {
+        assert(self.next_sid >= 1);
+        return self.stats;
     }
 
     /// Subscribes to a subject. Returns subscription for Go-style polling.
@@ -432,9 +581,6 @@ pub const Client = struct {
         };
         self.sub_ptrs[slot_idx] = sub;
 
-        // Legacy: Also store in HashMap for backwards compatibility
-        try self.subscriptions.put(allocator, sid, sub);
-
         // Send SUB command
         protocol.Encoder.encodeSub(&self.writer.interface, .{
             .subject = subject,
@@ -467,13 +613,11 @@ pub const Client = struct {
             self.free_slots[self.free_count] = slot_idx;
             self.free_count += 1;
         }
-
-        // Legacy: Remove from HashMap
-        _ = self.subscriptions.remove(sid);
     }
 
     /// Tiger Style: Get subscription by SID using O(1) SidMap lookup.
     pub fn getSubscriptionBySid(self: *Client, sid: u64) ?*Sub {
+        assert(sid > 0);
         if (self.sidmap.get(sid)) |slot_idx| {
             return self.sub_ptrs[slot_idx];
         }
@@ -623,6 +767,7 @@ pub const Client = struct {
     /// Toss bytes that were consumed in previous pollDirect() call.
     /// Must be called before reading more data.
     pub fn tossPending(self: *Client) void {
+        assert(self.pending_toss <= self.read_buffer.len);
         if (self.pending_toss > 0) {
             self.reader.interface.toss(self.pending_toss);
             self.pending_toss = 0;
@@ -667,7 +812,9 @@ pub const Client = struct {
                     };
                     const elapsed = now.since(start);
                     if (elapsed >= timeout_ns) return null;
-                    break :blk @intCast((timeout_ns - elapsed) / std.time.ns_per_ms);
+                    const ns_per_ms = std.time.ns_per_ms;
+                    const remaining = (timeout_ns - elapsed) / ns_per_ms;
+                    break :blk @intCast(remaining);
                 } else null;
 
                 var poll_fds = [_]std.posix.pollfd{.{
@@ -794,6 +941,7 @@ pub const Client = struct {
         allocator: Allocator,
         cmd: protocol.ServerCommand,
     ) !void {
+        assert(self.state.canReceive());
         switch (cmd) {
             .ping => try self.sendPong(),
             .pong => {},
@@ -822,6 +970,10 @@ pub const Client = struct {
     ) !void {
         assert(args.subject.len > 0);
         assert(args.sid > 0);
+
+        // Update stats
+        self.stats.msgs_in += 1;
+        self.stats.bytes_in += args.payload.len;
 
         // Tiger Style: O(1) lookup via SidMap
         if (self.getSubscriptionBySid(args.sid)) |sub| {
@@ -863,6 +1015,10 @@ pub const Client = struct {
     ) !void {
         assert(args.subject.len > 0);
         assert(args.sid > 0);
+
+        // Update stats (include headers in byte count)
+        self.stats.msgs_in += 1;
+        self.stats.bytes_in += args.payload.len + args.headers.len;
 
         // Tiger Style: O(1) lookup via SidMap
         if (self.getSubscriptionBySid(args.sid)) |sub| {
@@ -969,5 +1125,15 @@ test "options defaults" {
     try std.testing.expect(!opts.pedantic);
     try std.testing.expect(opts.user == null);
     try std.testing.expect(opts.pass == null);
-    try std.testing.expectEqual(@as(u64, 5_000_000_000), opts.connect_timeout_ns);
+    const expected_timeout: u64 = 5_000_000_000;
+    try std.testing.expectEqual(expected_timeout, opts.connect_timeout_ns);
+}
+
+test "stats defaults" {
+    const stats: Stats = .{};
+    try std.testing.expectEqual(@as(u64, 0), stats.msgs_in);
+    try std.testing.expectEqual(@as(u64, 0), stats.msgs_out);
+    try std.testing.expectEqual(@as(u64, 0), stats.bytes_in);
+    try std.testing.expectEqual(@as(u64, 0), stats.bytes_out);
+    try std.testing.expectEqual(@as(u32, 0), stats.reconnects);
 }

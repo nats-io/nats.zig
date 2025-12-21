@@ -233,7 +233,8 @@ inline fn parseFullHMsg(
 
     // Extract headers and payload - they're right after the header line
     const headers = data[header_len..][0..hdr_len];
-    const payload = data[header_len + hdr_len ..][0 .. total_content_len - hdr_len];
+    const payload_len = total_content_len - hdr_len;
+    const payload = data[header_len + hdr_len ..][0..payload_len];
 
     consumed.* = total_len;
     assert(consumed.* <= data.len);
@@ -408,11 +409,11 @@ test "parse INFO" {
     var parser = Parser.init();
     var consumed: usize = 0;
 
-    const info_json =
-        \\INFO {"server_id":"test","version":"2.10.0","proto":1,"max_payload":1048576}
-    ++ "\r\n";
+    const info_json = "INFO {\"server_id\":\"test\"," ++
+        "\"version\":\"2.10.0\",\"proto\":1,\"max_payload\":1048576}\r\n";
 
-    const result = try parser.parse(std.testing.allocator, info_json, &consumed);
+    const alloc = std.testing.allocator;
+    const result = try parser.parse(alloc, info_json, &consumed);
     defer {
         if (result) |cmd| {
             switch (cmd) {
@@ -468,8 +469,10 @@ test "parse HMSG with payload" {
 
 test "parseHMsgLine" {
     var consumed: usize = 0;
-    const data = "HMSG test.subject 42 10 25\r\n" ++ "H" ** 10 ++ "P" ** 15 ++ "\r\n";
-    const result = try parseFullHMsg(data, "test.subject 42 10 25", 28, &consumed);
+    const header = "HMSG test.subject 42 10 25\r\n";
+    const data = header ++ "H" ** 10 ++ "P" ** 15 ++ "\r\n";
+    const args = "test.subject 42 10 25";
+    const result = try parseFullHMsg(data, args, 28, &consumed);
     try std.testing.expect(result != null);
     const hmsg = result.?.hmsg;
     try std.testing.expectEqualSlices(u8, "test.subject", hmsg.subject);
@@ -481,7 +484,8 @@ test "parseHMsgLine" {
 
 test "parseHMsgLine with reply" {
     var consumed: usize = 0;
-    const data = "HMSG foo 1 _INBOX.reply 15 30\r\n" ++ "H" ** 15 ++ "P" ** 15 ++ "\r\n";
+    const header = "HMSG foo 1 _INBOX.reply 15 30\r\n";
+    const data = header ++ "H" ** 15 ++ "P" ** 15 ++ "\r\n";
     const result = try parseFullHMsg(
         data,
         "foo 1 _INBOX.reply 15 30",
@@ -501,7 +505,8 @@ test "parse invalid command" {
     var parser = Parser.init();
     var consumed: usize = 0;
 
-    const result = parser.parse(std.testing.allocator, "INVALID\r\n", &consumed);
+    const alloc = std.testing.allocator;
+    const result = parser.parse(alloc, "INVALID\r\n", &consumed);
     try std.testing.expectError(Parser.Error.InvalidCommand, result);
 }
 
@@ -521,7 +526,8 @@ test "parseU64Fast invalid input" {
 test "parseUsizeFast valid numbers" {
     try std.testing.expectEqual(@as(usize, 0), try parseUsizeFast("0"));
     try std.testing.expectEqual(@as(usize, 42), try parseUsizeFast("42"));
-    try std.testing.expectEqual(@as(usize, 1048576), try parseUsizeFast("1048576"));
+    const large: usize = 1048576;
+    try std.testing.expectEqual(large, try parseUsizeFast("1048576"));
 }
 
 test "parseUsizeFast invalid input" {

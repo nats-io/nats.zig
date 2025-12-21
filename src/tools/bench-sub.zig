@@ -101,13 +101,14 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     var io = std.Io.Threaded.init(allocator);
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), config.url, .{
+    const io_instance = io.io();
+    const client = nats.Client.connect(allocator, io_instance, config.url, .{
         .name = "bench-sub",
     }) catch |err| {
         std.debug.print("Failed to connect: {}\n", .{err});
         return err;
     };
-    defer client.deinit(allocator);
+    defer client.deinit(allocator, io_instance);
 
     // Subscribe - returns *Subscription for Go-style polling
     const sub = client.subscribe(allocator, config.subject) catch |err| {

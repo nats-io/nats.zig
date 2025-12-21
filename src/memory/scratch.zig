@@ -62,6 +62,7 @@ pub const Scratchpads = struct {
     /// Append data to header scratchpad.
     /// Returns error if total exceeds header_size.
     pub fn appendToHeader(self: *Scratchpads, data: []const u8) ![]u8 {
+        assert(self.header_len <= header_size);
         const new_len = self.header_len + data.len;
         if (new_len > header_size) return error.HeaderTooLarge;
 
@@ -73,6 +74,7 @@ pub const Scratchpads = struct {
     /// Append data to payload scratchpad.
     /// Returns error if total exceeds payload_size.
     pub fn appendToPayload(self: *Scratchpads, data: []const u8) ![]u8 {
+        assert(self.payload_len <= payload_size);
         const new_len = self.payload_len + data.len;
         if (new_len > payload_size) return error.PayloadTooLarge;
 
@@ -178,7 +180,8 @@ test "Scratchpads append operations" {
     _ = try scratch.appendToPayload("Hello, ");
     _ = try scratch.appendToPayload("NATS!");
 
-    try std.testing.expectEqualSlices(u8, "Hello, NATS!", scratch.payloadSlice());
+    const expected = "Hello, NATS!";
+    try std.testing.expectEqualSlices(u8, expected, scratch.payloadSlice());
 }
 
 test "Scratchpads size limits" {
@@ -187,12 +190,14 @@ test "Scratchpads size limits" {
     // Header too large
     var big_header: [Scratchpads.header_size + 1]u8 = undefined;
     @memset(&big_header, 'H');
-    try std.testing.expectError(error.HeaderTooLarge, scratch.copyToHeader(&big_header));
+    const header_result = scratch.copyToHeader(&big_header);
+    try std.testing.expectError(error.HeaderTooLarge, header_result);
 
     // Payload too large
     var big_payload: [Scratchpads.payload_size + 1]u8 = undefined;
     @memset(&big_payload, 'P');
-    try std.testing.expectError(error.PayloadTooLarge, scratch.copyToPayload(&big_payload));
+    const payload_result = scratch.copyToPayload(&big_payload);
+    try std.testing.expectError(error.PayloadTooLarge, payload_result);
 }
 
 test "copyMessage basic" {

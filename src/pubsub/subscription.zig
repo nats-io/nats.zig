@@ -540,7 +540,9 @@ pub fn Subscription(comptime ClientType: type) type {
                     };
                     const elapsed = now.since(start);
                     if (elapsed >= timeout_ns) return null;
-                    break :blk @intCast((timeout_ns - elapsed) / std.time.ns_per_ms);
+                    const ns_per_ms = std.time.ns_per_ms;
+                    const remaining = (timeout_ns - elapsed) / ns_per_ms;
+                    break :blk @intCast(remaining);
                 } else null;
 
                 // Poll for a single message (zero-copy)
@@ -564,9 +566,10 @@ pub fn Subscription(comptime ClientType: type) type {
                             .owned = false,
                         };
                     } else {
-                        // Message for different subscription - queue it (copied)
+                        // Message for different subscription - queue it
                         // Tiger Style: O(1) lookup via SidMap
-                        if (self.client.getSubscriptionBySid(d.sid)) |other_sub| {
+                        const other = self.client.getSubscriptionBySid(d.sid);
+                        if (other) |other_sub| {
                             const alloc = allocator;
                             const subject = alloc.dupe(u8, d.subject) catch {
                                 self.client.tossPending();
@@ -769,9 +772,6 @@ pub fn Subscription(comptime ClientType: type) type {
                 self.client.free_slots[self.client.free_count] = slot_idx;
                 self.client.free_count += 1;
             }
-
-            // Remove from legacy HashMap
-            _ = self.client.subscriptions.remove(self.sid);
 
             // Close queue to wake any waiting threads
             self.messages.close();
