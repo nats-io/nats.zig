@@ -200,6 +200,17 @@ pub const Client = struct {
             return error.ConnectionFailed;
         };
 
+        // Set TCP_NODELAY to disable Nagle's algorithm for low latency
+        // This is critical for NATS performance - without it, latency can be
+        // 2-5x higher due to delayed TCP acknowledgments
+        const enable: u32 = 1;
+        std.posix.setsockopt(
+            client.stream.socket.handle,
+            std.posix.IPPROTO.TCP,
+            std.os.linux.TCP.NODELAY,
+            std.mem.asBytes(&enable),
+        ) catch {};
+
         // Initialize buffers and reader/writer
         client.read_buffer = undefined;
         client.write_buffer = undefined;

@@ -43,6 +43,15 @@ pub const TcpTransport = struct {
             return error.ConnectionFailed;
         };
 
+        // Set TCP_NODELAY to disable Nagle's algorithm for low latency
+        const enable: u32 = 1;
+        std.posix.setsockopt(
+            stream.socket.handle,
+            std.posix.IPPROTO.TCP,
+            std.os.linux.TCP.NODELAY,
+            std.mem.asBytes(&enable),
+        ) catch {};
+
         var result = TcpTransport{
             .stream = stream,
             .io = io,
