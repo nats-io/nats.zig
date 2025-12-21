@@ -62,8 +62,8 @@ pub fn main() !void {
     var results: std.ArrayListUnmanaged(TestResult) = .{};
     defer results.deinit(allocator);
 
-    // Test 1: Zig publisher -> Zig subscriber
-    std.debug.print("--- Test 1: Zig Pub -> Zig Sub ---\n", .{});
+    // Test 1: z -> z (Zig publisher -> Zig subscriber)
+    std.debug.print("--- Test 1: z -> z ---\n", .{});
     if (runZigToZig(allocator, config)) |result| {
         try results.append(allocator, result);
         printResult(result);
@@ -71,8 +71,8 @@ pub fn main() !void {
         std.debug.print("Test failed: {}\n", .{err});
     }
 
-    // Test 2: Zig publisher -> nats subscriber
-    std.debug.print("\n--- Test 2: Zig Pub -> nats Sub ---\n", .{});
+    // Test 2: z -> n (Zig publisher -> nats subscriber)
+    std.debug.print("\n--- Test 2: z -> n ---\n", .{});
     if (runZigToNats(allocator, config)) |result| {
         try results.append(allocator, result);
         printResult(result);
@@ -80,8 +80,8 @@ pub fn main() !void {
         std.debug.print("Test failed: {}\n", .{err});
     }
 
-    // Test 3: nats publisher -> Zig subscriber
-    std.debug.print("\n--- Test 3: nats Pub -> Zig Sub ---\n", .{});
+    // Test 3: n -> z (nats publisher -> Zig subscriber)
+    std.debug.print("\n--- Test 3: n -> z ---\n", .{});
     if (runNatsToZig(allocator, config)) |result| {
         try results.append(allocator, result);
         printResult(result);
@@ -89,8 +89,8 @@ pub fn main() !void {
         std.debug.print("Test failed: {}\n", .{err});
     }
 
-    // Test 4: nats bench (baseline)
-    std.debug.print("\n--- Test 4: nats bench (baseline) ---\n", .{});
+    // Test 4: n -> n (nats bench baseline)
+    std.debug.print("\n--- Test 4: n -> n ---\n", .{});
     if (runNatsBench(allocator, config)) |result| {
         try results.append(allocator, result);
         printResult(result);
@@ -98,8 +98,8 @@ pub fn main() !void {
         std.debug.print("Test failed: {}\n", .{err});
     }
 
-    // Test 5: Zig publisher only (no subscriber)
-    std.debug.print("\n--- Test 5: Zig Publisher Only ---\n", .{});
+    // Test 5: z -> (Zig publisher only)
+    std.debug.print("\n--- Test 5: z -> ---\n", .{});
     if (runZigPub(allocator, config)) |result| {
         try results.append(allocator, result);
         printResult(result);
@@ -107,8 +107,8 @@ pub fn main() !void {
         std.debug.print("Test failed: {}\n", .{err});
     }
 
-    // Test 6: nats publisher only (no subscriber)
-    std.debug.print("\n--- Test 6: nats Publisher Only ---\n", .{});
+    // Test 6: n -> (nats publisher only)
+    std.debug.print("\n--- Test 6: n -> ---\n", .{});
     if (runNatsPub(allocator, config)) |result| {
         try results.append(allocator, result);
         printResult(result);
@@ -354,7 +354,7 @@ fn runZigToZig(allocator: Allocator, config: TestConfig) !TestResult {
     const sub_stats = parseStatsLine(sub_output);
 
     return .{
-        .name = "Zig -> Zig",
+        .name = "z -> z",
         .pub_msgs_per_sec = if (pub_stats) |s| s.msgs_per_sec else null,
         .sub_msgs_per_sec = if (sub_stats) |s| s.msgs_per_sec else null,
         .pub_kib_per_sec = if (pub_stats) |s| s.kib_per_sec else null,
@@ -442,7 +442,7 @@ fn runZigToNats(allocator: Allocator, config: TestConfig) !TestResult {
     const sub_stats = parseNatsBenchOutput(sub_output);
 
     return .{
-        .name = "Zig -> nats",
+        .name = "z -> n",
         .pub_msgs_per_sec = if (pub_stats) |s| s.msgs_per_sec else null,
         .sub_msgs_per_sec = if (sub_stats) |s| s.msgs_per_sec else null,
         .pub_kib_per_sec = if (pub_stats) |s| s.kib_per_sec else null,
@@ -520,7 +520,7 @@ fn runZigPub(allocator: Allocator, config: TestConfig) !TestResult {
     const stats = parseStatsLine(output);
 
     return .{
-        .name = "Zig Pub Only",
+        .name = "z ->",
         .pub_msgs_per_sec = if (stats) |s| s.msgs_per_sec else null,
         .pub_kib_per_sec = if (stats) |s| s.kib_per_sec else null,
         .avg_latency_us = if (stats) |s| s.latency_us else null,
@@ -577,7 +577,7 @@ fn runNatsPub(allocator: Allocator, config: TestConfig) !TestResult {
     const stats = parseNatsBenchOutput(output);
 
     return .{
-        .name = "nats Pub Only",
+        .name = "n ->",
         .pub_msgs_per_sec = if (stats) |s| s.msgs_per_sec else null,
         .pub_kib_per_sec = if (stats) |s| s.kib_per_sec else null,
         .avg_latency_us = if (stats) |s| s.latency_us else null,
@@ -668,7 +668,7 @@ fn runNatsToZig(allocator: Allocator, config: TestConfig) !TestResult {
     const sub_stats = parseStatsLine(sub_output);
 
     return .{
-        .name = "nats -> Zig",
+        .name = "n -> z",
         .pub_msgs_per_sec = if (pub_stats) |s| s.msgs_per_sec else null,
         .sub_msgs_per_sec = if (sub_stats) |s| s.msgs_per_sec else null,
         .pub_kib_per_sec = if (pub_stats) |s| s.kib_per_sec else null,
@@ -749,7 +749,7 @@ fn runNatsBench(allocator: Allocator, config: TestConfig) !TestResult {
     const sub_stats = parseNatsBenchOutput(sub_output);
 
     return .{
-        .name = "nats -> nats",
+        .name = "n -> n",
         .pub_msgs_per_sec = if (pub_stats) |s| s.msgs_per_sec else null,
         .sub_msgs_per_sec = if (sub_stats) |s| s.msgs_per_sec else null,
         .pub_kib_per_sec = if (pub_stats) |s| s.kib_per_sec else null,

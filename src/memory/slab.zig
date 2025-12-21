@@ -1,7 +1,7 @@
 //! Slab Pool for Zero-Allocation Message Ownership
 //!
 //! Provides reference-counted memory slabs for owned message paths.
-//! Single-threaded design uses non-atomic refcounts (faster than Rust).
+//! Single-threaded design uses non-atomic refcounts
 //!
 //! Flow: SlabPool -> Slab (refcounted) -> RefSlice (owned slice)
 //!
@@ -13,7 +13,7 @@ const Allocator = std.mem.Allocator;
 const posix = std.posix;
 
 /// Reference-counted memory region from SlabPool.
-/// Single-threaded: non-atomic refcount (faster than Rust's Arc).
+/// Single-threaded: non-atomic refcount
 pub const Slab = struct {
     data: [*]u8,
     len: u32,

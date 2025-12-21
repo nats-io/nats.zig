@@ -1,7 +1,6 @@
 //! NATS Message
 //!
 //! Represents a message received from or to be published to NATS.
-//! Follows idiomatic Zig: allocator is passed to functions, not stored.
 
 const std = @import("std");
 const assert = std.debug.assert;

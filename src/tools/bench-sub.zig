@@ -6,6 +6,7 @@
 const std = @import("std");
 const nats = @import("nats");
 const assert = std.debug.assert;
+const bench = @import("bench_common.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -80,22 +81,21 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     defer if (slab_pool) |*p| p.deinit(allocator);
 
     // Print start message with current time
-    const instant = std.time.Instant.now() catch {
-        std.debug.print("Starting subscriber benchmark " ++
-            "[msgs={d}, subject={s}]\n", .{ config.msgs, config.subject });
-        return error.ClockUnavailable;
-    };
-    const secs: u64 = @intCast(instant.timestamp.sec);
-    const hours: u64 = @mod(@divFloor(secs, 3600), 24);
-    const minutes: u64 = @mod(@divFloor(secs, 60), 60);
-    const seconds: u64 = @mod(secs, 60);
-
     const mode_str = if (config.use_slab) " (slab)" else "";
-    std.debug.print(
-        "{d:0>2}:{d:0>2}:{d:0>2} Starting subscriber benchmark{s} " ++
-            "[msgs={d}, subject={s}]\n",
-        .{ hours, minutes, seconds, mode_str, config.msgs, config.subject },
-    );
+    if (bench.TimeOfDay.now()) |tod| {
+        var buf: [8]u8 = undefined;
+        std.debug.print(
+            "{s} Starting subscriber benchmark{s} " ++
+                "[msgs={d}, subject={s}]\n",
+            .{ tod.format(&buf), mode_str, config.msgs, config.subject },
+        );
+    } else {
+        std.debug.print(
+            "Starting subscriber benchmark{s} " ++
+                "[msgs={d}, subject={s}]\n",
+            .{ mode_str, config.msgs, config.subject },
+        );
+    }
 
     // Create I/O and connect
     var io = std.Io.Threaded.init(allocator);
@@ -183,32 +183,18 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         }
     }
 
-    // Stop timing
+    // Stop timing and print stats
     if (timer) |*t| {
         const elapsed_ns = t.read();
-        printStats(elapsed_ns, msg_count, total_bytes);
+        const stats = bench.Stats{
+            .elapsed_ns = elapsed_ns,
+            .msg_count = msg_count,
+            .total_bytes = total_bytes,
+        };
+        stats.print("subscriber");
     } else {
         std.debug.print("No messages received\n", .{});
     }
-}
-
-fn printStats(elapsed_ns: u64, msg_count: u64, total_bytes: u64) void {
-    assert(elapsed_ns > 0);
-    assert(msg_count > 0);
-
-    const elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1e9;
-    const msgs_per_sec = @as(f64, @floatFromInt(msg_count)) / elapsed_s;
-    const kib_per_sec = @as(f64, @floatFromInt(total_bytes)) / elapsed_s / 1024.0;
-    const avg_latency_us = elapsed_s * 1e6 / @as(f64, @floatFromInt(msg_count));
-
-    std.debug.print(
-        "\nNATS subscriber stats: {d:.0} msgs/sec ~ {d:.0} KiB/sec ~ {d:.2}us\n",
-        .{ msgs_per_sec, kib_per_sec, avg_latency_us },
-    );
-    std.debug.print(
-        "  Total: {d} messages, {d} bytes in {d:.3}s\n",
-        .{ msg_count, total_bytes, elapsed_s },
-    );
 }
 
 fn printUsage() void {

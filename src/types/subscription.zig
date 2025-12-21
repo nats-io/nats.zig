@@ -1,7 +1,6 @@
 //! NATS Subscription
 //!
 //! Represents an active subscription to a NATS subject pattern.
-//! Follows idiomatic Zig: allocator is passed to functions, not stored.
 
 const std = @import("std");
 const assert = std.debug.assert;

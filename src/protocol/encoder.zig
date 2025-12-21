@@ -1,7 +1,6 @@
 //! NATS Protocol Encoder
 //!
 //! Encodes client commands into NATS wire protocol format.
-//! Does not store allocator - uses writer interface for output.
 
 const std = @import("std");
 const assert = std.debug.assert;

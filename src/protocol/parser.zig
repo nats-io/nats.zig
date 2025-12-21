@@ -2,7 +2,6 @@
 //!
 //! Parses incoming data from NATS server into structured commands.
 //! Handles streaming data that may arrive in partial chunks.
-//! Uses single-pass parsing - no multi-stage state machine.
 
 const std = @import("std");
 const assert = std.debug.assert;

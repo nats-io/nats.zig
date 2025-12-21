@@ -1,7 +1,6 @@
 //! NATS Error Types
 //!
 //! Defines all error conditions that can occur during NATS operations.
-//! Uses Zig's error union pattern for type-safe error handling.
 
 const std = @import("std");
 

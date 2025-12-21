@@ -4,7 +4,7 @@
 //! routing. Uses splitmix64 hash and power-of-two capacity for fast lookups.
 //! Inspired by io_uring NATS client design.
 //!
-//! Tiger Style: Zero allocations ever - caller provides pre-allocated arrays.
+//! Zero allocations - caller provides pre-allocated arrays.
 
 const std = @import("std");
 const assert = std.debug.assert;

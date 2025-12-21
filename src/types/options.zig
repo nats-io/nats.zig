@@ -1,7 +1,6 @@
 //! Connection Options
 //!
 //! Configuration options for establishing NATS connections.
-//! Uses struct initialization with defaults for a builder-like pattern.
 
 const std = @import("std");
 

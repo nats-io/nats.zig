@@ -2,7 +2,7 @@
 //!
 //! Provides slab pool for owned messages, scratchpads for spanning,
 //! and SidMap for O(1) subscription routing.
-//! Single-threaded design: non-atomic refcounts (faster than Rust).
+//! Single-threaded design: non-atomic refcounts
 
 pub const slab = @import("memory/slab.zig");
 pub const scratch = @import("memory/scratch.zig");
