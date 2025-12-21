@@ -152,7 +152,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
             }
 
             // Free message data
-            m.deinit();
+            m.deinit(allocator);
         } else {
             std.debug.print("Timeout waiting for messages\n", .{});
             break;

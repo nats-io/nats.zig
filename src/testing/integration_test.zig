@@ -169,7 +169,7 @@ fn testPublishSubscribe(allocator: std.mem.Allocator) void {
     };
 
     if (msg) |m| {
-        defer m.deinit();
+        defer m.deinit(allocator);
         if (std.mem.eql(u8, m.subject, "roundtrip.test") and
             std.mem.eql(u8, m.data, "hello from zig"))
         {

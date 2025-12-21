@@ -105,6 +105,16 @@ pub const Client = struct {
     /// Subscription type instantiated with Client.
     pub const Sub = subscription_mod.Subscription(Client);
 
+    /// Direct message result - zero-copy slices into read buffer.
+    pub const DirectMsg = struct {
+        subject: []const u8,
+        sid: u64,
+        reply_to: ?[]const u8,
+        data: []const u8,
+        headers: ?[]const u8,
+        consumed: usize,
+    };
+
     stream: net.Stream,
     io: Io,
     reader: net.Stream.Reader,
@@ -117,6 +127,7 @@ pub const Client = struct {
     state: State,
     read_buffer: [32768]u8,
     write_buffer: [32768]u8,
+    pending_toss: usize,
 
     /// Connects to a NATS server.
     /// URL format: nats://[user:pass@]host[:port]
@@ -167,6 +178,7 @@ pub const Client = struct {
         client.events = .{};
         client.next_sid = 1;
         client.state = .connecting;
+        client.pending_toss = 0;
 
         // Perform handshake
         try client.handshake(allocator, opts, parsed);
@@ -533,6 +545,167 @@ pub const Client = struct {
         return total_consumed > 0;
     }
 
+    /// Toss bytes that were consumed in previous pollDirect() call.
+    /// Must be called before reading more data.
+    pub fn tossPending(self: *Client) void {
+        if (self.pending_toss > 0) {
+            self.reader.interface.toss(self.pending_toss);
+            self.pending_toss = 0;
+        }
+    }
+
+    /// Polls for a single message (zero-copy).
+    /// Returns slices directly into read buffer - valid until next poll call.
+    /// Handles PING/PONG/OK/ERR internally, only returns on MSG/HMSG.
+    /// Returns null on timeout. Caller must call tossPending() before next
+    /// poll to release the buffer space.
+    pub fn pollDirect(
+        self: *Client,
+        allocator: Allocator,
+        timeout_ms: ?u32,
+    ) !?DirectMsg {
+        assert(self.state.canReceive());
+
+        // Toss previously consumed bytes
+        self.tossPending();
+
+        // Setup timeout tracking
+        const has_timeout = timeout_ms != null;
+        const start: std.time.Instant = if (has_timeout)
+            std.time.Instant.now() catch return error.TimerUnavailable
+        else
+            undefined;
+        const timeout_ns: u64 = if (timeout_ms) |ms|
+            @as(u64, ms) * std.time.ns_per_ms
+        else
+            0;
+
+        while (true) {
+            // Get buffered data
+            var data = self.reader.interface.buffered();
+
+            // If buffer empty, wait for socket
+            if (data.len == 0) {
+                const remaining_ms: ?u32 = if (has_timeout) blk: {
+                    const now = std.time.Instant.now() catch {
+                        return error.TimerUnavailable;
+                    };
+                    const elapsed = now.since(start);
+                    if (elapsed >= timeout_ns) return null;
+                    break :blk @intCast((timeout_ns - elapsed) / std.time.ns_per_ms);
+                } else null;
+
+                var poll_fds = [_]std.posix.pollfd{.{
+                    .fd = self.stream.socket.handle,
+                    .events = std.posix.POLL.IN,
+                    .revents = 0,
+                }};
+
+                const timeout_i32: i32 = if (remaining_ms) |ms|
+                    @intCast(ms)
+                else
+                    -1;
+
+                const ready = std.posix.poll(&poll_fds, timeout_i32) catch {
+                    return error.PollFailed;
+                };
+
+                if (ready == 0) return null;
+
+                self.reader.interface.fillMore() catch |err| {
+                    switch (err) {
+                        error.EndOfStream => {
+                            self.state = .disconnected;
+                            return null;
+                        },
+                        error.ReadFailed => {
+                            self.state = .disconnected;
+                            return null;
+                        },
+                    }
+                };
+
+                data = self.reader.interface.buffered();
+                if (data.len == 0) return null;
+            }
+
+            // Parse one command
+            var consumed: usize = 0;
+            const cmd = self.parser.parse(
+                allocator,
+                data,
+                &consumed,
+            ) catch {
+                return error.ProtocolError;
+            };
+
+            if (cmd) |c| {
+                switch (c) {
+                    .ping => {
+                        // Handle PING, toss consumed, continue
+                        self.reader.interface.toss(consumed);
+                        try self.sendPong();
+                    },
+                    .pong, .ok => {
+                        // Toss and continue
+                        self.reader.interface.toss(consumed);
+                    },
+                    .err => |msg| {
+                        self.reader.interface.toss(consumed);
+                        _ = self.events.push(.{ .server_error = msg });
+                    },
+                    .info => |new_info| {
+                        self.reader.interface.toss(consumed);
+                        if (self.server_info) |*info| {
+                            info.deinit(std.heap.page_allocator);
+                        }
+                        self.server_info = new_info;
+                    },
+                    .msg => |args| {
+                        // Record consumed for later toss, return slices
+                        self.pending_toss = consumed;
+                        return .{
+                            .subject = args.subject,
+                            .sid = args.sid,
+                            .reply_to = args.reply_to,
+                            .data = args.payload,
+                            .headers = null,
+                            .consumed = consumed,
+                        };
+                    },
+                    .hmsg => |args| {
+                        self.pending_toss = consumed;
+                        return .{
+                            .subject = args.subject,
+                            .sid = args.sid,
+                            .reply_to = args.reply_to,
+                            .data = args.payload,
+                            .headers = if (args.headers.len > 0)
+                                args.headers
+                            else
+                                null,
+                            .consumed = consumed,
+                        };
+                    },
+                }
+            } else {
+                // Need more data - read more
+                self.reader.interface.fillMore() catch |err| {
+                    switch (err) {
+                        error.EndOfStream => {
+                            self.state = .disconnected;
+                            return null;
+                        },
+                        error.ReadFailed => {
+                            self.state = .disconnected;
+                            return null;
+                        },
+                    }
+                };
+            }
+        }
+    }
+
     /// Returns the next event from the event queue.
     /// Returns null if no events are pending.
     pub fn nextEvent(self: *Client) ?Event {
@@ -595,7 +768,7 @@ pub const Client = struct {
                 .reply_to = reply_to,
                 .data = data,
                 .headers = null,
-                .allocator = alloc,
+                .owned = true,
             }) catch {
                 // Queue full - drop message, free memory
                 alloc.free(subject);
@@ -641,7 +814,7 @@ pub const Client = struct {
                 .reply_to = reply_to,
                 .data = data,
                 .headers = headers,
-                .allocator = alloc,
+                .owned = true,
             }) catch {
                 // Queue full - drop message, free memory
                 alloc.free(subject);

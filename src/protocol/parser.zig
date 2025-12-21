@@ -14,6 +14,29 @@ const OwnedServerInfo = commands.OwnedServerInfo;
 const MsgArgs = commands.MsgArgs;
 const HMsgArgs = commands.HMsgArgs;
 
+/// Fast decimal parser for u64. Inlined for hot path performance.
+/// Uses wrapping math - no overflow checks (NATS values are bounded).
+pub inline fn parseU64Fast(s: []const u8) error{InvalidCharacter}!u64 {
+    assert(s.len > 0);
+    var v: u64 = 0;
+    for (s) |c| {
+        if (c < '0' or c > '9') return error.InvalidCharacter;
+        v = v *% 10 +% @as(u64, c - '0');
+    }
+    return v;
+}
+
+/// Fast decimal parser for usize. Inlined for hot path performance.
+pub inline fn parseUsizeFast(s: []const u8) error{InvalidCharacter}!usize {
+    assert(s.len > 0);
+    var v: usize = 0;
+    for (s) |c| {
+        if (c < '0' or c > '9') return error.InvalidCharacter;
+        v = v *% 10 +% @as(usize, c - '0');
+    }
+    return v;
+}
+
 /// Protocol parser for NATS server commands.
 /// Stateless single-pass parser - no multi-stage state machine.
 pub const Parser = struct {
@@ -105,7 +128,7 @@ pub const Parser = struct {
 
 /// Parse complete MSG in single pass.
 /// Returns null if payload not yet available.
-fn parseFullMsg(
+inline fn parseFullMsg(
     data: []const u8,
     args_line: []const u8,
     header_len: usize,
@@ -119,7 +142,7 @@ fn parseFullMsg(
     const subject = it.next() orelse return Parser.Error.InvalidArguments;
     const sid_str = it.next() orelse return Parser.Error.InvalidArguments;
 
-    const sid = std.fmt.parseInt(u64, sid_str, 10) catch
+    const sid = parseU64Fast(sid_str) catch
         return Parser.Error.InvalidArguments;
 
     var reply_to: ?[]const u8 = null;
@@ -136,7 +159,7 @@ fn parseFullMsg(
         return Parser.Error.InvalidArguments;
     }
 
-    const payload_len = std.fmt.parseInt(usize, payload_len_str, 10) catch
+    const payload_len = parseUsizeFast(payload_len_str) catch
         return Parser.Error.InvalidArguments;
 
     // Calculate total message size: header + payload + trailing \r\n
@@ -166,7 +189,7 @@ fn parseFullMsg(
 
 /// Parse complete HMSG in single pass.
 /// Returns null if headers/payload not yet available.
-fn parseFullHMsg(
+inline fn parseFullHMsg(
     data: []const u8,
     args_line: []const u8,
     header_len: usize,
@@ -180,7 +203,7 @@ fn parseFullHMsg(
     const subject = it.next() orelse return Parser.Error.InvalidArguments;
     const sid_str = it.next() orelse return Parser.Error.InvalidArguments;
 
-    const sid = std.fmt.parseInt(u64, sid_str, 10) catch
+    const sid = parseU64Fast(sid_str) catch
         return Parser.Error.InvalidArguments;
 
     const parts = blk: {
@@ -196,9 +219,9 @@ fn parseFullHMsg(
     };
 
     const reply_to = parts[0];
-    const hdr_len = std.fmt.parseInt(usize, parts[1], 10) catch
+    const hdr_len = parseUsizeFast(parts[1]) catch
         return Parser.Error.InvalidArguments;
-    const total_content_len = std.fmt.parseInt(usize, parts[2], 10) catch
+    const total_content_len = parseUsizeFast(parts[2]) catch
         return Parser.Error.InvalidArguments;
 
     // Calculate total message size: header line + content + trailing \r\n
@@ -481,4 +504,28 @@ test "parse invalid command" {
 
     const result = parser.parse(std.testing.allocator, "INVALID\r\n", &consumed);
     try std.testing.expectError(Parser.Error.InvalidCommand, result);
+}
+
+test "parseU64Fast valid numbers" {
+    try std.testing.expectEqual(@as(u64, 0), try parseU64Fast("0"));
+    try std.testing.expectEqual(@as(u64, 1), try parseU64Fast("1"));
+    try std.testing.expectEqual(@as(u64, 123), try parseU64Fast("123"));
+    try std.testing.expectEqual(@as(u64, 999999), try parseU64Fast("999999"));
+}
+
+test "parseU64Fast invalid input" {
+    try std.testing.expectError(error.InvalidCharacter, parseU64Fast("abc"));
+    try std.testing.expectError(error.InvalidCharacter, parseU64Fast("12a3"));
+    try std.testing.expectError(error.InvalidCharacter, parseU64Fast("-1"));
+}
+
+test "parseUsizeFast valid numbers" {
+    try std.testing.expectEqual(@as(usize, 0), try parseUsizeFast("0"));
+    try std.testing.expectEqual(@as(usize, 42), try parseUsizeFast("42"));
+    try std.testing.expectEqual(@as(usize, 1048576), try parseUsizeFast("1048576"));
+}
+
+test "parseUsizeFast invalid input" {
+    try std.testing.expectError(error.InvalidCharacter, parseUsizeFast("xyz"));
+    try std.testing.expectError(error.InvalidCharacter, parseUsizeFast("1 2"));
 }
