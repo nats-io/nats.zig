@@ -22,6 +22,8 @@ const EventQueue = connection.EventQueue;
 const pubsub = @import("pubsub.zig");
 const subscription_mod = @import("pubsub/subscription.zig");
 const sync = @import("sync.zig");
+const memory = @import("memory.zig");
+const SidMap = memory.SidMap;
 
 /// Client connection options.
 pub const Options = struct {
@@ -100,6 +102,10 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     };
 }
 
+/// Tiger Style subscription limits.
+pub const MAX_SUBSCRIPTIONS: u16 = 256;
+pub const SIDMAP_CAPACITY: u32 = 512; // 2x for load factor
+
 /// NATS Client for pub/sub messaging.
 pub const Client = struct {
     /// Subscription type instantiated with Client.
@@ -121,13 +127,23 @@ pub const Client = struct {
     writer: net.Stream.Writer,
     parser: Parser,
     server_info: ?OwnedServerInfo,
-    subscriptions: std.AutoHashMapUnmanaged(u64, *Sub),
     events: EventQueue,
     next_sid: u64,
     state: State,
     read_buffer: [32768]u8,
     write_buffer: [32768]u8,
     pending_toss: usize,
+
+    // Tiger Style: Pre-allocated subscription routing
+    sidmap: SidMap,
+    sidmap_keys: [SIDMAP_CAPACITY]u64,
+    sidmap_vals: [SIDMAP_CAPACITY]u16,
+    sub_ptrs: [MAX_SUBSCRIPTIONS]?*Sub,
+    free_slots: [MAX_SUBSCRIPTIONS]u16,
+    free_count: u16,
+
+    // Legacy compatibility (will be removed)
+    subscriptions: std.AutoHashMapUnmanaged(u64, *Sub),
 
     /// Connects to a NATS server.
     /// URL format: nats://[user:pass@]host[:port]
@@ -179,6 +195,17 @@ pub const Client = struct {
         client.next_sid = 1;
         client.state = .connecting;
         client.pending_toss = 0;
+
+        // Tiger Style: Initialize SidMap and free slot stack
+        client.sidmap_keys = undefined;
+        client.sidmap_vals = undefined;
+        client.sidmap = SidMap.init(&client.sidmap_keys, &client.sidmap_vals);
+        client.sub_ptrs = [_]?*Sub{null} ** MAX_SUBSCRIPTIONS;
+        // Initialize free slot stack (all slots available)
+        for (0..MAX_SUBSCRIPTIONS) |i| {
+            client.free_slots[i] = @intCast(MAX_SUBSCRIPTIONS - 1 - i);
+        }
+        client.free_count = MAX_SUBSCRIPTIONS;
 
         // Perform handshake
         try client.handshake(allocator, opts, parsed);
@@ -268,11 +295,21 @@ pub const Client = struct {
 
         self.stream.close(self.io);
 
-        // Clean up all subscriptions
-        var it = self.subscriptions.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.*.deinit(allocator);
+        // Tiger Style: Clean up subscriptions via slot array
+        for (self.sub_ptrs) |maybe_sub| {
+            if (maybe_sub) |sub| {
+                // Don't call sub.deinit() as it would try to remove from map
+                sub.messages.close();
+                sub.messages.deinit(allocator);
+                allocator.free(sub.subject);
+                if (sub.queue_group) |qg| {
+                    allocator.free(qg);
+                }
+                allocator.destroy(sub);
+            }
         }
+
+        // Legacy: Also clean up HashMap
         self.subscriptions.deinit(allocator);
 
         if (self.server_info) |*info| {
@@ -343,12 +380,23 @@ pub const Client = struct {
         assert(self.next_sid >= 1);
         try pubsub.validateSubscribe(subject);
 
+        // Tiger Style: Allocate slot from free stack
+        if (self.free_count == 0) {
+            return error.TooManySubscriptions;
+        }
+        self.free_count -= 1;
+        const slot_idx = self.free_slots[self.free_count];
+
         const sid = self.next_sid;
         self.next_sid += 1;
 
         // Create subscription with its own message queue
         const sub = try allocator.create(Sub);
-        errdefer allocator.destroy(sub);
+        errdefer {
+            allocator.destroy(sub);
+            self.free_slots[self.free_count] = slot_idx;
+            self.free_count += 1;
+        }
 
         const owned_subject = try allocator.dupe(u8, subject);
         errdefer allocator.free(owned_subject);
@@ -359,10 +407,10 @@ pub const Client = struct {
             null;
         errdefer if (owned_queue) |qg| allocator.free(qg);
 
-        // Initialize thread-safe message queue (65536 capacity)
+        // Message queue (4096 capacity - saves memory, sufficient for bursts)
         const msg_queue = try sync.ThreadSafeQueue(
             subscription_mod.Message,
-        ).init(allocator, 65536);
+        ).init(allocator, 4096);
 
         sub.* = .{
             .client = self,
@@ -375,6 +423,16 @@ pub const Client = struct {
             .received_msgs = 0,
         };
 
+        // Tiger Style: Store in SidMap and slot array
+        self.sidmap.put(sid, slot_idx) catch {
+            // SidMap full - shouldn't happen if free_count works correctly
+            self.free_slots[self.free_count] = slot_idx;
+            self.free_count += 1;
+            return error.TooManySubscriptions;
+        };
+        self.sub_ptrs[slot_idx] = sub;
+
+        // Legacy: Also store in HashMap for backwards compatibility
         try self.subscriptions.put(allocator, sid, sub);
 
         // Send SUB command
@@ -401,8 +459,25 @@ pub const Client = struct {
             return error.EncodingFailed;
         };
 
-        // Remove from map but don't free - subscription owns itself
+        // Tiger Style: Remove from SidMap and release slot
+        if (self.sidmap.get(sid)) |slot_idx| {
+            self.sub_ptrs[slot_idx] = null;
+            _ = self.sidmap.remove(sid);
+            // Return slot to free stack
+            self.free_slots[self.free_count] = slot_idx;
+            self.free_count += 1;
+        }
+
+        // Legacy: Remove from HashMap
         _ = self.subscriptions.remove(sid);
+    }
+
+    /// Tiger Style: Get subscription by SID using O(1) SidMap lookup.
+    pub fn getSubscriptionBySid(self: *Client, sid: u64) ?*Sub {
+        if (self.sidmap.get(sid)) |slot_idx| {
+            return self.sub_ptrs[slot_idx];
+        }
+        return null;
     }
 
     /// Unsubscribes and cleans up a subscription.
@@ -748,7 +823,8 @@ pub const Client = struct {
         assert(args.subject.len > 0);
         assert(args.sid > 0);
 
-        if (self.subscriptions.get(args.sid)) |sub| {
+        // Tiger Style: O(1) lookup via SidMap
+        if (self.getSubscriptionBySid(args.sid)) |sub| {
             const alloc = allocator;
 
             // Copy data - buffer will be reused by reader thread
@@ -788,7 +864,8 @@ pub const Client = struct {
         assert(args.subject.len > 0);
         assert(args.sid > 0);
 
-        if (self.subscriptions.get(args.sid)) |sub| {
+        // Tiger Style: O(1) lookup via SidMap
+        if (self.getSubscriptionBySid(args.sid)) |sub| {
             const alloc = allocator;
 
             const subject = try alloc.dupe(u8, args.subject);

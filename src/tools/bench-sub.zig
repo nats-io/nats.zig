@@ -14,6 +14,7 @@ const BenchConfig = struct {
     msgs: u64 = 100_000,
     url: []const u8 = "nats://127.0.0.1:4222",
     progress: bool = true,
+    use_slab: bool = true,
 };
 
 pub fn main() !void {
@@ -49,6 +50,8 @@ fn parseArgs(allocator: Allocator) !BenchConfig {
             config.progress = true;
         } else if (std.mem.eql(u8, arg, "--no-progress")) {
             config.progress = false;
+        } else if (std.mem.eql(u8, arg, "--no-slab")) {
+            config.use_slab = false;
         } else if (!std.mem.startsWith(u8, arg, "--")) {
             config.subject = arg;
         }
@@ -65,6 +68,17 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     assert(config.subject.len > 0);
     assert(config.msgs > 0);
 
+    // Create SlabPool if enabled
+    var slab_pool: ?nats.SlabPool = if (config.use_slab)
+        try nats.SlabPool.init(allocator, .{
+            .slab_count = 256,
+            .slab_size = 65536,
+            .enable_page_warming = true,
+        })
+    else
+        null;
+    defer if (slab_pool) |*p| p.deinit(allocator);
+
     // Print start message with current time
     const instant = std.time.Instant.now() catch {
         std.debug.print("Starting subscriber benchmark " ++
@@ -76,10 +90,11 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     const minutes: u64 = @mod(@divFloor(secs, 60), 60);
     const seconds: u64 = @mod(secs, 60);
 
+    const mode_str = if (config.use_slab) " (slab)" else "";
     std.debug.print(
-        "{d:0>2}:{d:0>2}:{d:0>2} Starting subscriber benchmark " ++
+        "{d:0>2}:{d:0>2}:{d:0>2} Starting subscriber benchmark{s} " ++
             "[msgs={d}, subject={s}]\n",
-        .{ hours, minutes, seconds, config.msgs, config.subject },
+        .{ hours, minutes, seconds, mode_str, config.msgs, config.subject },
     );
 
     // Create I/O and connect
@@ -118,10 +133,19 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     // Progress interval
     const progress_interval = config.msgs / 10;
 
+    // Get pointer to pool for receive options
+    const pool_ptr: ?*nats.SlabPool = if (slab_pool != null)
+        &slab_pool.?
+    else
+        null;
+
     // Go-style receive loop with timeout
     while (msg_count < config.msgs) {
         // Block until message or timeout (15 seconds)
-        const msg = sub.nextMessage(allocator, .{ .timeout_ms = 15000 }) catch |err| {
+        const msg = sub.nextMessageOwned(allocator, .{
+            .timeout_ms = 15000,
+            .slab_pool = pool_ptr,
+        }) catch |err| {
             std.debug.print("Receive error: {}\n", .{err});
             return err;
         };
@@ -198,11 +222,12 @@ fn printUsage() void {
         \\  --msgs=N        Number of messages to receive (default: 100000)
         \\  --url=URL       NATS server URL (default: nats://127.0.0.1:4222)
         \\  --[no-]progress Show/hide progress output (default: show)
+        \\  --no-slab       Disable slab pool (use allocator instead)
         \\
         \\Examples:
         \\  bench-sub test.subject
-        \\  bench-sub test.subject --msgs=1000000 --no-progress
-        \\  bench-sub "test.>" --msgs=50000
+        \\  bench-sub test.subject --msgs=1000000
+        \\  bench-sub "test.>" --msgs=50000 --no-slab
         \\
     , .{});
 }

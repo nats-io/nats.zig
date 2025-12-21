@@ -34,6 +34,9 @@ pub const connection = @import("connection.zig");
 // Re-export pub/sub types
 pub const pubsub = @import("pubsub.zig");
 
+// Re-export memory management
+pub const memory = @import("memory.zig");
+
 // Re-export client
 pub const client = @import("client.zig");
 pub const Client = client.Client;
@@ -52,6 +55,11 @@ pub const validateSubject = pubsub.validatePublish;
 // Protocol types
 pub const ServerInfo = protocol.OwnedServerInfo;
 pub const ConnectOptions = protocol.ConnectOptions;
+
+// Memory types for fast owned messages
+pub const SlabPool = memory.SlabPool;
+pub const Slab = memory.Slab;
+pub const RefSlice = memory.RefSlice;
 
 /// Library version
 pub const version = "0.1.0";
