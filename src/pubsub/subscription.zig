@@ -292,7 +292,10 @@ pub fn FixedSubscription(
             allocator: Allocator,
             opts: ReceiveOptions,
         ) !?Message {
-            assert(self.state == .active or self.state == .draining);
+            // Return error if subscription is closed
+            if (self.state != .active and self.state != .draining) {
+                return error.SubscriptionClosed;
+            }
 
             // Check queue first
             if (self.messages.tryPop()) |m| {
@@ -510,7 +513,10 @@ pub fn Subscription(comptime ClientType: type) type {
             allocator: Allocator,
             opts: ReceiveOptions,
         ) !?Message {
-            assert(self.state == .active or self.state == .draining);
+            // Return error if subscription is closed
+            if (self.state != .active and self.state != .draining) {
+                return error.SubscriptionClosed;
+            }
 
             // Check queue first for any pending owned messages
             if (self.messages.tryPop()) |m| {

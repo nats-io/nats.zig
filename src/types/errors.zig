@@ -36,6 +36,12 @@ pub const Error = error{
     /// The subscription ID is not recognized.
     InvalidSubscription,
 
+    /// The subscription has been closed or unsubscribed.
+    SubscriptionClosed,
+
+    /// Client is not connected (operation requires active connection).
+    NotConnected,
+
     /// Request timed out waiting for a response.
     RequestTimeout,
 
