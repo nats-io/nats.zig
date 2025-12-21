@@ -194,6 +194,8 @@ pub const MsgArgs = struct {
     reply_to: ?[]const u8 = null,
     payload_len: usize,
     payload: []const u8 = "",
+    /// Length of header line including \r\n (for partial message parsing).
+    header_line_len: usize = 0,
 };
 
 /// Arguments parsed from HMSG command (message with headers).
@@ -205,6 +207,8 @@ pub const HMsgArgs = struct {
     total_len: usize,
     headers: []const u8 = "",
     payload: []const u8 = "",
+    /// Length of header line including \r\n (for partial message parsing).
+    header_line_len: usize = 0,
 };
 
 test "server info parse" {

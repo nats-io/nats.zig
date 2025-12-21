@@ -20,8 +20,8 @@ const Event = connection.Event;
 const EventQueue = connection.EventQueue;
 
 const pubsub = @import("pubsub.zig");
-const Subscription = pubsub.Subscription;
-const SubscriptionMap = pubsub.SubscriptionMap;
+const subscription_mod = @import("pubsub/subscription.zig");
+const sync = @import("sync.zig");
 
 /// Client connection options.
 pub const Options = struct {
@@ -102,13 +102,16 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
 
 /// NATS Client for pub/sub messaging.
 pub const Client = struct {
+    /// Subscription type instantiated with Client.
+    pub const Sub = subscription_mod.Subscription(Client);
+
     stream: net.Stream,
     io: Io,
     reader: net.Stream.Reader,
     writer: net.Stream.Writer,
     parser: Parser,
     server_info: ?OwnedServerInfo,
-    subscriptions: SubscriptionMap,
+    subscriptions: std.AutoHashMapUnmanaged(u64, *Sub),
     events: EventQueue,
     next_sid: u64,
     state: State,
@@ -250,8 +253,16 @@ pub const Client = struct {
     /// Note: The Io instance is owned by the caller and not freed here.
     pub fn deinit(self: *Client, allocator: Allocator) void {
         assert(self.next_sid >= 1);
+
         self.stream.close(self.io);
+
+        // Clean up all subscriptions
+        var it = self.subscriptions.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.*.deinit(allocator);
+        }
         self.subscriptions.deinit(allocator);
+
         if (self.server_info) |*info| {
             info.deinit(allocator);
         }
@@ -298,12 +309,12 @@ pub const Client = struct {
         };
     }
 
-    /// Subscribes to a subject.
+    /// Subscribes to a subject. Returns subscription for Go-style polling.
     pub fn subscribe(
         self: *Client,
         allocator: Allocator,
         subject: []const u8,
-    ) !u64 {
+    ) !*Sub {
         assert(subject.len > 0);
         return self.subscribeQueue(allocator, subject, null);
     }
@@ -314,7 +325,7 @@ pub const Client = struct {
         allocator: Allocator,
         subject: []const u8,
         queue_group: ?[]const u8,
-    ) !u64 {
+    ) !*Sub {
         assert(subject.len > 0);
         assert(self.state.canSend());
         assert(self.next_sid >= 1);
@@ -323,14 +334,36 @@ pub const Client = struct {
         const sid = self.next_sid;
         self.next_sid += 1;
 
-        // Store subscription
-        const sub = try Subscription.initOwned(
-            allocator,
-            sid,
-            subject,
-            queue_group,
-        );
-        try self.subscriptions.put(allocator, sub);
+        // Create subscription with its own message queue
+        const sub = try allocator.create(Sub);
+        errdefer allocator.destroy(sub);
+
+        const owned_subject = try allocator.dupe(u8, subject);
+        errdefer allocator.free(owned_subject);
+
+        const owned_queue = if (queue_group) |qg|
+            try allocator.dupe(u8, qg)
+        else
+            null;
+        errdefer if (owned_queue) |qg| allocator.free(qg);
+
+        // Initialize thread-safe message queue (65536 capacity)
+        const msg_queue = try sync.ThreadSafeQueue(
+            subscription_mod.Message,
+        ).init(allocator, 65536);
+
+        sub.* = .{
+            .client = self,
+            .sid = sid,
+            .subject = owned_subject,
+            .queue_group = owned_queue,
+            .messages = msg_queue,
+            .state = .active,
+            .max_msgs = 0,
+            .received_msgs = 0,
+        };
+
+        try self.subscriptions.put(allocator, sid, sub);
 
         // Send SUB command
         protocol.Encoder.encodeSub(&self.writer.interface, .{
@@ -341,13 +374,14 @@ pub const Client = struct {
             return error.EncodingFailed;
         };
 
-        return sid;
+        return sub;
     }
 
-    /// Unsubscribes from a subscription.
-    pub fn unsubscribe(self: *Client, allocator: Allocator, sid: u64) !void {
+    /// Unsubscribes by SID (called by Subscription.unsubscribe).
+    pub fn unsubscribeSid(self: *Client, sid: u64) !void {
         assert(sid > 0);
         assert(self.state.canSend());
+
         protocol.Encoder.encodeUnsub(&self.writer.interface, .{
             .sid = sid,
             .max_msgs = null,
@@ -355,7 +389,17 @@ pub const Client = struct {
             return error.EncodingFailed;
         };
 
-        self.subscriptions.remove(allocator, sid);
+        // Remove from map but don't free - subscription owns itself
+        _ = self.subscriptions.remove(sid);
+    }
+
+    /// Unsubscribes and cleans up a subscription.
+    pub fn unsubscribe(self: *Client, allocator: Allocator, sub: *Sub) !void {
+        assert(sub.sid > 0);
+        assert(self.state.canSend());
+
+        try self.unsubscribeSid(sub.sid);
+        sub.deinit(allocator);
     }
 
     /// Flushes pending writes to the server.
@@ -391,21 +435,54 @@ pub const Client = struct {
 
     /// Polls for incoming data and processes commands.
     /// Call regularly to receive messages and handle server pings.
-    /// Returns true if any data was processed, false if no data available.
-    pub fn poll(self: *Client, allocator: Allocator) !bool {
+    /// Returns true if any data was processed, false on timeout/no data.
+    /// Uses posix.poll() for efficient timeout handling.
+    pub fn poll(
+        self: *Client,
+        allocator: Allocator,
+        timeout_ms: ?u32,
+    ) !bool {
         assert(self.state.canReceive());
 
-        // Read available data - peekGreedy fills buffer and returns all data
-        const data = self.reader.interface.peekGreedy(1) catch |err| {
-            // EndOfStream means connection closed
-            // ReadFailed can mean no data yet in async context
-            return switch (err) {
-                error.EndOfStream => false,
-                error.ReadFailed => false,
-            };
-        };
+        // First check what's already buffered (non-blocking)
+        var data = self.reader.interface.buffered();
 
-        if (data.len == 0) return false;
+        // If buffer empty, wait for socket to be readable
+        if (data.len == 0) {
+            var poll_fds = [_]std.posix.pollfd{.{
+                .fd = self.stream.socket.handle,
+                .events = std.posix.POLL.IN,
+                .revents = 0,
+            }};
+
+            const timeout: i32 = if (timeout_ms) |ms|
+                @intCast(ms)
+            else
+                -1;
+
+            const ready = std.posix.poll(&poll_fds, timeout) catch {
+                return error.PollFailed;
+            };
+
+            if (ready == 0) return false; // Timeout
+
+            // Read more data into buffer
+            self.reader.interface.fillMore() catch |err| {
+                switch (err) {
+                    error.EndOfStream => {
+                        self.state = .disconnected;
+                        return false;
+                    },
+                    error.ReadFailed => {
+                        self.state = .disconnected;
+                        return false;
+                    },
+                }
+            };
+
+            data = self.reader.interface.buffered();
+            if (data.len == 0) return false;
+        }
 
         // Parse and handle all complete commands
         var total_consumed: usize = 0;
@@ -421,14 +498,30 @@ pub const Client = struct {
                 return error.ProtocolError;
             };
 
-            // Always track consumed bytes, even when waiting for more data
             total_consumed += consumed;
 
             if (cmd) |c| {
-                try self.handleCommand(c);
+                try self.handleCommand(allocator, c);
             } else {
-                // Parser needs more data
-                break;
+                // Parser needs more data - try to read more
+                if (total_consumed > 0) {
+                    self.reader.interface.toss(total_consumed);
+                    total_consumed = 0;
+                }
+                self.reader.interface.fillMore() catch |err| {
+                    switch (err) {
+                        error.EndOfStream => {
+                            self.state = .disconnected;
+                            break;
+                        },
+                        error.ReadFailed => {
+                            self.state = .disconnected;
+                            break;
+                        },
+                    }
+                };
+                data = self.reader.interface.buffered();
+                if (data.len == 0) break;
             }
         }
 
@@ -448,7 +541,11 @@ pub const Client = struct {
     }
 
     /// Handles a parsed server command.
-    fn handleCommand(self: *Client, cmd: protocol.ServerCommand) !void {
+    fn handleCommand(
+        self: *Client,
+        allocator: Allocator,
+        cmd: protocol.ServerCommand,
+    ) !void {
         switch (cmd) {
             .ping => try self.sendPong(),
             .pong => {},
@@ -456,8 +553,8 @@ pub const Client = struct {
             .err => |msg| {
                 _ = self.events.push(.{ .server_error = msg });
             },
-            .msg => |args| self.handleMessage(args),
-            .hmsg => |args| self.handleHMessage(args),
+            .msg => |args| try self.handleMessage(allocator, args),
+            .hmsg => |args| try self.handleHMessage(allocator, args),
             .info => |new_info| {
                 // Server may send updated INFO (e.g., cluster changes)
                 if (self.server_info) |*info| {
@@ -468,32 +565,91 @@ pub const Client = struct {
         }
     }
 
-    /// Handles MSG command - pushes message event to queue.
-    fn handleMessage(self: *Client, args: protocol.MsgArgs) void {
+    /// Handles MSG command - routes message to subscription queue.
+    /// Copies message data since buffer will be reused.
+    fn handleMessage(
+        self: *Client,
+        allocator: Allocator,
+        args: protocol.MsgArgs,
+    ) !void {
         assert(args.subject.len > 0);
         assert(args.sid > 0);
 
-        _ = self.events.push(.{ .message = .{
-            .subject = args.subject,
-            .sid = args.sid,
-            .reply_to = args.reply_to,
-            .data = args.payload,
-            .headers = null,
-        } });
+        if (self.subscriptions.get(args.sid)) |sub| {
+            const alloc = allocator;
+
+            // Copy data - buffer will be reused by reader thread
+            const subject = try alloc.dupe(u8, args.subject);
+            errdefer alloc.free(subject);
+
+            const data = try alloc.dupe(u8, args.payload);
+            errdefer alloc.free(data);
+
+            const reply_to = if (args.reply_to) |rt|
+                try alloc.dupe(u8, rt)
+            else
+                null;
+            sub.messages.push(.{
+                .subject = subject,
+                .sid = args.sid,
+                .reply_to = reply_to,
+                .data = data,
+                .headers = null,
+                .allocator = alloc,
+            }) catch {
+                // Queue full - drop message, free memory
+                alloc.free(subject);
+                alloc.free(data);
+                if (reply_to) |rt| alloc.free(rt);
+            };
+        }
     }
 
-    /// Handles HMSG command - pushes message event with headers.
-    fn handleHMessage(self: *Client, args: protocol.HMsgArgs) void {
+    /// Handles HMSG command - routes message with headers to subscription.
+    /// Copies message data since buffer will be reused.
+    fn handleHMessage(
+        self: *Client,
+        allocator: Allocator,
+        args: protocol.HMsgArgs,
+    ) !void {
         assert(args.subject.len > 0);
         assert(args.sid > 0);
 
-        _ = self.events.push(.{ .message = .{
-            .subject = args.subject,
-            .sid = args.sid,
-            .reply_to = args.reply_to,
-            .data = args.payload,
-            .headers = args.headers,
-        } });
+        if (self.subscriptions.get(args.sid)) |sub| {
+            const alloc = allocator;
+
+            const subject = try alloc.dupe(u8, args.subject);
+            errdefer alloc.free(subject);
+
+            const data = try alloc.dupe(u8, args.payload);
+            errdefer alloc.free(data);
+
+            const reply_to = if (args.reply_to) |rt|
+                try alloc.dupe(u8, rt)
+            else
+                null;
+            errdefer if (reply_to) |rt| alloc.free(rt);
+
+            const headers = if (args.headers.len > 0)
+                try alloc.dupe(u8, args.headers)
+            else
+                null;
+
+            sub.messages.push(.{
+                .subject = subject,
+                .sid = args.sid,
+                .reply_to = reply_to,
+                .data = data,
+                .headers = headers,
+                .allocator = alloc,
+            }) catch {
+                // Queue full - drop message, free memory
+                alloc.free(subject);
+                alloc.free(data);
+                if (reply_to) |rt| alloc.free(rt);
+                if (headers) |h| alloc.free(h);
+            };
+        }
     }
 
     /// Sends PONG response to server PING.

@@ -94,11 +94,12 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     };
     defer client.deinit(allocator);
 
-    // Subscribe
-    _ = client.subscribe(allocator, config.subject) catch |err| {
+    // Subscribe - returns *Subscription for Go-style polling
+    const sub = client.subscribe(allocator, config.subject) catch |err| {
         std.debug.print("Subscribe failed: {}\n", .{err});
         return err;
     };
+    defer sub.deinit(allocator);
 
     client.flush() catch |err| {
         std.debug.print("Flush failed: {}\n", .{err});
@@ -114,52 +115,47 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     var msg_count: u64 = 0;
     var total_bytes: u64 = 0;
 
-    // Receive loop
+    // Progress interval
+    const progress_interval = config.msgs / 10;
+
+    // Go-style receive loop with timeout
     while (msg_count < config.msgs) {
-        // Poll for incoming data
-        const had_data = client.poll(allocator) catch |err| {
-            std.debug.print("Poll failed: {}\n", .{err});
+        // Block until message or timeout (15 seconds)
+        const msg = sub.nextMessage(allocator, .{ .timeout_ms = 15000 }) catch |err| {
+            std.debug.print("Receive error: {}\n", .{err});
             return err;
         };
 
-        // Process events
-        while (client.nextEvent()) |event| {
-            switch (event) {
-                .message => |msg| {
-                    // Start timer on first message
-                    if (timer == null) {
-                        timer = std.time.Timer.start() catch {
-                            std.debug.print("Timer unavailable\n", .{});
-                            return error.TimerUnavailable;
-                        };
-                        std.debug.print("First message received, timing...\n", .{});
-                    }
-
-                    msg_count += 1;
-                    total_bytes += msg.data.len;
-
-                    // Progress every 10%
-                    if (config.progress) {
-                        if (msg_count % (config.msgs / 10) == 0) {
-                            const pct = msg_count * 100 / config.msgs;
-                            std.debug.print("  {d}% ({d}/{d})\n", .{
-                                pct,
-                                msg_count,
-                                config.msgs,
-                            });
-                        }
-                    }
-                },
-                .server_error => |err_msg| {
-                    std.debug.print("Server error: {s}\n", .{err_msg});
-                },
-                else => {},
+        if (msg) |m| {
+            // Start timer on first message
+            if (timer == null) {
+                timer = std.time.Timer.start() catch {
+                    std.debug.print("Timer unavailable\n", .{});
+                    return error.TimerUnavailable;
+                };
+                std.debug.print("First message received, timing...\n", .{});
             }
-        }
 
-        // Small yield if no data to avoid busy loop
-        if (!had_data) {
-            std.posix.nanosleep(0, 100_000); // 100us
+            msg_count += 1;
+            total_bytes += m.data.len;
+
+            // Progress every 10%
+            if (config.progress and progress_interval > 0) {
+                if (msg_count % progress_interval == 0) {
+                    const pct = msg_count * 100 / config.msgs;
+                    std.debug.print("  {d}% ({d}/{d})\n", .{
+                        pct,
+                        msg_count,
+                        config.msgs,
+                    });
+                }
+            }
+
+            // Free message data
+            m.deinit();
+        } else {
+            std.debug.print("Timeout waiting for messages\n", .{});
+            break;
         }
     }
 

@@ -22,7 +22,7 @@ pub fn main() !void {
     std.debug.print("Connecting to NATS...\n", .{});
 
     // Connect to NATS (pass io to client)
-    var client = nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    const client = nats.Client.connect(allocator, io, "nats://localhost:4222", .{
         .name = "zig-pubsub-example",
     }) catch |err| {
         std.debug.print("Connection failed: {}\n", .{err});
@@ -39,9 +39,10 @@ pub fn main() !void {
         std.debug.print("Server: {s} v{s}\n", .{ name, ver });
     }
 
-    // Subscribe to a subject
-    const sid = try client.subscribe(allocator, "demo.>");
-    std.debug.print("Subscribed to 'demo.>' with sid={d}\n", .{sid});
+    // Subscribe to a subject - returns *Subscription for Go-style polling
+    const sub = try client.subscribe(allocator, "demo.>");
+    defer sub.deinit(allocator);
+    std.debug.print("Subscribed to 'demo.>' with sid={d}\n", .{sub.sid});
 
     // Flush to ensure subscription is active
     try client.flush();
@@ -59,8 +60,18 @@ pub fn main() !void {
     // Flush all messages
     try client.flush();
 
-    std.debug.print("\nMessages published! Check with:\n", .{});
-    std.debug.print("  nats sub 'demo.>'\n", .{});
+    // Receive messages with timeout (Go-style API)
+    std.debug.print("\nReceiving messages...\n", .{});
+    var count: u32 = 0;
+    while (count < 3) {
+        if (try sub.nextMessage(allocator, .{ .timeout_ms = 1000 })) |msg| {
+            std.debug.print("  [{s}] {s}\n", .{ msg.subject, msg.data });
+            count += 1;
+        } else {
+            std.debug.print("  Timeout\n", .{});
+            break;
+        }
+    }
 
     // Ping server
     try client.ping();
@@ -68,9 +79,9 @@ pub fn main() !void {
     std.debug.print("\nPING sent\n", .{});
 
     // Unsubscribe
-    try client.unsubscribe(allocator, sid);
+    try sub.unsubscribe();
     try client.flush();
-    std.debug.print("Unsubscribed from sid={d}\n", .{sid});
+    std.debug.print("Unsubscribed from sid={d}\n", .{sub.sid});
 
     std.debug.print("\nDone!\n", .{});
 }

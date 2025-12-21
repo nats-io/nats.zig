@@ -2,6 +2,7 @@
 //!
 //! Parses incoming data from NATS server into structured commands.
 //! Handles streaming data that may arrive in partial chunks.
+//! Uses single-pass parsing - no multi-stage state machine.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -13,29 +14,9 @@ const OwnedServerInfo = commands.OwnedServerInfo;
 const MsgArgs = commands.MsgArgs;
 const HMsgArgs = commands.HMsgArgs;
 
-/// Parser state machine states.
-pub const State = enum {
-    /// Waiting for command line.
-    command,
-    /// Reading MSG payload.
-    msg_payload,
-    /// Reading HMSG headers and payload.
-    hmsg_payload,
-};
-
 /// Protocol parser for NATS server commands.
-/// Does not store allocator - pass to functions that need it.
+/// Stateless single-pass parser - no multi-stage state machine.
 pub const Parser = struct {
-    state: State = .command,
-    pending_msg: ?MsgArgs = null,
-    pending_hmsg: ?HMsgArgs = null,
-
-    /// Result of parsing: either a command or need more data.
-    pub const Result = union(enum) {
-        command: ServerCommand,
-        need_more_data,
-    };
-
     /// Parse error types.
     pub const Error = error{
         InvalidCommand,
@@ -49,45 +30,32 @@ pub const Parser = struct {
         return .{};
     }
 
-    /// Resets the parser to initial state.
+    /// Resets the parser to initial state (no-op for stateless parser).
     pub fn reset(self: *Parser) void {
-        self.state = .command;
-        self.pending_msg = null;
-        self.pending_hmsg = null;
-        assert(self.state == .command);
+        _ = self;
     }
 
-    /// Parses data and returns a command or indicates more data is needed.
-    /// Returns null if no complete command is available.
+    /// Parses data and returns a command if complete.
+    /// Returns null if no complete command is available (need more data).
+    /// Sets consumed to the number of bytes consumed (0 if need more data).
     pub fn parse(
         self: *Parser,
         allocator: Allocator,
         data: []const u8,
         consumed: *usize,
     ) (Error || Allocator.Error)!?ServerCommand {
+        _ = self;
         consumed.* = 0;
 
-        switch (self.state) {
-            .command => return self.parseCommand(allocator, data, consumed),
-            .msg_payload => return self.parseMsgPayload(data, consumed),
-            .hmsg_payload => return self.parseHMsgPayload(data, consumed),
-        }
-    }
+        if (data.len == 0) return null;
 
-    fn parseCommand(
-        self: *Parser,
-        allocator: Allocator,
-        data: []const u8,
-        consumed: *usize,
-    ) (Error || Allocator.Error)!?ServerCommand {
-        assert(self.state == .command);
+        // Find end of first line
         const line_end = std.mem.indexOf(u8, data, "\r\n") orelse return null;
         const line = data[0..line_end];
-        consumed.* = line_end + 2;
-        assert(consumed.* <= data.len);
+        const header_len = line_end + 2;
 
+        // Parse based on command type
         if (std.mem.startsWith(u8, line, "INFO ")) {
-            // INFO json is on same line: INFO {...}\r\n
             const json_data = line[5..];
             var parsed = std.json.parseFromSlice(
                 ServerInfo,
@@ -99,97 +67,54 @@ pub const Parser = struct {
 
             const owned = OwnedServerInfo.fromParsed(allocator, parsed) catch
                 return error.OutOfMemory;
+            consumed.* = header_len;
             return .{ .info = owned };
         }
 
         if (std.mem.eql(u8, line, "PING")) {
+            consumed.* = header_len;
             return .ping;
         }
 
         if (std.mem.eql(u8, line, "PONG")) {
+            consumed.* = header_len;
             return .pong;
         }
 
         if (std.mem.eql(u8, line, "+OK")) {
+            consumed.* = header_len;
             return .ok;
         }
 
         if (std.mem.startsWith(u8, line, "-ERR ")) {
+            consumed.* = header_len;
             return .{ .err = line[5..] };
         }
 
         if (std.mem.startsWith(u8, line, "MSG ")) {
-            const args = try parseMsgLine(line[4..]);
-            if (args.payload_len == 0) {
-                return .{ .msg = args };
-            }
-            self.pending_msg = args;
-            self.state = .msg_payload;
-            return null;
+            return parseFullMsg(data, line[4..], header_len, consumed);
         }
 
         if (std.mem.startsWith(u8, line, "HMSG ")) {
-            const args = try parseHMsgLine(line[5..]);
-            if (args.total_len == 0) {
-                return .{ .hmsg = args };
-            }
-            self.pending_hmsg = args;
-            self.state = .hmsg_payload;
-            return null;
+            return parseFullHMsg(data, line[5..], header_len, consumed);
         }
 
         return Error.InvalidCommand;
     }
-
-    fn parseMsgPayload(
-        self: *Parser,
-        data: []const u8,
-        consumed: *usize,
-    ) Error!?ServerCommand {
-        assert(self.state == .msg_payload);
-        var args = self.pending_msg orelse return Error.InvalidArguments;
-        const needed = args.payload_len + 2;
-
-        if (data.len < needed) return null;
-
-        assert(args.payload_len <= data.len);
-        args.payload = data[0..args.payload_len];
-        consumed.* = needed;
-        assert(consumed.* <= data.len);
-        self.pending_msg = null;
-        self.state = .command;
-
-        return .{ .msg = args };
-    }
-
-    fn parseHMsgPayload(
-        self: *Parser,
-        data: []const u8,
-        consumed: *usize,
-    ) Error!?ServerCommand {
-        assert(self.state == .hmsg_payload);
-        var args = self.pending_hmsg orelse return Error.InvalidArguments;
-        const needed = args.total_len + 2;
-
-        if (data.len < needed) return null;
-
-        assert(args.header_len <= args.total_len);
-        assert(args.total_len <= data.len);
-        args.headers = data[0..args.header_len];
-        args.payload = data[args.header_len..args.total_len];
-        consumed.* = needed;
-        assert(consumed.* <= data.len);
-        self.pending_hmsg = null;
-        self.state = .command;
-
-        return .{ .hmsg = args };
-    }
 };
 
-/// Parses MSG command arguments: subject sid [reply-to] payload_len
-fn parseMsgLine(line: []const u8) Parser.Error!MsgArgs {
-    assert(line.len > 0);
-    var it = std.mem.splitScalar(u8, line, ' ');
+/// Parse complete MSG in single pass.
+/// Returns null if payload not yet available.
+fn parseFullMsg(
+    data: []const u8,
+    args_line: []const u8,
+    header_len: usize,
+    consumed: *usize,
+) Parser.Error!?ServerCommand {
+    assert(args_line.len > 0);
+    assert(header_len > 0);
+
+    var it = std.mem.splitScalar(u8, args_line, ' ');
 
     const subject = it.next() orelse return Parser.Error.InvalidArguments;
     const sid_str = it.next() orelse return Parser.Error.InvalidArguments;
@@ -214,20 +139,43 @@ fn parseMsgLine(line: []const u8) Parser.Error!MsgArgs {
     const payload_len = std.fmt.parseInt(usize, payload_len_str, 10) catch
         return Parser.Error.InvalidArguments;
 
+    // Calculate total message size: header + payload + trailing \r\n
+    const total_len = header_len + payload_len + 2;
+
+    // Check if we have the complete message
+    if (data.len < total_len) {
+        return null;
+    }
+
+    // Extract payload - it's right after the header
+    const payload = data[header_len..][0..payload_len];
+
+    consumed.* = total_len;
+    assert(consumed.* <= data.len);
+
     assert(subject.len > 0);
     assert(sid > 0);
-    return .{
+    return .{ .msg = .{
         .subject = subject,
         .sid = sid,
         .reply_to = reply_to,
         .payload_len = payload_len,
-    };
+        .payload = payload,
+    } };
 }
 
-/// Parses HMSG command arguments: subject sid [reply-to] hdr_len total_len
-fn parseHMsgLine(line: []const u8) Parser.Error!HMsgArgs {
-    assert(line.len > 0);
-    var it = std.mem.splitScalar(u8, line, ' ');
+/// Parse complete HMSG in single pass.
+/// Returns null if headers/payload not yet available.
+fn parseFullHMsg(
+    data: []const u8,
+    args_line: []const u8,
+    header_len: usize,
+    consumed: *usize,
+) Parser.Error!?ServerCommand {
+    assert(args_line.len > 0);
+    assert(header_len > 0);
+
+    var it = std.mem.splitScalar(u8, args_line, ' ');
 
     const subject = it.next() orelse return Parser.Error.InvalidArguments;
     const sid_str = it.next() orelse return Parser.Error.InvalidArguments;
@@ -248,21 +196,38 @@ fn parseHMsgLine(line: []const u8) Parser.Error!HMsgArgs {
     };
 
     const reply_to = parts[0];
-    const header_len = std.fmt.parseInt(usize, parts[1], 10) catch
+    const hdr_len = std.fmt.parseInt(usize, parts[1], 10) catch
         return Parser.Error.InvalidArguments;
-    const total_len = std.fmt.parseInt(usize, parts[2], 10) catch
+    const total_content_len = std.fmt.parseInt(usize, parts[2], 10) catch
         return Parser.Error.InvalidArguments;
+
+    // Calculate total message size: header line + content + trailing \r\n
+    const total_len = header_len + total_content_len + 2;
+
+    // Check if we have the complete message
+    if (data.len < total_len) {
+        return null;
+    }
+
+    // Extract headers and payload - they're right after the header line
+    const headers = data[header_len..][0..hdr_len];
+    const payload = data[header_len + hdr_len ..][0 .. total_content_len - hdr_len];
+
+    consumed.* = total_len;
+    assert(consumed.* <= data.len);
 
     assert(subject.len > 0);
     assert(sid > 0);
-    assert(header_len <= total_len);
-    return .{
+    assert(hdr_len <= total_content_len);
+    return .{ .hmsg = .{
         .subject = subject,
         .sid = sid,
         .reply_to = reply_to,
-        .header_len = header_len,
-        .total_len = total_len,
-    };
+        .header_len = hdr_len,
+        .total_len = total_content_len,
+        .headers = headers,
+        .payload = payload,
+    } };
 }
 
 test "parse PING" {
@@ -345,19 +310,32 @@ test "parse MSG with payload" {
 
     const data = "MSG test.subject 42 5\r\nhello\r\n";
 
-    var result = try parser.parse(std.testing.allocator, data, &consumed);
-    try std.testing.expectEqual(@as(?ServerCommand, null), result);
-    try std.testing.expectEqual(@as(usize, 23), consumed);
+    // Single pass - returns complete message when all data available
+    const result = try parser.parse(std.testing.allocator, data, &consumed);
+    try std.testing.expect(result != null);
 
-    result = try parser.parse(
-        std.testing.allocator,
-        data[consumed..],
-        &consumed,
-    );
     const msg = result.?.msg;
     try std.testing.expectEqualSlices(u8, "test.subject", msg.subject);
     try std.testing.expectEqual(@as(u64, 42), msg.sid);
     try std.testing.expectEqualSlices(u8, "hello", msg.payload);
+    try std.testing.expectEqual(@as(usize, 30), consumed);
+}
+
+test "parse MSG with payload - partial data" {
+    var parser = Parser.init();
+    var consumed: usize = 0;
+
+    // Only header, no payload yet
+    const partial = "MSG test.subject 42 5\r\nhel";
+    var result = try parser.parse(std.testing.allocator, partial, &consumed);
+    try std.testing.expectEqual(@as(?ServerCommand, null), result);
+    try std.testing.expectEqual(@as(usize, 0), consumed);
+
+    // Full data
+    const full = "MSG test.subject 42 5\r\nhello\r\n";
+    result = try parser.parse(std.testing.allocator, full, &consumed);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualSlices(u8, "hello", result.?.msg.payload);
 }
 
 test "parse MSG with reply-to" {
@@ -365,13 +343,7 @@ test "parse MSG with reply-to" {
     var consumed: usize = 0;
 
     const data = "MSG test.subject 1 _INBOX.123 5\r\nworld\r\n";
-
-    _ = try parser.parse(std.testing.allocator, data, &consumed);
-    const result = try parser.parse(
-        std.testing.allocator,
-        data[consumed..],
-        &consumed,
-    );
+    const result = try parser.parse(std.testing.allocator, data, &consumed);
 
     const msg = result.?.msg;
     try std.testing.expectEqualSlices(u8, "_INBOX.123", msg.reply_to.?);
@@ -388,18 +360,26 @@ test "parse incomplete data returns null" {
 }
 
 test "parseMsgLine" {
-    const args = try parseMsgLine("test.subject 42 11");
-    try std.testing.expectEqualSlices(u8, "test.subject", args.subject);
-    try std.testing.expectEqual(@as(u64, 42), args.sid);
-    try std.testing.expectEqual(@as(?[]const u8, null), args.reply_to);
-    try std.testing.expectEqual(@as(usize, 11), args.payload_len);
+    var consumed: usize = 0;
+    const data = "MSG test.subject 42 11\r\n01234567890\r\n";
+    const result = try parseFullMsg(data, "test.subject 42 11", 24, &consumed);
+    try std.testing.expect(result != null);
+    const msg = result.?.msg;
+    try std.testing.expectEqualSlices(u8, "test.subject", msg.subject);
+    try std.testing.expectEqual(@as(u64, 42), msg.sid);
+    try std.testing.expectEqual(@as(?[]const u8, null), msg.reply_to);
+    try std.testing.expectEqual(@as(usize, 11), msg.payload_len);
 }
 
 test "parseMsgLine with reply" {
-    const args = try parseMsgLine("foo 1 _INBOX.x 5");
-    try std.testing.expectEqualSlices(u8, "foo", args.subject);
-    try std.testing.expectEqualSlices(u8, "_INBOX.x", args.reply_to.?);
-    try std.testing.expectEqual(@as(usize, 5), args.payload_len);
+    var consumed: usize = 0;
+    const data = "MSG foo 1 _INBOX.x 5\r\nhello\r\n";
+    const result = try parseFullMsg(data, "foo 1 _INBOX.x 5", 22, &consumed);
+    try std.testing.expect(result != null);
+    const msg = result.?.msg;
+    try std.testing.expectEqualSlices(u8, "foo", msg.subject);
+    try std.testing.expectEqualSlices(u8, "_INBOX.x", msg.reply_to.?);
+    try std.testing.expectEqual(@as(usize, 5), msg.payload_len);
 }
 
 test "parse INFO" {
@@ -436,10 +416,8 @@ test "parse HMSG without payload" {
 
     const data = "HMSG test.subject 1 12 12\r\nNATS/1.0\r\n\r\n\r\n";
 
-    var result = try parser.parse(std.testing.allocator, data, &consumed);
-    try std.testing.expectEqual(@as(?ServerCommand, null), result);
-
-    result = try parser.parse(std.testing.allocator, data[consumed..], &consumed);
+    // Single pass - returns complete message when all data available
+    const result = try parser.parse(std.testing.allocator, data, &consumed);
     try std.testing.expect(result != null);
 
     const hmsg = result.?.hmsg;
@@ -455,12 +433,9 @@ test "parse HMSG with payload" {
 
     const data = "HMSG test.subject 42 12 17\r\nNATS/1.0\r\n\r\nhello\r\n";
 
-    _ = try parser.parse(std.testing.allocator, data, &consumed);
-    const result = try parser.parse(
-        std.testing.allocator,
-        data[consumed..],
-        &consumed,
-    );
+    // Single pass - returns complete message when all data available
+    const result = try parser.parse(std.testing.allocator, data, &consumed);
+    try std.testing.expect(result != null);
 
     const hmsg = result.?.hmsg;
     try std.testing.expectEqualSlices(u8, "test.subject", hmsg.subject);
@@ -470,21 +445,34 @@ test "parse HMSG with payload" {
 }
 
 test "parseHMsgLine" {
-    const args = try parseHMsgLine("test.subject 42 10 25");
-    try std.testing.expectEqualSlices(u8, "test.subject", args.subject);
-    try std.testing.expectEqual(@as(u64, 42), args.sid);
-    try std.testing.expectEqual(@as(?[]const u8, null), args.reply_to);
-    try std.testing.expectEqual(@as(usize, 10), args.header_len);
-    try std.testing.expectEqual(@as(usize, 25), args.total_len);
+    var consumed: usize = 0;
+    const data = "HMSG test.subject 42 10 25\r\n" ++ "H" ** 10 ++ "P" ** 15 ++ "\r\n";
+    const result = try parseFullHMsg(data, "test.subject 42 10 25", 28, &consumed);
+    try std.testing.expect(result != null);
+    const hmsg = result.?.hmsg;
+    try std.testing.expectEqualSlices(u8, "test.subject", hmsg.subject);
+    try std.testing.expectEqual(@as(u64, 42), hmsg.sid);
+    try std.testing.expectEqual(@as(?[]const u8, null), hmsg.reply_to);
+    try std.testing.expectEqual(@as(usize, 10), hmsg.header_len);
+    try std.testing.expectEqual(@as(usize, 25), hmsg.total_len);
 }
 
 test "parseHMsgLine with reply" {
-    const args = try parseHMsgLine("foo 1 _INBOX.reply 15 30");
-    try std.testing.expectEqualSlices(u8, "foo", args.subject);
-    try std.testing.expectEqual(@as(u64, 1), args.sid);
-    try std.testing.expectEqualSlices(u8, "_INBOX.reply", args.reply_to.?);
-    try std.testing.expectEqual(@as(usize, 15), args.header_len);
-    try std.testing.expectEqual(@as(usize, 30), args.total_len);
+    var consumed: usize = 0;
+    const data = "HMSG foo 1 _INBOX.reply 15 30\r\n" ++ "H" ** 15 ++ "P" ** 15 ++ "\r\n";
+    const result = try parseFullHMsg(
+        data,
+        "foo 1 _INBOX.reply 15 30",
+        31,
+        &consumed,
+    );
+    try std.testing.expect(result != null);
+    const hmsg = result.?.hmsg;
+    try std.testing.expectEqualSlices(u8, "foo", hmsg.subject);
+    try std.testing.expectEqual(@as(u64, 1), hmsg.sid);
+    try std.testing.expectEqualSlices(u8, "_INBOX.reply", hmsg.reply_to.?);
+    try std.testing.expectEqual(@as(usize, 15), hmsg.header_len);
+    try std.testing.expectEqual(@as(usize, 30), hmsg.total_len);
 }
 
 test "parse invalid command" {

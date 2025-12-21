@@ -1,272 +1,276 @@
 //! Subscription Management
 //!
 //! Tracks active subscriptions and provides message delivery.
+//! Uses comptime generics for zero-overhead Go-style API.
+//! Messages are delivered via client.poll(), which uses posix.poll()
+//! for efficient timeout handling without background threads.
 
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
 const subject_mod = @import("subject.zig");
+const sync = @import("../sync.zig");
+
+/// Message received on a subscription.
+/// Data is copied and owned - caller must call deinit() to free.
+pub const Message = struct {
+    subject: []const u8,
+    sid: u64,
+    reply_to: ?[]const u8,
+    data: []const u8,
+    headers: ?[]const u8,
+    allocator: ?Allocator = null,
+
+    /// Frees owned message data.
+    pub fn deinit(self: *const Message) void {
+        if (self.allocator) |alloc| {
+            alloc.free(self.subject);
+            alloc.free(self.data);
+            if (self.reply_to) |rt| alloc.free(rt);
+            if (self.headers) |h| alloc.free(h);
+        }
+    }
+};
+
+/// Options for receiving messages.
+pub const ReceiveOptions = struct {
+    timeout_ms: ?u64 = null,
+};
 
 /// Subscription state.
 pub const State = enum {
-    /// Subscription is active and receiving messages.
     active,
-    /// Subscription is draining (finishing pending messages).
     draining,
-    /// Subscription has been unsubscribed.
     unsubscribed,
 };
 
-/// Statistics for a subscription.
-pub const Stats = struct {
-    /// Number of messages received.
-    messages: u64 = 0,
-    /// Total bytes received.
-    bytes: u64 = 0,
-    /// Number of messages dropped (queue full).
-    dropped: u64 = 0,
-};
+/// Ring buffer for messages. Dynamically allocated.
+pub const MessageQueue = struct {
+    messages: []Message,
+    head: usize = 0,
+    tail: usize = 0,
+    count: usize = 0,
 
-/// Subscription metadata.
-/// Does not own subject/queue_group memory - caller manages lifetime.
-pub const Subscription = struct {
-    /// Subscription ID assigned by client.
-    sid: u64,
-    /// Subject pattern (may contain wildcards).
-    subject: []const u8,
-    /// Optional queue group for load balancing.
-    queue_group: ?[]const u8,
-    /// Maximum messages to receive (0 = unlimited).
-    max_msgs: u64,
-    /// Current state.
-    state: State,
-    /// Statistics.
-    stats: Stats,
-    /// Whether subject/queue_group are owned (allocated).
-    owned: bool,
-
-    /// Creates a new subscription.
-    pub fn init(
-        sid: u64,
-        subject: []const u8,
-        queue_group: ?[]const u8,
-    ) Subscription {
-        assert(sid > 0);
-        assert(subject.len > 0);
-        return .{
-            .sid = sid,
-            .subject = subject,
-            .queue_group = queue_group,
-            .max_msgs = 0,
-            .state = .active,
-            .stats = .{},
-            .owned = false,
-        };
+    /// Creates a new message queue with given capacity.
+    pub fn init(allocator: Allocator, queue_capacity: usize) !MessageQueue {
+        assert(queue_capacity > 0);
+        const messages = try allocator.alloc(Message, queue_capacity);
+        return .{ .messages = messages };
     }
 
-    /// Creates a subscription with owned (duplicated) strings.
-    pub fn initOwned(
-        allocator: Allocator,
-        sid: u64,
-        subject: []const u8,
-        queue_group: ?[]const u8,
-    ) Allocator.Error!Subscription {
-        assert(sid > 0);
-        assert(subject.len > 0);
-        const owned_subject = try allocator.dupe(u8, subject);
-        errdefer allocator.free(owned_subject);
-
-        const owned_queue = if (queue_group) |qg|
-            try allocator.dupe(u8, qg)
-        else
-            null;
-
-        return .{
-            .sid = sid,
-            .subject = owned_subject,
-            .queue_group = owned_queue,
-            .max_msgs = 0,
-            .state = .active,
-            .stats = .{},
-            .owned = true,
-        };
-    }
-
-    /// Free owned memory.
-    pub fn deinit(self: *Subscription, allocator: Allocator) void {
-        if (!self.owned) return;
-        assert(self.subject.len > 0);
-
-        allocator.free(self.subject);
-        if (self.queue_group) |qg| {
-            allocator.free(qg);
-        }
+    /// Frees the queue buffer.
+    pub fn deinit(self: *MessageQueue, allocator: Allocator) void {
+        allocator.free(self.messages);
         self.* = undefined;
     }
 
-    /// Checks if this subscription matches a subject.
-    pub fn matches(self: *const Subscription, msg_subject: []const u8) bool {
-        assert(self.subject.len > 0);
-        assert(msg_subject.len > 0);
-        return subject_mod.matches(self.subject, msg_subject);
+    /// Pushes a message to the queue. Returns error if full.
+    pub fn push(self: *MessageQueue, msg: Message) !void {
+        if (self.count >= self.messages.len) return error.QueueFull;
+
+        self.messages[self.tail] = msg;
+        self.tail = (self.tail + 1) % self.messages.len;
+        self.count += 1;
     }
 
-    /// Records a received message.
-    pub fn recordMessage(self: *Subscription, payload_len: usize) void {
-        self.stats.messages += 1;
-        self.stats.bytes += payload_len;
+    /// Pops a message from the queue. Returns null if empty.
+    pub fn pop(self: *MessageQueue) ?Message {
+        if (self.count == 0) return null;
+
+        const msg = self.messages[self.head];
+        self.head = (self.head + 1) % self.messages.len;
+        self.count -= 1;
+        return msg;
     }
 
-    /// Records a dropped message.
-    pub fn recordDropped(self: *Subscription) void {
-        self.stats.dropped += 1;
+    pub fn len(self: *const MessageQueue) usize {
+        return self.count;
     }
 
-    /// Checks if subscription should auto-unsubscribe.
-    pub fn shouldUnsubscribe(self: *const Subscription) bool {
-        if (self.max_msgs == 0) return false;
-        return self.stats.messages >= self.max_msgs;
+    pub fn isEmpty(self: *const MessageQueue) bool {
+        return self.count == 0;
     }
 
-    /// Marks subscription as draining.
-    pub fn drain(self: *Subscription) void {
-        assert(self.state != .unsubscribed);
-        if (self.state == .active) {
-            self.state = .draining;
-        }
+    pub fn isFull(self: *const MessageQueue) bool {
+        return self.count >= self.messages.len;
     }
 
-    /// Marks subscription as unsubscribed.
-    pub fn unsubscribe(self: *Subscription) void {
-        self.state = .unsubscribed;
-    }
-
-    /// Checks if subscription is active.
-    pub fn isActive(self: *const Subscription) bool {
-        return self.state == .active;
+    pub fn capacity(self: *const MessageQueue) usize {
+        return self.messages.len;
     }
 };
 
-/// Map of subscriptions by SID.
-pub const SubscriptionMap = struct {
-    items: std.AutoHashMapUnmanaged(u64, Subscription) = .empty,
+/// Comptime generic subscription - Go-style API with per-sub message queue.
+/// Uses client.poll() for efficient timeout handling without threads.
+pub fn Subscription(comptime ClientType: type) type {
+    return struct {
+        client: *ClientType,
+        sid: u64,
+        subject: []const u8,
+        queue_group: ?[]const u8,
+        messages: sync.ThreadSafeQueue(Message),
+        state: State,
+        max_msgs: u64,
+        received_msgs: u64,
 
-    pub fn deinit(self: *SubscriptionMap, allocator: Allocator) void {
-        var iter = self.items.valueIterator();
-        while (iter.next()) |sub| {
-            sub.deinit(allocator);
-        }
-        self.items.deinit(allocator);
-    }
+        const Self = @This();
 
-    pub fn put(
-        self: *SubscriptionMap,
-        allocator: Allocator,
-        sub: Subscription,
-    ) Allocator.Error!void {
-        try self.items.put(allocator, sub.sid, sub);
-    }
+        /// Go-style receive with optional timeout.
+        /// Uses posix.poll() for efficient waiting - no background threads.
+        /// Returns null on timeout or if subscription is closed/draining.
+        pub fn nextMessage(
+            self: *Self,
+            allocator: Allocator,
+            opts: ReceiveOptions,
+        ) !?Message {
+            assert(self.state == .active or self.state == .draining);
 
-    pub fn get(self: *SubscriptionMap, sid: u64) ?*Subscription {
-        return self.items.getPtr(sid);
-    }
+            // Setup timeout tracking using Instant
+            const has_timeout = opts.timeout_ms != null;
+            const start: std.time.Instant = if (has_timeout)
+                std.time.Instant.now() catch return error.TimerUnavailable
+            else
+                undefined;
+            const timeout_ns: u64 = if (opts.timeout_ms) |ms|
+                ms * std.time.ns_per_ms
+            else
+                0;
 
-    pub fn remove(self: *SubscriptionMap, allocator: Allocator, sid: u64) void {
-        if (self.items.fetchRemove(sid)) |kv| {
-            var sub = kv.value;
-            sub.deinit(allocator);
-        }
-    }
+            while (true) {
+                // Check queue first (fast path)
+                if (self.messages.tryPop()) |m| {
+                    self.received_msgs += 1;
+                    return m;
+                }
 
-    pub fn count(self: *const SubscriptionMap) usize {
-        return self.items.count();
-    }
+                // Check if draining and queue empty
+                if (self.state == .draining) return null;
 
-    /// Finds subscription matching a subject.
-    pub fn findBySubject(
-        self: *SubscriptionMap,
-        msg_subject: []const u8,
-    ) ?*Subscription {
-        var iter = self.items.valueIterator();
-        while (iter.next()) |sub| {
-            if (sub.matches(msg_subject) and sub.isActive()) {
-                return sub;
+                // Calculate remaining timeout
+                const remaining_ms: ?u32 = if (has_timeout) blk: {
+                    const now = std.time.Instant.now() catch {
+                        return error.TimerUnavailable;
+                    };
+                    const elapsed_ns = now.since(start);
+                    if (elapsed_ns >= timeout_ns) return null;
+                    const remaining_ns = timeout_ns - elapsed_ns;
+                    break :blk @intCast(remaining_ns / std.time.ns_per_ms);
+                } else null;
+
+                // Poll for more data
+                const got_data = self.client.poll(
+                    allocator,
+                    remaining_ms,
+                ) catch |err| {
+                    return err;
+                };
+
+                // If no data and we have a timeout, check again
+                if (!got_data and has_timeout) {
+                    const now = std.time.Instant.now() catch {
+                        return error.TimerUnavailable;
+                    };
+                    const elapsed_ns = now.since(start);
+                    if (elapsed_ns >= timeout_ns) return null;
+                }
             }
         }
-        return null;
-    }
-};
 
-test "subscription basic" {
-    var sub = Subscription.init(1, "foo.bar", null);
+        /// Returns number of pending messages.
+        pub fn pending(self: *Self) usize {
+            return self.messages.len();
+        }
 
-    try std.testing.expectEqual(@as(u64, 1), sub.sid);
-    try std.testing.expectEqualSlices(u8, "foo.bar", sub.subject);
-    try std.testing.expect(sub.queue_group == null);
-    try std.testing.expect(sub.isActive());
+        /// Unsubscribe from the subject.
+        pub fn unsubscribe(self: *Self) !void {
+            if (self.state == .unsubscribed) return;
+            self.state = .unsubscribed;
+            try self.client.unsubscribeSid(self.sid);
+        }
+
+        /// Start draining - finish pending messages then unsubscribe.
+        pub fn drain(self: *Self) void {
+            if (self.state == .active) {
+                self.state = .draining;
+            }
+        }
+
+        /// Check if subscription is active.
+        pub fn isActive(self: *const Self) bool {
+            return self.state == .active;
+        }
+
+        /// Check if subject matches a pattern.
+        pub fn matches(self: *const Self, msg_subject: []const u8) bool {
+            return subject_mod.matches(self.subject, msg_subject);
+        }
+
+        /// Clean up subscription resources.
+        /// Removes self from client's subscription map to prevent double-free.
+        pub fn deinit(self: *Self, allocator: Allocator) void {
+            // Remove from client's map first (prevents double-free)
+            _ = self.client.subscriptions.remove(self.sid);
+
+            // Close queue to wake any waiting threads
+            self.messages.close();
+            self.messages.deinit(allocator);
+            allocator.free(self.subject);
+            if (self.queue_group) |qg| {
+                allocator.free(qg);
+            }
+            allocator.destroy(self);
+        }
+    };
 }
 
-test "subscription owned" {
+test "message queue basic" {
     const allocator = std.testing.allocator;
 
-    var sub = try Subscription.initOwned(allocator, 1, "foo.bar", "myqueue");
-    defer sub.deinit(allocator);
+    var queue = try MessageQueue.init(allocator, 4);
+    defer queue.deinit(allocator);
 
-    try std.testing.expectEqualSlices(u8, "foo.bar", sub.subject);
-    try std.testing.expectEqualSlices(u8, "myqueue", sub.queue_group.?);
-    try std.testing.expect(sub.owned);
+    try std.testing.expect(queue.isEmpty());
+    try std.testing.expectEqual(@as(usize, 4), queue.capacity());
+
+    const msg1 = Message{
+        .subject = "test",
+        .sid = 1,
+        .reply_to = null,
+        .data = "hello",
+        .headers = null,
+    };
+
+    try queue.push(msg1);
+    try std.testing.expectEqual(@as(usize, 1), queue.len());
+
+    const popped = queue.pop();
+    try std.testing.expect(popped != null);
+    try std.testing.expectEqualSlices(u8, "test", popped.?.subject);
+    try std.testing.expect(queue.isEmpty());
 }
 
-test "subscription matches" {
-    var sub = Subscription.init(1, "foo.*", null);
-
-    try std.testing.expect(sub.matches("foo.bar"));
-    try std.testing.expect(sub.matches("foo.baz"));
-    try std.testing.expect(!sub.matches("foo.bar.baz"));
-}
-
-test "subscription stats" {
-    var sub = Subscription.init(1, "foo", null);
-
-    sub.recordMessage(100);
-    sub.recordMessage(50);
-    sub.recordDropped();
-
-    try std.testing.expectEqual(@as(u64, 2), sub.stats.messages);
-    try std.testing.expectEqual(@as(u64, 150), sub.stats.bytes);
-    try std.testing.expectEqual(@as(u64, 1), sub.stats.dropped);
-}
-
-test "subscription auto unsubscribe" {
-    var sub = Subscription.init(1, "foo", null);
-    sub.max_msgs = 2;
-
-    try std.testing.expect(!sub.shouldUnsubscribe());
-
-    sub.recordMessage(10);
-    try std.testing.expect(!sub.shouldUnsubscribe());
-
-    sub.recordMessage(10);
-    try std.testing.expect(sub.shouldUnsubscribe());
-}
-
-test "subscription map" {
+test "message queue full" {
     const allocator = std.testing.allocator;
-    var map: SubscriptionMap = .{};
-    defer map.deinit(allocator);
 
-    const sub1 = Subscription.init(1, "foo", null);
-    const sub2 = Subscription.init(2, "bar.*", null);
+    var queue = try MessageQueue.init(allocator, 2);
+    defer queue.deinit(allocator);
 
-    try map.put(allocator, sub1);
-    try map.put(allocator, sub2);
+    const msg = Message{
+        .subject = "x",
+        .sid = 1,
+        .reply_to = null,
+        .data = "",
+        .headers = null,
+    };
 
-    try std.testing.expectEqual(@as(usize, 2), map.count());
-    try std.testing.expect(map.get(1) != null);
-    try std.testing.expect(map.get(3) == null);
+    try queue.push(msg);
+    try queue.push(msg);
+    try std.testing.expect(queue.isFull());
 
-    const found = map.findBySubject("bar.baz");
-    try std.testing.expect(found != null);
-    try std.testing.expectEqual(@as(u64, 2), found.?.sid);
+    try std.testing.expectError(error.QueueFull, queue.push(msg));
+
+    _ = queue.pop();
+    try std.testing.expect(!queue.isFull());
+    try queue.push(msg);
 }

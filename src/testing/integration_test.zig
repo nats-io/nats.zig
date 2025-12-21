@@ -108,17 +108,18 @@ fn testSubscribeUnsubscribe(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    const sid = client.subscribe(allocator, "test.>") catch {
+    const sub = client.subscribe(allocator, "test.>") catch {
         reportResult("subscribe_unsubscribe", false, "subscribe failed");
         return;
     };
+    defer sub.deinit(allocator);
 
-    if (sid == 0) {
+    if (sub.sid == 0) {
         reportResult("subscribe_unsubscribe", false, "invalid sid");
         return;
     }
 
-    client.unsubscribe(allocator, sid) catch {
+    sub.unsubscribe() catch {
         reportResult("subscribe_unsubscribe", false, "unsubscribe failed");
         return;
     };
@@ -140,10 +141,11 @@ fn testPublishSubscribe(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    const sid = client.subscribe(allocator, "roundtrip.test") catch {
+    const sub = client.subscribe(allocator, "roundtrip.test") catch {
         reportResult("publish_subscribe", false, "subscribe failed");
         return;
     };
+    defer sub.deinit(allocator);
 
     client.flush() catch {
         reportResult("publish_subscribe", false, "flush after sub failed");
@@ -160,46 +162,23 @@ fn testPublishSubscribe(allocator: std.mem.Allocator) void {
         return;
     };
 
-    // Poll for incoming message
-    var received = false;
-    var attempts: u32 = 0;
-    while (attempts < 100) : (attempts += 1) {
-        _ = client.poll(allocator) catch |poll_err| {
-            var err_buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(
-                &err_buf,
-                "poll failed: {}",
-                .{poll_err},
-            ) catch "poll error";
-            reportResult("publish_subscribe", false, msg);
-            return;
-        };
-
-        if (client.nextEvent()) |event| {
-            switch (event) {
-                .message => |msg| {
-                    // Verify message content
-                    if (msg.sid == sid and
-                        std.mem.eql(u8, msg.subject, "roundtrip.test") and
-                        std.mem.eql(u8, msg.data, "hello from zig"))
-                    {
-                        received = true;
-                        break;
-                    }
-                },
-                else => {},
-            }
-        }
-
-        std.posix.nanosleep(0, 10_000_000); // 10ms
-    }
-
-    if (!received) {
-        reportResult("publish_subscribe", false, "message not received");
+    // Receive message with Go-style API
+    const msg = sub.nextMessage(allocator, .{ .timeout_ms = 1000 }) catch {
+        reportResult("publish_subscribe", false, "nextMessage failed");
         return;
+    };
+
+    if (msg) |m| {
+        defer m.deinit();
+        if (std.mem.eql(u8, m.subject, "roundtrip.test") and
+            std.mem.eql(u8, m.data, "hello from zig"))
+        {
+            reportResult("publish_subscribe", true, "");
+            return;
+        }
     }
 
-    reportResult("publish_subscribe", true, "");
+    reportResult("publish_subscribe", false, "message not received");
 }
 
 // Test 5: Server info validation
@@ -240,23 +219,27 @@ fn testMultipleSubscriptions(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    const sid1 = client.subscribe(allocator, "multi.one") catch {
+    const sub1 = client.subscribe(allocator, "multi.one") catch {
         reportResult("multiple_subscriptions", false, "sub 1 failed");
         return;
     };
+    defer sub1.deinit(allocator);
 
-    const sid2 = client.subscribe(allocator, "multi.two") catch {
+    const sub2 = client.subscribe(allocator, "multi.two") catch {
         reportResult("multiple_subscriptions", false, "sub 2 failed");
         return;
     };
+    defer sub2.deinit(allocator);
 
-    const sid3 = client.subscribe(allocator, "multi.three") catch {
+    const sub3 = client.subscribe(allocator, "multi.three") catch {
         reportResult("multiple_subscriptions", false, "sub 3 failed");
         return;
     };
+    defer sub3.deinit(allocator);
 
     // SIDs should be unique and incrementing
-    const valid = sid1 != sid2 and sid2 != sid3 and sid1 < sid2 and sid2 < sid3;
+    const valid = sub1.sid != sub2.sid and sub2.sid != sub3.sid and
+        sub1.sid < sub2.sid and sub2.sid < sub3.sid;
     reportResult("multiple_subscriptions", valid, "invalid sids");
 }
 
@@ -275,16 +258,18 @@ fn testWildcardSubscribe(allocator: std.mem.Allocator) void {
     defer client.deinit(allocator);
 
     // Test * wildcard
-    _ = client.subscribe(allocator, "wild.*") catch {
+    const sub1 = client.subscribe(allocator, "wild.*") catch {
         reportResult("wildcard_subscribe", false, "* wildcard failed");
         return;
     };
+    defer sub1.deinit(allocator);
 
     // Test > wildcard
-    _ = client.subscribe(allocator, "wild.>") catch {
+    const sub2 = client.subscribe(allocator, "wild.>") catch {
         reportResult("wildcard_subscribe", false, "> wildcard failed");
         return;
     };
+    defer sub2.deinit(allocator);
 
     client.flush() catch {
         reportResult("wildcard_subscribe", false, "flush failed");
@@ -308,12 +293,13 @@ fn testQueueGroups(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    const sid = client.subscribeQueue(allocator, "queue.test", "workers") catch {
+    const sub = client.subscribeQueue(allocator, "queue.test", "workers") catch {
         reportResult("queue_groups", false, "queue subscribe failed");
         return;
     };
+    defer sub.deinit(allocator);
 
-    if (sid == 0) {
+    if (sub.sid == 0) {
         reportResult("queue_groups", false, "invalid queue sid");
         return;
     }
@@ -348,10 +334,11 @@ fn testRequestReply(allocator: std.mem.Allocator) void {
     defer allocator.free(inbox);
 
     // Subscribe to inbox
-    _ = client.subscribe(allocator, inbox) catch {
+    const sub = client.subscribe(allocator, inbox) catch {
         reportResult("request_reply", false, "inbox subscribe failed");
         return;
     };
+    defer sub.deinit(allocator);
 
     // Publish with reply-to
     client.publishRequest("request.test", inbox, "request data") catch {

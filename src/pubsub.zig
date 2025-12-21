@@ -9,11 +9,14 @@ pub const inbox = @import("pubsub/inbox.zig");
 pub const subject = @import("pubsub/subject.zig");
 pub const subscription = @import("pubsub/subscription.zig");
 
-// Re-export common types
-pub const Subscription = subscription.Subscription;
-pub const SubscriptionMap = subscription.SubscriptionMap;
+// Re-export subscription types
+pub const Message = subscription.Message;
+pub const ReceiveOptions = subscription.ReceiveOptions;
+pub const MessageQueue = subscription.MessageQueue;
 pub const SubscriptionState = subscription.State;
-pub const SubscriptionStats = subscription.Stats;
+
+// Comptime generic subscription - instantiate with client type
+pub const Subscription = subscription.Subscription;
 
 // Inbox functions
 pub const newInbox = inbox.newInbox;

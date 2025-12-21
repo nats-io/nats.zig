@@ -13,9 +13,8 @@ const server_manager = @import("server_manager.zig");
 const ServerManager = server_manager.ServerManager;
 
 const TestConfig = struct {
-    // Note: subscriber receive performance needs optimization
-    msgs: u64 = 100,
-    size: usize = 128,
+    msgs: u64 = 100_000,
+    size: usize = 16,
     port: u16 = 14333,
     subject: []const u8 = "perf.test",
 };
@@ -102,6 +101,15 @@ pub fn main() !void {
     // Test 5: Zig publisher only (no subscriber)
     std.debug.print("\n--- Test 5: Zig Publisher Only ---\n", .{});
     if (runZigPub(allocator, config)) |result| {
+        try results.append(allocator, result);
+        printResult(result);
+    } else |err| {
+        std.debug.print("Test failed: {}\n", .{err});
+    }
+
+    // Test 6: nats publisher only (no subscriber)
+    std.debug.print("\n--- Test 6: nats Publisher Only ---\n", .{});
+    if (runNatsPub(allocator, config)) |result| {
         try results.append(allocator, result);
         printResult(result);
     } else |err| {
@@ -519,7 +527,64 @@ fn runZigPub(allocator: Allocator, config: TestConfig) !TestResult {
     };
 }
 
-/// Run nats pub -> Zig sub, parse both outputs.
+/// Run nats bench pub standalone, parse output for stats.
+fn runNatsPub(allocator: Allocator, config: TestConfig) !TestResult {
+    var url_buf: [64]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "nats://127.0.0.1:{d}", .{
+        config.port,
+    }) catch unreachable;
+
+    var nats_server_buf: [80]u8 = undefined;
+    const nats_server_arg = std.fmt.bufPrint(
+        &nats_server_buf,
+        "--server={s}",
+        .{url},
+    ) catch unreachable;
+
+    var msgs_buf: [32]u8 = undefined;
+    const msgs_arg = std.fmt.bufPrint(&msgs_buf, "{d}", .{
+        config.msgs,
+    }) catch unreachable;
+
+    var size_buf: [32]u8 = undefined;
+    const size_arg = std.fmt.bufPrint(&size_buf, "{d}B", .{
+        config.size,
+    }) catch unreachable;
+
+    // Run nats bench pub with stdout capture
+    var pub_proc = std.process.Child.init(&.{
+        "nats",
+        "bench",
+        "pub",
+        nats_server_arg,
+        "--msgs",
+        msgs_arg,
+        "--size",
+        size_arg,
+        "--no-progress",
+        config.subject,
+    }, allocator);
+    pub_proc.stderr_behavior = .Inherit;
+    pub_proc.stdout_behavior = .Pipe;
+    try pub_proc.spawn();
+
+    // Read output and wait
+    var buf: [4096]u8 = undefined;
+    const output = readPipeWithTimeout(pub_proc.stdout, &buf, 10_000_000_000);
+    _ = pub_proc.wait() catch {};
+
+    // Parse output
+    const stats = parseNatsBenchOutput(output);
+
+    return .{
+        .name = "nats Pub Only",
+        .pub_msgs_per_sec = if (stats) |s| s.msgs_per_sec else null,
+        .pub_kib_per_sec = if (stats) |s| s.kib_per_sec else null,
+        .avg_latency_us = if (stats) |s| s.latency_us else null,
+    };
+}
+
+/// Run nats bench pub -> Zig sub, parse both outputs.
 fn runNatsToZig(allocator: Allocator, config: TestConfig) !TestResult {
     var url_buf: [64]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "nats://127.0.0.1:{d}", .{
@@ -543,9 +608,14 @@ fn runNatsToZig(allocator: Allocator, config: TestConfig) !TestResult {
         .{url},
     ) catch unreachable;
 
-    var nats_count_buf: [32]u8 = undefined;
-    const nats_count_arg = std.fmt.bufPrint(&nats_count_buf, "--count={d}", .{
+    var nats_msgs_buf: [32]u8 = undefined;
+    const nats_msgs_arg = std.fmt.bufPrint(&nats_msgs_buf, "{d}", .{
         config.msgs,
+    }) catch unreachable;
+
+    var nats_size_buf: [32]u8 = undefined;
+    const nats_size_arg = std.fmt.bufPrint(&nats_size_buf, "{d}B", .{
+        config.size,
     }) catch unreachable;
 
     // Start Zig subscriber with stderr capture
@@ -562,27 +632,30 @@ fn runNatsToZig(allocator: Allocator, config: TestConfig) !TestResult {
 
     std.posix.nanosleep(0, 500_000_000); // 500ms for subscribe
 
-    // Create payload
-    var payload_buf: [1024]u8 = undefined;
-    const payload_len = @min(config.size, 1024);
-    @memset(payload_buf[0..payload_len], 'A');
-
-    // Start nats publisher (nats pub outputs to stdout)
+    // Start nats bench pub (outputs stats to stdout)
     var pub_proc = std.process.Child.init(&.{
         "nats",
+        "bench",
         "pub",
         nats_server_arg,
-        nats_count_arg,
+        "--msgs",
+        nats_msgs_arg,
+        "--size",
+        nats_size_arg,
+        "--no-progress",
         config.subject,
-        payload_buf[0..payload_len],
     }, allocator);
     pub_proc.stderr_behavior = .Inherit;
     pub_proc.stdout_behavior = .Pipe;
     try pub_proc.spawn();
 
-    // Read nats pub output and wait
+    // Read nats bench pub output and wait
     var pub_buf: [4096]u8 = undefined;
-    const pub_output = readPipeWithTimeout(pub_proc.stdout, &pub_buf, 10_000_000_000);
+    const pub_output = readPipeWithTimeout(
+        pub_proc.stdout,
+        &pub_buf,
+        10_000_000_000,
+    );
     _ = pub_proc.wait() catch {};
 
     // Read Zig sub output and wait
@@ -590,13 +663,15 @@ fn runNatsToZig(allocator: Allocator, config: TestConfig) !TestResult {
     const sub_output = readPipeWithTimeout(sub.stderr, &sub_buf, 30_000_000_000);
     _ = sub.wait() catch {};
 
-    // Parse outputs (nats pub doesn't output stats, only Zig sub does)
+    // Parse both outputs
+    const pub_stats = parseNatsBenchOutput(pub_output);
     const sub_stats = parseStatsLine(sub_output);
-    _ = pub_output; // nats pub just outputs "done!" - no stats
 
     return .{
         .name = "nats -> Zig",
+        .pub_msgs_per_sec = if (pub_stats) |s| s.msgs_per_sec else null,
         .sub_msgs_per_sec = if (sub_stats) |s| s.msgs_per_sec else null,
+        .pub_kib_per_sec = if (pub_stats) |s| s.kib_per_sec else null,
         .sub_kib_per_sec = if (sub_stats) |s| s.kib_per_sec else null,
         .avg_latency_us = if (sub_stats) |s| s.latency_us else null,
     };
