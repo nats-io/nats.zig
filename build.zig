@@ -154,4 +154,24 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| perf_test_cmd.addArgs(args);
     run_perf_test.dependOn(&perf_test_cmd.step);
     perf_test_cmd.step.dependOn(b.getInstallStep());
+
+    // Performance benchmark orchestrator (multi-client comparison)
+    const perf_bench_exe = b.addExecutable(.{
+        .name = "perf-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/testing/performance_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(perf_bench_exe);
+
+    const run_perf_bench = b.step(
+        "run-perf-bench",
+        "Run multi-client performance benchmarks (Zig, C, Rust, Go)",
+    );
+    const perf_bench_cmd = b.addRunArtifact(perf_bench_exe);
+    if (b.args) |args| perf_bench_cmd.addArgs(args);
+    run_perf_bench.dependOn(&perf_bench_cmd.step);
+    perf_bench_cmd.step.dependOn(b.getInstallStep());
 }
