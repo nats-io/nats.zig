@@ -1048,7 +1048,7 @@ fn readAllFromPipe(pipe: ?std.fs.File, buf: []u8) []const u8 {
     return buf[0..total];
 }
 
-/// Read until we see "Done!" or "stats:" (more reliable than partial markers).
+/// Read until we see end markers indicating output is complete.
 fn readUntilDone(pipe: ?std.fs.File, buf: []u8, timeout_ns: u64) []const u8 {
     const file = pipe orelse return "";
     var total: usize = 0;
@@ -1063,12 +1063,21 @@ fn readUntilDone(pipe: ?std.fs.File, buf: []u8, timeout_ns: u64) []const u8 {
             continue;
         }
         total += n;
-        // Wait for reliable end markers
-        if (std.mem.indexOf(u8, buf[0..total], "Done!") != null) break;
-        if (std.mem.indexOf(u8, buf[0..total], "stats:") != null) break;
-        if (std.mem.indexOf(u8, buf[0..total], "msgs/sec)") != null) break;
-        if (std.mem.indexOf(u8, buf[0..total], "max:") != null) break;
-        if (std.mem.indexOf(u8, buf[0..total], "Throughput:") != null) break;
+
+        // Check for end markers
+        const has_marker = std.mem.indexOf(u8, buf[0..total], "Done!") != null or
+            std.mem.indexOf(u8, buf[0..total], "stats:") != null or
+            std.mem.indexOf(u8, buf[0..total], "msgs/sec)") != null or
+            std.mem.indexOf(u8, buf[0..total], "Bandwidth:") != null or
+            std.mem.indexOf(u8, buf[0..total], "Throughput:") != null;
+
+        if (has_marker) {
+            // Wait for trailing lines, then do one more read
+            std.posix.nanosleep(0, 50_000_000); // 50ms
+            const extra = file.read(buf[total..]) catch 0;
+            total += extra;
+            break;
+        }
     }
     return buf[0..total];
 }
