@@ -1028,13 +1028,11 @@ fn readPipeWithTimeout(
 }
 
 fn hasStatsMarker(data: []const u8) bool {
-    // Don't include "frequency:" - Rust output continues after it with latency
     return std.mem.indexOf(u8, data, "stats:") != null or
         std.mem.indexOf(u8, data, "Throughput:") != null or
         std.mem.indexOf(u8, data, "Bandwidth:") != null or
         std.mem.indexOf(u8, data, "msgs/sec)") != null or
-        std.mem.indexOf(u8, data, "Done!") != null or
-        std.mem.indexOf(u8, data, "max:") != null; // Rust ends with max latency
+        std.mem.indexOf(u8, data, "Done!") != null;
 }
 
 /// Read all available data from a pipe (non-blocking).
