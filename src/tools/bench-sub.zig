@@ -69,16 +69,16 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     assert(config.subject.len > 0);
     assert(config.msgs > 0);
 
-    // Create SlabPool if enabled
-    var slab_pool: ?nats.SlabPool = if (config.use_slab)
-        try nats.SlabPool.init(allocator, .{
-            .slab_count = 256,
-            .slab_size = 65536,
-            .enable_page_warming = true,
-        })
-    else
-        null;
-    defer if (slab_pool) |*p| p.deinit(allocator);
+    // // Create SlabPool if enabled
+    // var slab_pool: ?nats.SlabPool = if (config.use_slab)
+    //     try nats.SlabPool.init(allocator, .{
+    //         .slab_count = 256,
+    //         .slab_size = 65536,
+    //         .enable_page_warming = true,
+    //     })
+    // else
+    //     null;
+    // defer if (slab_pool) |*p| p.deinit(allocator);
 
     // Print start message with current time
     const mode_str = if (config.use_slab) " (slab)" else "";
@@ -134,18 +134,27 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     // Progress interval
     const progress_interval = config.msgs / 10;
 
-    // Get pointer to pool for receive options
-    const pool_ptr: ?*nats.SlabPool = if (slab_pool != null)
-        &slab_pool.?
-    else
-        null;
+    // // Get pointer to pool for receive options
+    // const pool_ptr: ?*nats.SlabPool = if (slab_pool != null)
+    //     &slab_pool.?
+    // else
+    //     null;
 
     // Go-style receive loop with timeout
     while (msg_count < config.msgs) {
+        // // Block until message or timeout (15 seconds)
+        // const msg = sub.nextMessageOwned(allocator, .{
+        //     .timeout_ms = 15000,
+        //     .slab_pool = pool_ptr,
+        // }) catch |err| {
+        //     std.debug.print("Receive error: {}\n", .{err});
+        //     return err;
+        // };
+
         // Block until message or timeout (15 seconds)
-        const msg = sub.nextMessageOwned(allocator, .{
+        const msg = sub.nextMessage(allocator, .{
             .timeout_ms = 15000,
-            .slab_pool = pool_ptr,
+            .slab_pool = null,
         }) catch |err| {
             std.debug.print("Receive error: {}\n", .{err});
             return err;

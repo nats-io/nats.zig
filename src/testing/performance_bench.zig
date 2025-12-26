@@ -12,8 +12,533 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
+const File = std.fs.File;
+const Io = std.Io;
 
 pub const TMOUT = 5_000_000_000;
+pub const MAX_RUNS = 32;
+
+/// Buffered stdout writer for table output.
+const StdOut = struct {
+    buffer: [4096]u8 = undefined,
+    file_writer: File.Writer = undefined,
+
+    /// Initialize buffered stdout.
+    pub fn init(self: *StdOut) void {
+        self.file_writer = File.stdout().writer(&self.buffer);
+    }
+
+    /// Print formatted output.
+    pub fn print(self: *StdOut, comptime fmt: []const u8, args: anytype) void {
+        self.file_writer.interface.print(fmt, args) catch {};
+    }
+
+    /// Flush buffered output.
+    pub fn flush(self: *StdOut) void {
+        self.file_writer.interface.flush() catch {};
+    }
+};
+
+/// Terminal UI for interactive progress display.
+/// Uses 256-color "Slate Blue" theme for professional appearance.
+/// Falls back to simple output when not a TTY.
+const TerminalUI = struct {
+    is_tty: bool,
+    stderr: File,
+    spinner_idx: u8 = 0,
+
+    /// Braille spinner characters for smooth animation.
+    const SPINNER = [_][]const u8{
+        "\xe2\xa0\x8b", // ⠋
+        "\xe2\xa0\x99", // ⠙
+        "\xe2\xa0\xb9", // ⠹
+        "\xe2\xa0\xb8", // ⠸
+        "\xe2\xa0\xbc", // ⠼
+        "\xe2\xa0\xb4", // ⠴
+        "\xe2\xa0\xa6", // ⠦
+        "\xe2\xa0\xa7", // ⠧
+        "\xe2\xa0\x87", // ⠇
+        "\xe2\xa0\x8f", // ⠏
+    };
+
+    // ANSI escape codes - control
+    const ESC_CLEAR_LINE = "\x1b[2K";
+    const ESC_CURSOR_COL1 = "\x1b[1G";
+    const ESC_RESET = "\x1b[0m";
+    const ESC_BOLD = "\x1b[1m";
+
+    // 256-color "Slate Blue" theme
+    const ESC_HEADER = "\x1b[38;5;111m"; // Slate blue - table headers
+    const ESC_PROGRESS = "\x1b[38;5;245m"; // Medium gray - [1/5]
+    const ESC_RUN = "\x1b[38;5;240m"; // Dark gray - Run 3/10
+    const ESC_SPINNER = "\x1b[38;5;75m"; // Sky blue - spinner
+    const ESC_RUNNING = "\x1b[38;5;147m"; // Light slate - "Running..."
+    const ESC_OK = "\x1b[38;5;114m"; // Soft green - [OK]
+    const ESC_FAIL = "\x1b[38;5;203m"; // Soft red - [FAIL]
+    const ESC_RATE = "\x1b[38;5;117m"; // Bright sky - rate numbers
+    const ESC_UNIT = "\x1b[38;5;243m"; // Dim gray - "msg/s"
+    const ESC_BORDER = "\x1b[38;5;238m"; // Dark gray - box borders
+    const ESC_TITLE = "\x1b[38;5;255m"; // Bright white - title text
+
+    // Box drawing characters (UTF-8 encoded)
+    const BOX_H = "\xe2\x94\x80"; // ─ horizontal
+    const BOX_V = "\xe2\x94\x82"; // │ vertical
+    const BOX_TL = "\xe2\x94\x8c"; // ┌ top-left
+    const BOX_TR = "\xe2\x94\x90"; // ┐ top-right
+    const BOX_BL = "\xe2\x94\x94"; // └ bottom-left
+    const BOX_BR = "\xe2\x94\x98"; // ┘ bottom-right
+    const BOX_LT = "\xe2\x94\x9c"; // ├ left-tee
+    const BOX_RT = "\xe2\x94\xa4"; // ┤ right-tee
+    const BOX_TT = "\xe2\x94\xac"; // ┬ top-tee
+    const BOX_BT = "\xe2\x94\xb4"; // ┴ bottom-tee
+    const BOX_X = "\xe2\x94\xbc"; // ┼ cross
+
+    /// Initialize the terminal UI.
+    pub fn init() TerminalUI {
+        const stderr = std.fs.File.stderr();
+        return .{
+            .is_tty = stderr.isTty(),
+            .stderr = stderr,
+        };
+    }
+
+    /// Clear current line and move cursor to column 1.
+    pub fn clearLine(self: *TerminalUI) void {
+        if (!self.is_tty) return;
+        self.stderr.writeAll(ESC_CLEAR_LINE ++ ESC_CURSOR_COL1) catch {};
+    }
+
+    /// Write text with specified color (no-op if not TTY).
+    fn writeColor(self: *TerminalUI, color: []const u8, text: []const u8) void {
+        if (self.is_tty) self.stderr.writeAll(color) catch {};
+        self.stderr.writeAll(text) catch {};
+        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
+    }
+
+    /// Write colored text (green for success).
+    pub fn writeGreen(self: *TerminalUI, text: []const u8) void {
+        self.writeColor(ESC_OK, text);
+    }
+
+    /// Write colored text (red for error).
+    pub fn writeRed(self: *TerminalUI, text: []const u8) void {
+        self.writeColor(ESC_FAIL, text);
+    }
+
+    /// Get current spinner character and advance.
+    pub fn spin(self: *TerminalUI) []const u8 {
+        const char = SPINNER[self.spinner_idx];
+        self.spinner_idx = @intCast((self.spinner_idx + 1) % SPINNER.len);
+        return char;
+    }
+
+    /// Show progress: "[1/5] Client  Run 3/10 ⠹ Running..."
+    pub fn showRunning(
+        self: *TerminalUI,
+        client_idx: usize,
+        total_clients: usize,
+        name: []const u8,
+        run: usize,
+        total_runs: u32,
+    ) void {
+        assert(client_idx > 0 and client_idx <= total_clients);
+        assert(run > 0 and run <= total_runs);
+        assert(name.len > 0);
+
+        self.clearLine();
+
+        // [1/5] in gray
+        var prog_buf: [16]u8 = undefined;
+        const prog = std.fmt.bufPrint(&prog_buf, "  [{d}/{d}] ", .{
+            client_idx,
+            total_clients,
+        }) catch return;
+        self.writeColor(ESC_PROGRESS, prog);
+
+        // Client name in bold
+        self.writeColor(ESC_BOLD, name);
+
+        // Padding
+        var pad_buf: [12]u8 = undefined;
+        const pad_len = if (name.len < 10) 10 - name.len else 0;
+        @memset(pad_buf[0..pad_len], ' ');
+        self.stderr.writeAll(pad_buf[0..pad_len]) catch {};
+
+        // Run X/Y in dark gray
+        var run_buf: [16]u8 = undefined;
+        const run_str = std.fmt.bufPrint(&run_buf, " Run {d}/{d} ", .{
+            run,
+            total_runs,
+        }) catch return;
+        self.writeColor(ESC_RUN, run_str);
+
+        // Spinner in sky blue
+        self.writeColor(ESC_SPINNER, self.spin());
+
+        // "Running..." in light slate
+        self.writeColor(ESC_RUNNING, " Running...");
+
+        self.stderr.writeAll("\r") catch {};
+    }
+
+    /// Show success: "[1/5] Client  [OK]  rate"
+    pub fn showSuccess(
+        self: *TerminalUI,
+        client_idx: usize,
+        total_clients: usize,
+        name: []const u8,
+        rate_str: []const u8,
+    ) void {
+        assert(client_idx > 0 and client_idx <= total_clients);
+        assert(name.len > 0);
+
+        self.clearLine();
+
+        // [1/5] in gray
+        var prog_buf: [16]u8 = undefined;
+        const prog = std.fmt.bufPrint(&prog_buf, "  [{d}/{d}] ", .{
+            client_idx,
+            total_clients,
+        }) catch return;
+        self.writeColor(ESC_PROGRESS, prog);
+
+        // Client name in bold
+        self.writeColor(ESC_BOLD, name);
+
+        // Padding
+        var pad_buf: [12]u8 = undefined;
+        const pad_len = if (name.len < 10) 10 - name.len else 0;
+        @memset(pad_buf[0..pad_len], ' ');
+        self.stderr.writeAll(pad_buf[0..pad_len]) catch {};
+
+        // [OK] in soft green
+        self.writeColor(ESC_OK, " [OK]");
+
+        self.stderr.writeAll("  ") catch {};
+
+        // Rate in bright sky, extract number vs unit
+        self.writeColor(ESC_RATE, rate_str);
+
+        self.stderr.writeAll("\n") catch {};
+    }
+
+    /// Show failure: "[1/5] Client  [FAIL] reason"
+    pub fn showFailure(
+        self: *TerminalUI,
+        client_idx: usize,
+        total_clients: usize,
+        name: []const u8,
+        reason: []const u8,
+    ) void {
+        assert(client_idx > 0 and client_idx <= total_clients);
+        assert(name.len > 0);
+
+        self.clearLine();
+
+        // [1/5] in gray
+        var prog_buf: [16]u8 = undefined;
+        const prog = std.fmt.bufPrint(&prog_buf, "  [{d}/{d}] ", .{
+            client_idx,
+            total_clients,
+        }) catch return;
+        self.writeColor(ESC_PROGRESS, prog);
+
+        // Client name in bold
+        self.writeColor(ESC_BOLD, name);
+
+        // Padding
+        var pad_buf: [12]u8 = undefined;
+        const pad_len = if (name.len < 10) 10 - name.len else 0;
+        @memset(pad_buf[0..pad_len], ' ');
+        self.stderr.writeAll(pad_buf[0..pad_len]) catch {};
+
+        // [FAIL] in soft red
+        self.writeColor(ESC_FAIL, " [FAIL]");
+
+        self.stderr.writeAll(" ") catch {};
+        self.writeColor(ESC_RUN, reason);
+        self.stderr.writeAll("\n") catch {};
+    }
+
+    /// Print a section header in slate blue.
+    pub fn printHeader(self: *TerminalUI, title: []const u8) void {
+        self.stderr.writeAll("\n") catch {};
+        self.writeColor(ESC_HEADER, title);
+        self.stderr.writeAll("\n") catch {};
+    }
+
+    /// Print plain text.
+    pub fn print(self: *TerminalUI, text: []const u8) void {
+        self.stderr.writeAll(text) catch {};
+    }
+
+    /// Print a horizontal line of specified width.
+    pub fn printHLine(self: *TerminalUI, width: usize) void {
+        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
+        for (0..width) |_| {
+            self.stderr.writeAll(BOX_H) catch {};
+        }
+        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
+    }
+
+    /// Print top border: ┌────────────────────┐
+    pub fn printBoxTop(self: *TerminalUI, width: usize) void {
+        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
+        self.stderr.writeAll(BOX_TL) catch {};
+        for (0..width - 2) |_| {
+            self.stderr.writeAll(BOX_H) catch {};
+        }
+        self.stderr.writeAll(BOX_TR) catch {};
+        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
+        self.stderr.writeAll("\n") catch {};
+    }
+
+    /// Print bottom border: └────────────────────┘
+    pub fn printBoxBottom(self: *TerminalUI, width: usize) void {
+        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
+        self.stderr.writeAll(BOX_BL) catch {};
+        for (0..width - 2) |_| {
+            self.stderr.writeAll(BOX_H) catch {};
+        }
+        self.stderr.writeAll(BOX_BR) catch {};
+        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
+        self.stderr.writeAll("\n") catch {};
+    }
+
+    /// Print a boxed line: │ text                    │
+    pub fn printBoxLine(self: *TerminalUI, width: usize, text: []const u8) void {
+        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
+        self.stderr.writeAll(BOX_V) catch {};
+        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
+        self.stderr.writeAll(" ") catch {};
+        self.stderr.writeAll(text) catch {};
+
+        // Calculate padding needed
+        const text_len = text.len;
+        const content_width = width - 4; // minus │ and spaces
+        if (text_len < content_width) {
+            for (0..content_width - text_len) |_| {
+                self.stderr.writeAll(" ") catch {};
+            }
+        }
+        self.stderr.writeAll(" ") catch {};
+        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
+        self.stderr.writeAll(BOX_V) catch {};
+        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
+        self.stderr.writeAll("\n") catch {};
+    }
+
+    /// Print a boxed line with colored text.
+    pub fn printBoxLineColored(
+        self: *TerminalUI,
+        width: usize,
+        color: []const u8,
+        text: []const u8,
+    ) void {
+        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
+        self.stderr.writeAll(BOX_V) catch {};
+        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
+        self.stderr.writeAll(" ") catch {};
+        self.writeColor(color, text);
+
+        // Calculate padding needed
+        const text_len = text.len;
+        const content_width = width - 4;
+        if (text_len < content_width) {
+            for (0..content_width - text_len) |_| {
+                self.stderr.writeAll(" ") catch {};
+            }
+        }
+        self.stderr.writeAll(" ") catch {};
+        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
+        self.stderr.writeAll(BOX_V) catch {};
+        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
+        self.stderr.writeAll("\n") catch {};
+    }
+
+    /// Segment for multi-colored box line.
+    pub const Segment = struct { color: []const u8, text: []const u8 };
+
+    /// Print a boxed line with multiple colored segments.
+    pub fn printBoxLineMulti(
+        self: *TerminalUI,
+        width: usize,
+        segments: []const Segment,
+    ) void {
+        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
+        self.stderr.writeAll(BOX_V) catch {};
+        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
+        self.stderr.writeAll(" ") catch {};
+
+        var text_len: usize = 0;
+        for (segments) |seg| {
+            self.writeColor(seg.color, seg.text);
+            text_len += seg.text.len;
+        }
+
+        // Pad to width
+        const content_width = width - 4;
+        if (text_len < content_width) {
+            for (0..content_width - text_len) |_| {
+                self.stderr.writeAll(" ") catch {};
+            }
+        }
+        self.stderr.writeAll(" ") catch {};
+        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
+        self.stderr.writeAll(BOX_V) catch {};
+        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
+        self.stderr.writeAll("\n") catch {};
+    }
+};
+
+/// TablePrinter for ANSI box-drawn tables.
+/// Prints tables with colored borders and headers.
+const TablePrinter = struct {
+    ui: *TerminalUI,
+    col_widths: []const usize,
+
+    /// Helper: set border color
+    fn borderOn(self: *TablePrinter) void {
+        if (self.ui.is_tty) self.ui.stderr.writeAll(TerminalUI.ESC_BORDER) catch {};
+    }
+
+    /// Helper: reset color
+    fn colorOff(self: *TablePrinter) void {
+        if (self.ui.is_tty) self.ui.stderr.writeAll(TerminalUI.ESC_RESET) catch {};
+    }
+
+    /// Print top border: ┌───────┬───────┬───────┐
+    pub fn printTop(self: *TablePrinter) void {
+        self.borderOn();
+        self.ui.stderr.writeAll(TerminalUI.BOX_TL) catch {};
+        for (self.col_widths, 0..) |w, i| {
+            for (0..w) |_| {
+                self.ui.stderr.writeAll(TerminalUI.BOX_H) catch {};
+            }
+            if (i < self.col_widths.len - 1) {
+                self.ui.stderr.writeAll(TerminalUI.BOX_TT) catch {};
+            }
+        }
+        self.ui.stderr.writeAll(TerminalUI.BOX_TR) catch {};
+        self.colorOff();
+        self.ui.stderr.writeAll("\n") catch {};
+    }
+
+    /// Print separator: ├───────┼───────┼───────┤
+    pub fn printSeparator(self: *TablePrinter) void {
+        self.borderOn();
+        self.ui.stderr.writeAll(TerminalUI.BOX_LT) catch {};
+        for (self.col_widths, 0..) |w, i| {
+            for (0..w) |_| {
+                self.ui.stderr.writeAll(TerminalUI.BOX_H) catch {};
+            }
+            if (i < self.col_widths.len - 1) {
+                self.ui.stderr.writeAll(TerminalUI.BOX_X) catch {};
+            }
+        }
+        self.ui.stderr.writeAll(TerminalUI.BOX_RT) catch {};
+        self.colorOff();
+        self.ui.stderr.writeAll("\n") catch {};
+    }
+
+    /// Print bottom border: └───────┴───────┴───────┘
+    pub fn printBottom(self: *TablePrinter) void {
+        self.borderOn();
+        self.ui.stderr.writeAll(TerminalUI.BOX_BL) catch {};
+        for (self.col_widths, 0..) |w, i| {
+            for (0..w) |_| {
+                self.ui.stderr.writeAll(TerminalUI.BOX_H) catch {};
+            }
+            if (i < self.col_widths.len - 1) {
+                self.ui.stderr.writeAll(TerminalUI.BOX_BT) catch {};
+            }
+        }
+        self.ui.stderr.writeAll(TerminalUI.BOX_BR) catch {};
+        self.colorOff();
+        self.ui.stderr.writeAll("\n") catch {};
+    }
+
+    /// Print header row with colored text.
+    pub fn printHeaderRow(self: *TablePrinter, headers: []const []const u8) void {
+        assert(headers.len == self.col_widths.len);
+
+        self.borderOn();
+        self.ui.stderr.writeAll(TerminalUI.BOX_V) catch {};
+        self.colorOff();
+        for (headers, 0..) |header, i| {
+            self.ui.stderr.writeAll(" ") catch {};
+            self.ui.writeColor(TerminalUI.ESC_HEADER, header);
+
+            // Pad to column width
+            const pad = self.col_widths[i] - header.len - 1;
+            for (0..pad) |_| {
+                self.ui.stderr.writeAll(" ") catch {};
+            }
+            self.borderOn();
+            self.ui.stderr.writeAll(TerminalUI.BOX_V) catch {};
+            self.colorOff();
+        }
+        self.ui.stderr.writeAll("\n") catch {};
+    }
+
+    /// Print a data row.
+    pub fn printRow(self: *TablePrinter, cells: []const []const u8) void {
+        assert(cells.len == self.col_widths.len);
+
+        self.borderOn();
+        self.ui.stderr.writeAll(TerminalUI.BOX_V) catch {};
+        self.colorOff();
+        for (cells, 0..) |cell, i| {
+            self.ui.stderr.writeAll(" ") catch {};
+            self.ui.stderr.writeAll(cell) catch {};
+
+            // Pad to column width
+            const cell_len = cell.len;
+            const pad = if (self.col_widths[i] > cell_len + 1)
+                self.col_widths[i] - cell_len - 1
+            else
+                0;
+            for (0..pad) |_| {
+                self.ui.stderr.writeAll(" ") catch {};
+            }
+            self.borderOn();
+            self.ui.stderr.writeAll(TerminalUI.BOX_V) catch {};
+            self.colorOff();
+        }
+        self.ui.stderr.writeAll("\n") catch {};
+    }
+
+    /// Print a data row with first cell colored (for client name).
+    pub fn printRowHighlight(self: *TablePrinter, cells: []const []const u8) void {
+        assert(cells.len == self.col_widths.len);
+
+        self.borderOn();
+        self.ui.stderr.writeAll(TerminalUI.BOX_V) catch {};
+        self.colorOff();
+        for (cells, 0..) |cell, i| {
+            self.ui.stderr.writeAll(" ") catch {};
+            if (i == 0) {
+                self.ui.writeColor(TerminalUI.ESC_BOLD, cell);
+            } else {
+                self.ui.writeColor(TerminalUI.ESC_RATE, cell);
+            }
+
+            // Pad to column width
+            const cell_len = cell.len;
+            const pad = if (self.col_widths[i] > cell_len + 1)
+                self.col_widths[i] - cell_len - 1
+            else
+                0;
+            for (0..pad) |_| {
+                self.ui.stderr.writeAll(" ") catch {};
+            }
+            self.borderOn();
+            self.ui.stderr.writeAll(TerminalUI.BOX_V) catch {};
+            self.colorOff();
+        }
+        self.ui.stderr.writeAll("\n") catch {};
+    }
+};
 
 /// Supported benchmark clients.
 pub const Client = enum {
@@ -36,14 +561,15 @@ pub const Client = enum {
 
     /// Whether this client has a standalone subscriber.
     pub fn hasSubscriber(self: Client) bool {
-        return self != .rust;
+        _ = self;
+        return true; // All clients now have separate pub/sub
     }
 };
 
 /// Publisher or subscriber role.
 pub const Role = enum {
-    pub_,
-    sub,
+    publisher,
+    subscriber,
 };
 
 /// Benchmark configuration options.
@@ -52,6 +578,8 @@ pub const BenchOpts = struct {
     num_msgs: u64 = 100_000,
     size: usize = 16,
     port: u16 = 4222,
+    num_runs: u32 = 1,
+    output_file: ?[]const u8 = null, // Markdown report file (optional)
 };
 
 /// Parsed benchmark statistics.
@@ -66,6 +594,32 @@ pub const PubSubResult = struct {
     name: []const u8,
     pub_stats: ?BenchStats = null,
     sub_stats: ?BenchStats = null,
+};
+
+/// Individual benchmark run result with success/failure tracking.
+pub const BenchRun = struct {
+    success: bool = false,
+    pub_stats: ?BenchStats = null,
+    sub_stats: ?BenchStats = null,
+    error_msg: []const u8 = "",
+};
+
+/// Collection of all benchmark results for markdown generation.
+pub const AllResults = struct {
+    // Table 1: Self pub/sub [client_idx][run_idx]
+    table1: [5][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 5,
+    // Table 2.1: Zig std publisher, various subscribers
+    table2_1: [5][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 5,
+    // Table 2.2: Go publisher, various subscribers
+    table2_2: [5][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 5,
+    // Table 3: Fire starter
+    table3: [5][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 5,
+
+    // Track how many valid runs we got per client
+    table1_counts: [5]usize = .{0} ** 5,
+    table2_1_counts: [5]usize = .{0} ** 5,
+    table2_2_counts: [5]usize = .{0} ** 5,
+    table3_counts: [5]usize = .{0} ** 5,
 };
 
 /// Argument buffer for building command lines.
@@ -121,21 +675,21 @@ pub fn buildExeArgs(
 
     switch (client) {
         .zig => {
-            const exe = if (role == .pub_)
+            const exe = if (role == .publisher)
                 "./zig-out/bin/bench-pub"
             else
                 "./zig-out/bin/bench-sub";
             ab.add(exe);
             ab.add(opts.subject);
             ab.addFmt("--msgs={d}", .{opts.num_msgs});
-            if (role == .pub_) {
+            if (role == .publisher) {
                 ab.addFmt("--size={d}", .{opts.size});
             } else {
                 ab.add("--no-progress");
             }
         },
         .zig_iou => {
-            const exe = if (role == .pub_)
+            const exe = if (role == .publisher)
                 "../../nats-io_u/zig-out/bin/bench_pub"
             else
                 "../../nats-io_u/zig-out/bin/bench_sub";
@@ -148,7 +702,7 @@ pub fn buildExeArgs(
             ab.add(opts.subject);
         },
         .c => {
-            if (role == .pub_) {
+            if (role == .publisher) {
                 ab.add("../nats.c/build/bin/nats-publisher");
                 ab.add("-count");
                 ab.addFmt("{d}", .{opts.num_msgs});
@@ -169,24 +723,24 @@ pub fn buildExeArgs(
             }
         },
         .rust => {
-            // Rust only has combined pub+sub benchmark, wrap with timeout
-            ab.add("timeout");
-            ab.add("5");
-            ab.add("../nats.rs/target/release/examples/nats_bench");
-            ab.add("-n");
-            ab.addFmt("{d}", .{opts.num_msgs});
-            ab.add("--message-size");
-            ab.addFmt("{d}", .{opts.size});
-            ab.add("-s");
-            ab.add("1");
-            ab.add("-p");
-            ab.add("1");
+            // Rust separate bench_pub/bench_sub utilities
+            const exe = if (role == .publisher)
+                "../nats.rs.bench/target/release/bench_pub"
+            else
+                "../nats.rs.bench/target/release/bench_sub";
+            ab.add(exe);
             ab.add(opts.subject);
+            ab.add("--msgs");
+            ab.addFmt("{d}", .{opts.num_msgs});
+            if (role == .publisher) {
+                ab.add("--size");
+                ab.addFmt("{d}", .{opts.size});
+            }
         },
         .go => {
             ab.add("nats");
             ab.add("bench");
-            ab.add(if (role == .pub_) "pub" else "sub");
+            ab.add(if (role == .publisher) "pub" else "sub");
             ab.addFmt("--msgs={d}", .{opts.num_msgs});
             ab.addFmt("--size={d}B", .{opts.size});
             ab.add("--no-progress");
@@ -216,7 +770,6 @@ pub fn runExe(
     opts: BenchOpts,
     payload_buf: []u8,
 ) !std.process.Child {
-    assert(client != .rust or role == .pub_);
 
     // Build args in local buffer to keep slices valid
     var ab = ArgBuffer{};
@@ -296,6 +849,18 @@ fn parseZigStatsLine(data: []const u8) ?BenchStats {
 /// "Throughput:   44480028.47 msg/s"
 /// "Bandwidth:    678.71 MB/s"
 fn parseZigIouOutput(output: []const u8) ?BenchStats {
+    return parseThroughputBandwidth(output);
+}
+
+/// Parse fire_starter output (same format as zig_iou):
+/// "Throughput:   4398969.54 msg/s"
+/// "Bandwidth:    167.81 MB/s"
+fn parseFireStarterOutput(output: []const u8) ?BenchStats {
+    return parseThroughputBandwidth(output);
+}
+
+/// Common parser for "Throughput: N msg/s" and "Bandwidth: N MB/s" format.
+fn parseThroughputBandwidth(output: []const u8) ?BenchStats {
     var msgs: ?f64 = null;
     var bw: ?f64 = null;
 
@@ -347,46 +912,35 @@ fn parseCOutput(output: []const u8) ?BenchStats {
     return null;
 }
 
-/// Parse Rust output:
-/// "duration: Xms frequency: N mbps: N"
-/// "50th percentile: N ns"
+/// Parse Rust bench_pub/bench_sub output:
+/// "  Msg/sec:    2982417"
+/// "  Throughput: 47.72 MB/s"
 fn parseRustOutput(output: []const u8) ?BenchStats {
-    var freq: ?f64 = null;
-    var mbps: ?f64 = null;
-    var lat_ns: ?f64 = null;
+    var msgs: ?f64 = null;
+    var throughput: ?f64 = null;
 
     var lines = std.mem.splitScalar(u8, output, '\n');
     while (lines.next()) |line| {
-        // Parse frequency and mbps from same line
-        if (std.mem.indexOf(u8, line, "frequency:")) |freq_idx| {
-            const freq_rest = line[freq_idx + 10 ..];
-            var freq_parts = std.mem.tokenizeAny(u8, freq_rest, " \t");
-            if (freq_parts.next()) |val_str| {
-                freq = std.fmt.parseFloat(f64, val_str) catch null;
-            }
-
-            // mbps is on same line after frequency
-            if (std.mem.indexOf(u8, line, "mbps:")) |mbps_idx| {
-                const mbps_rest = line[mbps_idx + 5 ..];
-                var mbps_parts = std.mem.tokenizeAny(u8, mbps_rest, " \t");
-                if (mbps_parts.next()) |val_str| {
-                    mbps = std.fmt.parseFloat(f64, val_str) catch null;
-                }
-            }
-        } else if (std.mem.indexOf(u8, line, "50th percentile:")) |idx| {
-            const rest = line[idx + 16 ..];
+        if (std.mem.indexOf(u8, line, "Msg/sec:")) |idx| {
+            const rest = line[idx + 8 ..];
             var parts = std.mem.tokenizeAny(u8, rest, " \t");
             if (parts.next()) |val_str| {
-                lat_ns = std.fmt.parseFloat(f64, val_str) catch null;
+                msgs = std.fmt.parseFloat(f64, val_str) catch null;
+            }
+        } else if (std.mem.indexOf(u8, line, "Throughput:")) |idx| {
+            const rest = line[idx + 11 ..];
+            var parts = std.mem.tokenizeAny(u8, rest, " \t");
+            if (parts.next()) |val_str| {
+                throughput = std.fmt.parseFloat(f64, val_str) catch null;
             }
         }
     }
 
-    if (freq != null) {
+    if (msgs != null) {
         return .{
-            .msgs_per_sec = freq.?,
-            .bandwidth_mb = mbps orelse 0,
-            .latency_us = if (lat_ns) |ns| ns / 1000.0 else null,
+            .msgs_per_sec = msgs.?,
+            .bandwidth_mb = throughput orelse 0,
+            .latency_us = null,
         };
     }
     return null;
@@ -516,6 +1070,7 @@ fn readUntilDone(pipe: ?std.fs.File, buf: []u8, timeout_ns: u64) []const u8 {
         if (std.mem.indexOf(u8, buf[0..total], "stats:") != null) break;
         if (std.mem.indexOf(u8, buf[0..total], "msgs/sec)") != null) break;
         if (std.mem.indexOf(u8, buf[0..total], "max:") != null) break;
+        if (std.mem.indexOf(u8, buf[0..total], "Throughput:") != null) break;
     }
     return buf[0..total];
 }
@@ -527,7 +1082,7 @@ pub fn runPublisher(
     opts: BenchOpts,
 ) !?BenchStats {
     var payload_buf: [4096]u8 = undefined;
-    var child = try runExe(allocator, client, .pub_, opts, &payload_buf);
+    var child = try runExe(allocator, client, .publisher, opts, &payload_buf);
 
     var buf: [8192]u8 = undefined;
     const pipe = if (getOutputPipe(client) == .stderr)
@@ -549,7 +1104,7 @@ pub fn runSubscriber(
     assert(client.hasSubscriber());
 
     var payload_buf: [4096]u8 = undefined;
-    var child = try runExe(allocator, client, .sub, opts, &payload_buf);
+    var child = try runExe(allocator, client, .subscriber, opts, &payload_buf);
 
     var buf: [8192]u8 = undefined;
     const pipe = if (getOutputPipe(client) == .stderr)
@@ -575,24 +1130,24 @@ pub fn runPubSub(
     var sub_payload: [4096]u8 = undefined;
 
     // Start subscriber first
-    var sub = try runExe(allocator, sub_client, .sub, opts, &sub_payload);
+    var sub = try runExe(allocator, sub_client, .subscriber, opts, &sub_payload);
 
     // Wait for subscriber to connect
     std.posix.nanosleep(0, 750_000_000);
 
     // Start publisher
-    var pub_ = try runExe(allocator, pub_client, .pub_, opts, &pub_payload);
+    var publ = try runExe(allocator, pub_client, .publisher, opts, &pub_payload);
 
     // Read publisher output (wait for "Done!" marker)
     var pub_buf: [16384]u8 = undefined;
     const pub_pipe = if (getOutputPipe(pub_client) == .stderr)
-        pub_.stderr
+        publ.stderr
     else
-        pub_.stdout;
+        publ.stdout;
     const pub_output = readUntilDone(pub_pipe, &pub_buf, TMOUT);
 
     // Wait for publisher to complete
-    _ = pub_.wait() catch {};
+    _ = publ.wait() catch {};
 
     // Give subscriber time to receive all messages
     std.posix.nanosleep(2, 0);
@@ -613,22 +1168,69 @@ pub fn runPubSub(
     };
 }
 
-/// Run Rust combined benchmark with 5 second timeout.
-pub fn runRustBench(allocator: Allocator, opts: BenchOpts) !?BenchStats {
-    var payload_buf: [4096]u8 = undefined;
-    var child = try runExe(allocator, .rust, .pub_, opts, &payload_buf);
+/// Spawn fire_starter (io_uring server + publisher).
+/// Usage: fire_starter <msg_count> <msg_size>
+/// Fixed subject: stress.test
+pub fn runFireStarter(allocator: Allocator, opts: BenchOpts) !std.process.Child {
+    assert(opts.num_msgs > 0);
+    assert(opts.size > 0);
 
-    // Read output with 5 second timeout (Rust bench can hang)
-    var buf: [16384]u8 = undefined;
-    const timeout_5s: u64 = 5_000_000_000;
-    const output = readPipeWithTimeout(child.stdout, &buf, timeout_5s);
+    var ab = ArgBuffer{};
+    ab.add("../../nats-io_u/zig-out/bin/fire_starter");
+    ab.addFmt("{d}", .{opts.num_msgs});
+    ab.addFmt("{d}", .{opts.size});
 
-    // Kill if still running, then wait
-    _ = child.kill() catch {};
-    _ = child.wait() catch {};
+    var child = std.process.Child.init(ab.slice(), allocator);
+    // fire_starter outputs stats to stderr
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Pipe;
 
-    if (output.len == 0) return null;
-    return parseOutput(.rust, output);
+    try child.spawn();
+    return child;
+}
+
+/// Run fire_starter with a subscriber (max throughput test).
+pub fn runFireStarterTest(
+    allocator: Allocator,
+    sub_client: Client,
+    opts: BenchOpts,
+) !PubSubResult {
+    assert(sub_client.hasSubscriber());
+    assert(opts.num_msgs > 0);
+    assert(opts.size > 0);
+
+    // Start fire_starter
+    var fire = try runFireStarter(allocator, opts);
+
+    // Wait for fire_starter to be ready
+    std.posix.nanosleep(0, 500_000_000);
+
+    // Start subscriber with stress.test subject
+    var sub_opts = opts;
+    sub_opts.subject = "stress.test";
+
+    var sub_payload: [4096]u8 = undefined;
+    var sub = try runExe(allocator, sub_client, .subscriber, sub_opts, &sub_payload);
+
+    // Read subscriber output
+    var sub_buf: [16384]u8 = undefined;
+    const sub_pipe = if (getOutputPipe(sub_client) == .stderr)
+        sub.stderr
+    else
+        sub.stdout;
+    const sub_output = readUntilDone(sub_pipe, &sub_buf, TMOUT);
+    _ = sub.wait() catch {};
+
+    // Read fire_starter output from stderr (should have exited after sending)
+    var fire_buf: [16384]u8 = undefined;
+    const fire_output = readAllFromPipe(fire.stderr, &fire_buf);
+    _ = fire.wait() catch {};
+
+    return .{
+        .name = sub_client.name(),
+        .pub_stats = parseFireStarterOutput(fire_output),
+        .sub_stats = parseOutput(sub_client, sub_output),
+    };
 }
 
 // ============================================================================
@@ -640,18 +1242,49 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const opts = try parseArgs(allocator);
+    const opts = parseArgs(allocator) catch |err| {
+        if (err == error.ShowHelp) {
+            printHelp();
+            return;
+        }
+        return err;
+    };
+
+    // Initialize terminal UI, stdout, and results storage
+    var ui = TerminalUI.init();
+    var stdout: StdOut = .{};
+    stdout.init();
+    var all_results = AllResults{};
 
     // Ensure nats-server is running
     ensureNatsServer();
 
-    printHeader(opts);
+    printHeader(&stdout, opts, &ui);
+    stdout.flush();
 
     // Table 1: Each client runs own pub+sub
-    try runTable1(allocator, opts);
+    try runTable1(allocator, opts, &ui, &all_results, &stdout);
 
-    // Table 2: Subscriber comparison with zig_iou publisher
-    try runTable2(allocator, opts);
+    // Table 2.1: Subscriber comparison with Zig std publisher
+    try runTable2(allocator, opts, &ui, &all_results, &stdout);
+
+    // Table 2.2: Subscriber comparison with Go publisher
+    try runTable2_2(allocator, opts, &ui, &all_results, &stdout);
+
+    // Table 3: Fire starter test (needs nats-server stopped)
+    stopNatsServer();
+    try runTable3(allocator, opts, &ui, &all_results, &stdout);
+
+    stdout.flush();
+
+    // Generate markdown report if requested
+    if (opts.output_file) |filename| {
+        try generateMarkdown(opts, &all_results, filename);
+        ui.printHeader("Markdown report written to:");
+        ui.print("  ");
+        ui.writeGreen(filename);
+        ui.print("\n");
+    }
 }
 
 fn parseArgs(allocator: Allocator) !BenchOpts {
@@ -660,18 +1293,53 @@ fn parseArgs(allocator: Allocator) !BenchOpts {
     _ = args.next();
 
     var opts = BenchOpts{};
+    var has_msgs = false;
+    var has_size = false;
+    var has_runs = false;
 
     while (args.next()) |arg| {
         if (std.mem.startsWith(u8, arg, "--msgs=")) {
             opts.num_msgs = std.fmt.parseInt(u64, arg[7..], 10) catch
                 return error.InvalidArgument;
+            has_msgs = true;
         } else if (std.mem.startsWith(u8, arg, "--size=")) {
             opts.size = parseSizeArg(arg[7..]) catch
                 return error.InvalidArgument;
+            has_size = true;
+        } else if (std.mem.startsWith(u8, arg, "--runs=")) {
+            opts.num_runs = std.fmt.parseInt(u32, arg[7..], 10) catch
+                return error.InvalidArgument;
+            if (opts.num_runs == 0 or opts.num_runs > MAX_RUNS)
+                return error.InvalidArgument;
+            has_runs = true;
+        } else if (std.mem.startsWith(u8, arg, "--output=")) {
+            opts.output_file = arg[9..];
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            return error.ShowHelp;
         }
     }
 
+    if (!has_msgs or !has_size or !has_runs) return error.ShowHelp;
     return opts;
+}
+
+fn printHelp() void {
+    std.debug.print(
+        \\
+        \\Usage: zig build run-perf-bench -- --msgs=N --size=N --runs=N [--output=FILE]
+        \\
+        \\Options:
+        \\  --msgs=N      Number of messages (required)
+        \\  --size=N      Payload size in bytes (required)
+        \\                Supports suffixes: B, K/KB, M/MB
+        \\  --runs=N      Number of runs per test (required, max 32)
+        \\  --output=FILE Write markdown report to FILE (optional)
+        \\
+        \\Examples:
+        \\  zig build run-perf-bench -- --msgs=100000 --size=16 --runs=3
+        \\  zig build run-perf-bench -- --msgs=1000000 --size=1K --runs=5 --output=results.md
+        \\
+    , .{});
 }
 
 fn parseSizeArg(val: []const u8) !usize {
@@ -719,65 +1387,344 @@ fn ensureNatsServer() void {
     }
 }
 
-fn printHeader(opts: BenchOpts) void {
-    std.debug.print(
-        \\
-        \\======================================================
-        \\  NATS CLIENT BENCHMARK
-        \\  Zig io_uring vs Zig std.Io vs C vs Rust vs Go
-        \\  Messages: {d}, Payload: {d} bytes
-        \\======================================================
-        \\
-        \\
-    , .{ opts.num_msgs, opts.size });
+fn stopNatsServer() void {
+    // Kill nats-server if running (needed before fire_starter test)
+    var child = std.process.Child.init(
+        &.{ "pkill", "nats-server" },
+        std.heap.page_allocator,
+    );
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return;
+    _ = child.wait() catch {};
+    // Wait for port to be released
+    std.posix.nanosleep(0, 500_000_000);
 }
 
-fn runTable1(allocator: Allocator, opts: BenchOpts) !void {
-    // Collect all results first
-    const clients = [_]Client{ .zig_iou, .zig, .c, .go };
-    var results: [4]?PubSubResult = .{ null, null, null, null };
-    var rust_stats: ?BenchStats = null;
+fn printHeader(out: *StdOut, opts: BenchOpts, ui: *TerminalUI) void {
+    _ = out;
+    const W: usize = 56;
+    const Seg = TerminalUI.Segment;
 
-    for (clients, 0..) |client, i| {
-        std.debug.print("Running {s} benchmark...\n", .{client.name()});
-        results[i] = runPubSub(allocator, client, client, opts) catch |err| {
-            std.debug.print("  Error: {}\n", .{err});
-            continue;
-        };
-    }
+    ui.stderr.writeAll("\n") catch {};
+    ui.printBoxTop(W);
 
-    std.debug.print("Running Rust benchmark...\n", .{});
-    if (runRustBench(allocator, opts)) |stats| {
-        rust_stats = stats;
-    } else |err| {
-        std.debug.print("  Rust error: {}\n", .{err});
-    }
+    // Line 1: Title in bold white
+    ui.printBoxLineColored(
+        W,
+        TerminalUI.ESC_TITLE ++ TerminalUI.ESC_BOLD,
+        "NATS CLIENT BENCHMARK",
+    );
 
-    // Print table
-    std.debug.print("\n## Results: {d} messages, {d} bytes\n\n", .{
-        opts.num_msgs,
-        opts.size,
+    // Line 2: Client names in slate blue, "vs" in gray
+    ui.printBoxLineMulti(W, &[_]Seg{
+        .{ .color = TerminalUI.ESC_HEADER, .text = "Zig io_uring" },
+        .{ .color = TerminalUI.ESC_PROGRESS, .text = " vs " },
+        .{ .color = TerminalUI.ESC_HEADER, .text = "Zig std.Io" },
+        .{ .color = TerminalUI.ESC_PROGRESS, .text = " vs " },
+        .{ .color = TerminalUI.ESC_HEADER, .text = "C" },
+        .{ .color = TerminalUI.ESC_PROGRESS, .text = " vs " },
+        .{ .color = TerminalUI.ESC_HEADER, .text = "Rust" },
+        .{ .color = TerminalUI.ESC_PROGRESS, .text = " vs " },
+        .{ .color = TerminalUI.ESC_HEADER, .text = "Go" },
     });
-    std.debug.print(
-        "| {s:<10} | {s:>18} | {s:>18} | {s:>10} | {s:>8} |\n",
-        .{ "Client", "Publisher", "Subscriber", "Bandwidth", "Latency" },
-    );
-    std.debug.print(
-        "|{s:-<12}|{s:->20}|{s:->20}|{s:->12}|{s:->10}|\n",
-        .{ "", "", "", "", "" },
-    );
 
-    for (clients, 0..) |client, i| {
-        if (results[i]) |result| {
-            printTable1Row(client.name(), result, opts.size);
+    // Line 3: Parameters with colored numbers
+    var num_buf: [16]u8 = undefined;
+    var size_buf: [8]u8 = undefined;
+    const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{opts.num_msgs}) catch "?";
+    const size_str = std.fmt.bufPrint(&size_buf, "{d}", .{opts.size}) catch "?";
+
+    ui.printBoxLineMulti(W, &[_]Seg{
+        .{ .color = TerminalUI.ESC_UNIT, .text = "Messages: " },
+        .{ .color = TerminalUI.ESC_RATE, .text = num_str },
+        .{ .color = TerminalUI.ESC_PROGRESS, .text = "  |  " },
+        .{ .color = TerminalUI.ESC_UNIT, .text = "Payload: " },
+        .{ .color = TerminalUI.ESC_RATE, .text = size_str },
+        .{ .color = TerminalUI.ESC_UNIT, .text = " bytes" },
+    });
+
+    ui.printBoxBottom(W);
+}
+
+fn runTable1(
+    allocator: Allocator,
+    opts: BenchOpts,
+    ui: *TerminalUI,
+    all_results: *AllResults,
+    out: *StdOut,
+) !void {
+    const clients = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
+    const num_runs = opts.num_runs;
+    const total_clients = clients.len;
+
+    ui.printHeader("Table 1: Self Pub/Sub");
+
+    // Run all benchmarks with interactive progress
+    for (clients, 0..) |client, ci| {
+        var success_count: usize = 0;
+        var last_sub_rate: f64 = 0;
+
+        for (0..num_runs) |run| {
+            // Show running state with spinner
+            ui.showRunning(ci + 1, total_clients, client.name(), run + 1, num_runs);
+
+            const result = runPubSub(allocator, client, client, opts) catch |err| {
+                all_results.table1[ci][run] = .{
+                    .success = false,
+                    .error_msg = @errorName(err),
+                };
+                continue;
+            };
+
+            // Store result
+            all_results.table1[ci][run] = .{
+                .success = true,
+                .pub_stats = result.pub_stats,
+                .sub_stats = result.sub_stats,
+            };
+            all_results.table1_counts[ci] += 1;
+            success_count += 1;
+
+            if (result.sub_stats) |stats| {
+                last_sub_rate = stats.msgs_per_sec;
+            }
+        }
+
+        // Show final result for this client
+        if (success_count > 0) {
+            // Calculate median for display
+            var rates: [MAX_RUNS]f64 = undefined;
+            var rate_count: usize = 0;
+            for (0..num_runs) |run| {
+                if (all_results.table1[ci][run].sub_stats) |s| {
+                    rates[rate_count] = s.msgs_per_sec;
+                    rate_count += 1;
+                }
+            }
+            const median_rate = if (rate_count > 0)
+                calculateMedian(rates[0..rate_count])
+            else
+                last_sub_rate;
+
+            var rate_buf: [32]u8 = undefined;
+            const rate_str = fmtRate(&rate_buf, median_rate);
+            ui.showSuccess(ci + 1, total_clients, client.name(), rate_str);
+        } else {
+            ui.showFailure(ci + 1, total_clients, client.name(), "all runs failed");
         }
     }
-    printTable1RowRust(rust_stats);
 
-    std.debug.print("\n", .{});
+    // Print detailed tables at the end
+    printTable1Details(out, opts, all_results);
+    out.flush();
 }
 
-fn printTable1Row(name: []const u8, result: PubSubResult, size: usize) void {
+/// Print the detailed Table 1 results (all runs + median).
+fn printTable1Details(out: *StdOut, opts: BenchOpts, all_results: *AllResults) void {
+    _ = out; // Using ui for ANSI output
+
+    const clients = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
+    const num_runs = opts.num_runs;
+
+    // Convert AllResults to old format for existing print functions
+    var results: [5][MAX_RUNS]?PubSubResult = .{.{null} ** MAX_RUNS} ** 5;
+    for (clients, 0..) |client, ci| {
+        for (0..num_runs) |run| {
+            const r = all_results.table1[ci][run];
+            if (r.success) {
+                results[ci][run] = .{
+                    .name = client.name(),
+                    .pub_stats = r.pub_stats,
+                    .sub_stats = r.sub_stats,
+                };
+            }
+        }
+    }
+
+    // Use stderr for ANSI table output
+    var ui = TerminalUI.init();
+
+    // Print section title
+    var title_buf: [64]u8 = undefined;
+    const title = std.fmt.bufPrint(&title_buf, "Table 1: All Runs ({d} runs)", .{num_runs}) catch
+        "Table 1: All Runs";
+    ui.printHeader(title);
+
+    // Column widths: Client(12), Run(5), Publisher(20), Subscriber(20), BW(12), Lat(10)
+    const col_widths = [_]usize{ 12, 5, 20, 20, 12, 10 };
+    var printer = TablePrinter{ .ui = &ui, .col_widths = &col_widths };
+
+    printer.printTop();
+    printer.printHeaderRow(&.{ "Client", "Run", "Publisher", "Subscriber", "Bandwidth", "Latency" });
+    printer.printSeparator();
+
+    for (clients, 0..) |client, ci| {
+        for (0..num_runs) |run| {
+            if (results[ci][run]) |result| {
+                var pub_buf: [24]u8 = undefined;
+                var sub_buf: [24]u8 = undefined;
+                var bw_buf: [16]u8 = undefined;
+                var lat_buf: [12]u8 = undefined;
+                var run_buf: [8]u8 = undefined;
+
+                const pub_str = if (result.pub_stats) |s| fmtRate(&pub_buf, s.msgs_per_sec) else "-";
+                const sub_str = if (result.sub_stats) |s| fmtRate(&sub_buf, s.msgs_per_sec) else "-";
+                const bw_str = if (result.sub_stats) |s| blk: {
+                    const mb = if (s.bandwidth_mb > 0) s.bandwidth_mb else s.msgs_per_sec * @as(f64, @floatFromInt(opts.size)) / 1_000_000.0;
+                    break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+                } else "-";
+                const lat_str = if (result.sub_stats) |s| (if (s.latency_us) |lat| std.fmt.bufPrint(&lat_buf, "{d:.2}us", .{lat}) catch "-" else "-") else "-";
+                const run_str = std.fmt.bufPrint(&run_buf, "{d}", .{run + 1}) catch "?";
+
+                printer.printRowHighlight(&.{ client.name(), run_str, pub_str, sub_str, bw_str, lat_str });
+            }
+        }
+        // Separator between clients (not after last)
+        if (ci < clients.len - 1) {
+            printer.printSeparator();
+        }
+    }
+    printer.printBottom();
+
+    // Print median results table
+    ui.printHeader("Table 1: Median Results");
+
+    const med_widths = [_]usize{ 12, 20, 20, 12, 10 };
+    var med_printer = TablePrinter{ .ui = &ui, .col_widths = &med_widths };
+
+    med_printer.printTop();
+    med_printer.printHeaderRow(&.{ "Client", "Publisher", "Subscriber", "Bandwidth", "Latency" });
+    med_printer.printSeparator();
+
+    for (clients, 0..) |client, ci| {
+        const median = calcMedianPubSub(results[ci][0..num_runs]);
+
+        var pub_buf: [24]u8 = undefined;
+        var sub_buf: [24]u8 = undefined;
+        var bw_buf: [16]u8 = undefined;
+        var lat_buf: [12]u8 = undefined;
+
+        const pub_str = if (median.pub_stats) |s| fmtRate(&pub_buf, s.msgs_per_sec) else "-";
+        const sub_str = if (median.sub_stats) |s| fmtRate(&sub_buf, s.msgs_per_sec) else "-";
+        const bw_str = if (median.sub_stats) |s| blk: {
+            const mb = if (s.bandwidth_mb > 0) s.bandwidth_mb else s.msgs_per_sec * @as(f64, @floatFromInt(opts.size)) / 1_000_000.0;
+            break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+        } else "-";
+        const lat_str = if (median.sub_stats) |s| (if (s.latency_us) |lat| std.fmt.bufPrint(&lat_buf, "{d:.2}us", .{lat}) catch "-" else "-") else "-";
+
+        med_printer.printRowHighlight(&.{ client.name(), pub_str, sub_str, bw_str, lat_str });
+    }
+    med_printer.printBottom();
+}
+
+fn printTable1RowRun(
+    out: *StdOut,
+    name: []const u8,
+    run: usize,
+    result: PubSubResult,
+    size: usize,
+) void {
+    var pub_buf: [24]u8 = undefined;
+    var sub_buf: [24]u8 = undefined;
+    var bw_buf: [16]u8 = undefined;
+    var lat_buf: [12]u8 = undefined;
+
+    const pub_str = if (result.pub_stats) |s|
+        fmtRate(&pub_buf, s.msgs_per_sec)
+    else
+        "-";
+    const sub_str = if (result.sub_stats) |s|
+        fmtRate(&sub_buf, s.msgs_per_sec)
+    else
+        "-";
+
+    const bw_str = if (result.sub_stats) |s| blk: {
+        const mb = if (s.bandwidth_mb > 0)
+            s.bandwidth_mb
+        else
+            s.msgs_per_sec * @as(f64, @floatFromInt(size)) / 1_000_000.0;
+        break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+    } else "-";
+
+    const lat_str = if (result.sub_stats) |s|
+        if (s.latency_us) |lat|
+            std.fmt.bufPrint(&lat_buf, "{d:.2}us", .{lat}) catch "-"
+        else
+            "-"
+    else
+        "-";
+
+    out.print(
+        "| {s:<10} | {d:>3} | {s:>18} | {s:>18} | {s:>10} | {s:>8} |\n",
+        .{ name, run, pub_str, sub_str, bw_str, lat_str },
+    );
+}
+
+/// Calculate median PubSubResult from multiple runs.
+fn calcMedianPubSub(results: []?PubSubResult) PubSubResult {
+    var pub_rates: [MAX_RUNS]f64 = undefined;
+    var sub_rates: [MAX_RUNS]f64 = undefined;
+    var sub_bw: [MAX_RUNS]f64 = undefined;
+    var sub_lat: [MAX_RUNS]?f64 = .{null} ** MAX_RUNS;
+    var pub_count: usize = 0;
+    var sub_count: usize = 0;
+
+    for (results) |r| {
+        if (r) |result| {
+            if (result.pub_stats) |ps| {
+                pub_rates[pub_count] = ps.msgs_per_sec;
+                pub_count += 1;
+            }
+            if (result.sub_stats) |ss| {
+                sub_rates[sub_count] = ss.msgs_per_sec;
+                sub_bw[sub_count] = ss.bandwidth_mb;
+                sub_lat[sub_count] = ss.latency_us;
+                sub_count += 1;
+            }
+        }
+    }
+
+    return .{
+        .name = "",
+        .pub_stats = if (pub_count > 0) .{
+            .msgs_per_sec = calculateMedian(pub_rates[0..pub_count]),
+            .bandwidth_mb = 0,
+            .latency_us = null,
+        } else null,
+        .sub_stats = if (sub_count > 0) .{
+            .msgs_per_sec = calculateMedian(sub_rates[0..sub_count]),
+            .bandwidth_mb = calculateMedian(sub_bw[0..sub_count]),
+            .latency_us = calculateMedianLatency(sub_lat[0..sub_count]),
+        } else null,
+    };
+}
+
+/// Calculate median BenchStats from multiple runs.
+fn calcMedianStats(results: []?BenchStats) ?BenchStats {
+    var rates: [MAX_RUNS]f64 = undefined;
+    var bw: [MAX_RUNS]f64 = undefined;
+    var lat: [MAX_RUNS]?f64 = .{null} ** MAX_RUNS;
+    var count: usize = 0;
+
+    for (results) |r| {
+        if (r) |stats| {
+            rates[count] = stats.msgs_per_sec;
+            bw[count] = stats.bandwidth_mb;
+            lat[count] = stats.latency_us;
+            count += 1;
+        }
+    }
+
+    if (count == 0) return null;
+    return .{
+        .msgs_per_sec = calculateMedian(rates[0..count]),
+        .bandwidth_mb = calculateMedian(bw[0..count]),
+        .latency_us = calculateMedianLatency(lat[0..count]),
+    };
+}
+
+fn printTable1Row(out: *StdOut, name: []const u8, result: PubSubResult, size: usize) void {
     var pub_buf: [24]u8 = undefined;
     var sub_buf: [24]u8 = undefined;
     var bw_buf: [16]u8 = undefined;
@@ -809,74 +1756,250 @@ fn printTable1Row(name: []const u8, result: PubSubResult, size: usize) void {
     else
         "-";
 
-    std.debug.print(
+    out.print(
         "| {s:<10} | {s:>18} | {s:>18} | {s:>10} | {s:>8} |\n",
         .{ name, pub_str, sub_str, bw_str, lat_str },
     );
 }
 
-fn printTable1RowRust(stats: ?BenchStats) void {
-    var sub_buf: [24]u8 = undefined;
-    var bw_buf: [16]u8 = undefined;
-    var lat_buf: [12]u8 = undefined;
+fn runTable2(
+    allocator: Allocator,
+    opts: BenchOpts,
+    ui: *TerminalUI,
+    all_results: *AllResults,
+    out: *StdOut,
+) !void {
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
+    const num_runs = opts.num_runs;
+    const total = subscribers.len;
 
-    const sub_str = if (stats) |s| fmtRate(&sub_buf, s.msgs_per_sec) else "-";
-    const bw_str = if (stats) |s|
-        std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{s.bandwidth_mb}) catch "-"
-    else
-        "-";
-    const lat_str = if (stats) |s|
-        if (s.latency_us) |lat|
-            std.fmt.bufPrint(&lat_buf, "{d:.2}us", .{lat}) catch "-"
-        else
-            "-"
-    else
-        "-";
+    ui.printHeader("Table 2.1: Subscriber Comparison (Zig std publisher)");
 
-    std.debug.print(
-        "| {s:<10} | {s:>18} | {s:>18} | {s:>10} | {s:>8} |\n",
-        .{ "Rust", "-", sub_str, bw_str, lat_str },
-    );
-}
+    for (subscribers, 0..) |sub_client, si| {
+        var success_count: usize = 0;
+        var last_rate: f64 = 0;
 
-fn runTable2(allocator: Allocator, opts: BenchOpts) !void {
-    // Collect all results first
-    const subscribers = [_]Client{ .zig_iou, .zig, .c, .go };
-    var results: [4]?BenchStats = .{ null, null, null, null };
+        for (0..num_runs) |run| {
+            ui.showRunning(si + 1, total, sub_client.name(), run + 1, num_runs);
 
-    for (subscribers, 0..) |sub_client, i| {
-        std.debug.print("  Testing {s} subscriber...\n", .{sub_client.name()});
-        const result = runPubSub(
-            allocator,
-            .zig_iou,
-            sub_client,
-            opts,
-        ) catch |err| {
-            std.debug.print("    Error: {}\n", .{err});
-            continue;
-        };
-        results[i] = result.sub_stats;
+            const result = runPubSub(allocator, .zig, sub_client, opts) catch |err| {
+                all_results.table2_1[si][run] = .{
+                    .success = false,
+                    .error_msg = @errorName(err),
+                };
+                continue;
+            };
+
+            all_results.table2_1[si][run] = .{
+                .success = true,
+                .sub_stats = result.sub_stats,
+            };
+            all_results.table2_1_counts[si] += 1;
+            success_count += 1;
+
+            if (result.sub_stats) |stats| {
+                last_rate = stats.msgs_per_sec;
+            }
+        }
+
+        if (success_count > 0) {
+            var rates: [MAX_RUNS]f64 = undefined;
+            var rate_count: usize = 0;
+            for (0..num_runs) |run| {
+                if (all_results.table2_1[si][run].sub_stats) |s| {
+                    rates[rate_count] = s.msgs_per_sec;
+                    rate_count += 1;
+                }
+            }
+            const median_rate = if (rate_count > 0)
+                calculateMedian(rates[0..rate_count])
+            else
+                last_rate;
+
+            var rate_buf: [32]u8 = undefined;
+            ui.showSuccess(si + 1, total, sub_client.name(), fmtRate(&rate_buf, median_rate));
+        } else {
+            ui.showFailure(si + 1, total, sub_client.name(), "all runs failed");
+        }
     }
 
-    // Print table
-    std.debug.print("\n## Subscriber Comparison (Zig io_uring publisher)\n\n", .{});
-    std.debug.print(
-        "| {s:<10} | {s:>18} | {s:>10} | {s:>8} |\n",
-        .{ "Subscriber", "Rate", "Bandwidth", "Latency" },
-    );
-    std.debug.print(
-        "|{s:-<12}|{s:->20}|{s:->12}|{s:->10}|\n",
-        .{ "", "", "", "" },
-    );
-
-    for (subscribers, 0..) |sub_client, i| {
-        printTable2Row(sub_client.name(), results[i], opts.size);
-    }
-
-    std.debug.print("\n", .{});
+    printTable2Details(out, "2.1", "Zig std", opts, all_results.table2_1[0..], num_runs);
+    out.flush();
 }
 
-fn printTable2Row(name: []const u8, stats: ?BenchStats, size: usize) void {
+/// Print detailed Table 2 results.
+fn printTable2Details(
+    out: *StdOut,
+    table_num: []const u8,
+    pub_name: []const u8,
+    opts: BenchOpts,
+    results: []const [MAX_RUNS]BenchRun,
+    num_runs: u32,
+) void {
+    _ = out; // Using ui for ANSI output
+
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
+
+    // Convert to old format
+    var old_results: [5][MAX_RUNS]?BenchStats = .{.{null} ** MAX_RUNS} ** 5;
+    for (0..5) |si| {
+        for (0..num_runs) |run| {
+            if (results[si][run].success) {
+                old_results[si][run] = results[si][run].sub_stats;
+            }
+        }
+    }
+
+    var ui = TerminalUI.init();
+
+    // Print all runs table
+    var title_buf: [64]u8 = undefined;
+    const title = std.fmt.bufPrint(&title_buf, "Table {s}: All Runs ({s} publisher)", .{
+        table_num,
+        pub_name,
+    }) catch "Table: All Runs";
+    ui.printHeader(title);
+
+    const col_widths = [_]usize{ 12, 5, 20, 12, 10 };
+    var printer = TablePrinter{ .ui = &ui, .col_widths = &col_widths };
+
+    printer.printTop();
+    printer.printHeaderRow(&.{ "Subscriber", "Run", "Rate", "Bandwidth", "Latency" });
+    printer.printSeparator();
+
+    for (subscribers, 0..) |sub_client, si| {
+        for (0..num_runs) |run| {
+            if (old_results[si][run]) |stats| {
+                var rate_buf: [24]u8 = undefined;
+                var bw_buf: [16]u8 = undefined;
+                var lat_buf: [12]u8 = undefined;
+                var run_buf: [8]u8 = undefined;
+
+                const rate_str = fmtRate(&rate_buf, stats.msgs_per_sec);
+                const bw_str = blk: {
+                    const mb = if (stats.bandwidth_mb > 0) stats.bandwidth_mb else stats.msgs_per_sec * @as(f64, @floatFromInt(opts.size)) / 1_000_000.0;
+                    break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+                };
+                const lat_str = if (stats.latency_us) |lat| std.fmt.bufPrint(&lat_buf, "{d:.2}us", .{lat}) catch "-" else "-";
+                const run_str = std.fmt.bufPrint(&run_buf, "{d}", .{run + 1}) catch "?";
+
+                printer.printRowHighlight(&.{ sub_client.name(), run_str, rate_str, bw_str, lat_str });
+            }
+        }
+        // Separator between clients (not after last)
+        if (si < subscribers.len - 1) {
+            printer.printSeparator();
+        }
+    }
+    printer.printBottom();
+
+    // Print median results table
+    var med_title_buf: [64]u8 = undefined;
+    const med_title = std.fmt.bufPrint(&med_title_buf, "Table {s}: Median Results", .{table_num}) catch
+        "Table: Median Results";
+    ui.printHeader(med_title);
+
+    const med_widths = [_]usize{ 12, 20, 12, 10 };
+    var med_printer = TablePrinter{ .ui = &ui, .col_widths = &med_widths };
+
+    med_printer.printTop();
+    med_printer.printHeaderRow(&.{ "Subscriber", "Rate", "Bandwidth", "Latency" });
+    med_printer.printSeparator();
+
+    for (subscribers, 0..) |sub_client, si| {
+        const median = calcMedianStats(old_results[si][0..num_runs]);
+        if (median) |stats| {
+            var rate_buf: [24]u8 = undefined;
+            var bw_buf: [16]u8 = undefined;
+            var lat_buf: [12]u8 = undefined;
+
+            const rate_str = fmtRate(&rate_buf, stats.msgs_per_sec);
+            const bw_str = blk: {
+                const mb = if (stats.bandwidth_mb > 0) stats.bandwidth_mb else stats.msgs_per_sec * @as(f64, @floatFromInt(opts.size)) / 1_000_000.0;
+                break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+            };
+            const lat_str = if (stats.latency_us) |lat| std.fmt.bufPrint(&lat_buf, "{d:.2}us", .{lat}) catch "-" else "-";
+
+            med_printer.printRowHighlight(&.{ sub_client.name(), rate_str, bw_str, lat_str });
+        } else {
+            med_printer.printRow(&.{ sub_client.name(), "-", "-", "-" });
+        }
+    }
+    med_printer.printBottom();
+}
+
+fn runTable2_2(
+    allocator: Allocator,
+    opts: BenchOpts,
+    ui: *TerminalUI,
+    all_results: *AllResults,
+    out: *StdOut,
+) !void {
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
+    const num_runs = opts.num_runs;
+    const total = subscribers.len;
+
+    ui.printHeader("Table 2.2: Subscriber Comparison (Go publisher)");
+
+    for (subscribers, 0..) |sub_client, si| {
+        var success_count: usize = 0;
+        var last_rate: f64 = 0;
+
+        for (0..num_runs) |run| {
+            ui.showRunning(si + 1, total, sub_client.name(), run + 1, num_runs);
+
+            const result = runPubSub(allocator, .go, sub_client, opts) catch |err| {
+                all_results.table2_2[si][run] = .{
+                    .success = false,
+                    .error_msg = @errorName(err),
+                };
+                continue;
+            };
+
+            all_results.table2_2[si][run] = .{
+                .success = true,
+                .sub_stats = result.sub_stats,
+            };
+            all_results.table2_2_counts[si] += 1;
+            success_count += 1;
+
+            if (result.sub_stats) |stats| {
+                last_rate = stats.msgs_per_sec;
+            }
+        }
+
+        if (success_count > 0) {
+            var rates: [MAX_RUNS]f64 = undefined;
+            var rate_count: usize = 0;
+            for (0..num_runs) |run| {
+                if (all_results.table2_2[si][run].sub_stats) |s| {
+                    rates[rate_count] = s.msgs_per_sec;
+                    rate_count += 1;
+                }
+            }
+            const median_rate = if (rate_count > 0)
+                calculateMedian(rates[0..rate_count])
+            else
+                last_rate;
+
+            var rate_buf: [32]u8 = undefined;
+            ui.showSuccess(si + 1, total, sub_client.name(), fmtRate(&rate_buf, median_rate));
+        } else {
+            ui.showFailure(si + 1, total, sub_client.name(), "all runs failed");
+        }
+    }
+
+    printTable2Details(out, "2.2", "Go", opts, all_results.table2_2[0..], num_runs);
+    out.flush();
+}
+
+fn printTable2RowRun(
+    out: *StdOut,
+    name: []const u8,
+    run: usize,
+    stats: ?BenchStats,
+    size: usize,
+) void {
     var rate_buf: [24]u8 = undefined;
     var bw_buf: [16]u8 = undefined;
     var lat_buf: [12]u8 = undefined;
@@ -897,9 +2020,256 @@ fn printTable2Row(name: []const u8, stats: ?BenchStats, size: usize) void {
     else
         "-";
 
-    std.debug.print(
+    out.print(
+        "| {s:<10} | {d:>3} | {s:>18} | {s:>10} | {s:>8} |\n",
+        .{ name, run, rate_str, bw_str, lat_str },
+    );
+}
+
+fn printTable2Row(out: *StdOut, name: []const u8, stats: ?BenchStats, size: usize) void {
+    var rate_buf: [24]u8 = undefined;
+    var bw_buf: [16]u8 = undefined;
+    var lat_buf: [12]u8 = undefined;
+
+    const rate_str = if (stats) |s| fmtRate(&rate_buf, s.msgs_per_sec) else "-";
+    const bw_str = if (stats) |s| blk: {
+        const mb = if (s.bandwidth_mb > 0)
+            s.bandwidth_mb
+        else
+            s.msgs_per_sec * @as(f64, @floatFromInt(size)) / 1_000_000.0;
+        break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+    } else "-";
+    const lat_str = if (stats) |s|
+        if (s.latency_us) |lat|
+            std.fmt.bufPrint(&lat_buf, "{d:.2}us", .{lat}) catch "-"
+        else
+            "-"
+    else
+        "-";
+
+    out.print(
         "| {s:<10} | {s:>18} | {s:>10} | {s:>8} |\n",
         .{ name, rate_str, bw_str, lat_str },
+    );
+}
+
+fn runTable3(
+    allocator: Allocator,
+    opts: BenchOpts,
+    ui: *TerminalUI,
+    all_results: *AllResults,
+    out: *StdOut,
+) !void {
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
+    const num_runs = opts.num_runs;
+    const total = subscribers.len;
+
+    ui.printHeader("Table 3: Fire Starter (io_uring direct)");
+
+    for (subscribers, 0..) |sub_client, si| {
+        var success_count: usize = 0;
+        var last_rate: f64 = 0;
+
+        for (0..num_runs) |run| {
+            ui.showRunning(si + 1, total, sub_client.name(), run + 1, num_runs);
+
+            const result = runFireStarterTest(allocator, sub_client, opts) catch |err| {
+                all_results.table3[si][run] = .{
+                    .success = false,
+                    .error_msg = @errorName(err),
+                };
+                continue;
+            };
+
+            all_results.table3[si][run] = .{
+                .success = true,
+                .pub_stats = result.pub_stats,
+                .sub_stats = result.sub_stats,
+            };
+            all_results.table3_counts[si] += 1;
+            success_count += 1;
+
+            if (result.sub_stats) |stats| {
+                last_rate = stats.msgs_per_sec;
+            }
+        }
+
+        if (success_count > 0) {
+            var rates: [MAX_RUNS]f64 = undefined;
+            var rate_count: usize = 0;
+            for (0..num_runs) |run| {
+                if (all_results.table3[si][run].sub_stats) |s| {
+                    rates[rate_count] = s.msgs_per_sec;
+                    rate_count += 1;
+                }
+            }
+            const median_rate = if (rate_count > 0)
+                calculateMedian(rates[0..rate_count])
+            else
+                last_rate;
+
+            var rate_buf: [32]u8 = undefined;
+            ui.showSuccess(si + 1, total, sub_client.name(), fmtRate(&rate_buf, median_rate));
+        } else {
+            ui.showFailure(si + 1, total, sub_client.name(), "all runs failed");
+        }
+    }
+
+    printTable3Details(out, opts, all_results);
+    out.flush();
+}
+
+/// Print detailed Table 3 results.
+fn printTable3Details(out: *StdOut, opts: BenchOpts, all_results: *AllResults) void {
+    _ = out; // Using ui for ANSI output
+
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
+    const num_runs = opts.num_runs;
+
+    // Convert to old format
+    var results: [5][MAX_RUNS]?PubSubResult = .{.{null} ** MAX_RUNS} ** 5;
+    for (0..5) |si| {
+        for (0..num_runs) |run| {
+            const r = all_results.table3[si][run];
+            if (r.success) {
+                results[si][run] = .{
+                    .name = subscribers[si].name(),
+                    .pub_stats = r.pub_stats,
+                    .sub_stats = r.sub_stats,
+                };
+            }
+        }
+    }
+
+    var ui = TerminalUI.init();
+
+    // Print all runs table
+    var title_buf: [64]u8 = undefined;
+    const title = std.fmt.bufPrint(&title_buf, "Table 3: All Runs (Fire Starter, {d} runs)", .{num_runs}) catch
+        "Table 3: All Runs";
+    ui.printHeader(title);
+
+    const col_widths = [_]usize{ 12, 5, 20, 20, 12 };
+    var printer = TablePrinter{ .ui = &ui, .col_widths = &col_widths };
+
+    printer.printTop();
+    printer.printHeaderRow(&.{ "Subscriber", "Run", "Fire Starter", "Subscriber", "Bandwidth" });
+    printer.printSeparator();
+
+    for (subscribers, 0..) |sub_client, si| {
+        for (0..num_runs) |run| {
+            if (results[si][run]) |result| {
+                var pub_buf: [24]u8 = undefined;
+                var sub_buf: [24]u8 = undefined;
+                var bw_buf: [16]u8 = undefined;
+                var run_buf: [8]u8 = undefined;
+
+                const pub_str = if (result.pub_stats) |s| fmtRate(&pub_buf, s.msgs_per_sec) else "-";
+                const sub_str = if (result.sub_stats) |s| fmtRate(&sub_buf, s.msgs_per_sec) else "-";
+                const bw_str = if (result.sub_stats) |s| blk: {
+                    const mb = if (s.bandwidth_mb > 0) s.bandwidth_mb else s.msgs_per_sec * @as(f64, @floatFromInt(opts.size)) / 1_000_000.0;
+                    break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+                } else "-";
+                const run_str = std.fmt.bufPrint(&run_buf, "{d}", .{run + 1}) catch "?";
+
+                printer.printRowHighlight(&.{ sub_client.name(), run_str, pub_str, sub_str, bw_str });
+            }
+        }
+        // Separator between clients (not after last)
+        if (si < subscribers.len - 1) {
+            printer.printSeparator();
+        }
+    }
+    printer.printBottom();
+
+    // Print median results table
+    ui.printHeader("Table 3: Median Results");
+
+    const med_widths = [_]usize{ 12, 20, 20, 12 };
+    var med_printer = TablePrinter{ .ui = &ui, .col_widths = &med_widths };
+
+    med_printer.printTop();
+    med_printer.printHeaderRow(&.{ "Subscriber", "Fire Starter", "Subscriber", "Bandwidth" });
+    med_printer.printSeparator();
+
+    for (subscribers, 0..) |sub_client, si| {
+        const median = calcMedianPubSub(results[si][0..num_runs]);
+
+        var pub_buf: [24]u8 = undefined;
+        var sub_buf: [24]u8 = undefined;
+        var bw_buf: [16]u8 = undefined;
+
+        const pub_str = if (median.pub_stats) |s| fmtRate(&pub_buf, s.msgs_per_sec) else "-";
+        const sub_str = if (median.sub_stats) |s| fmtRate(&sub_buf, s.msgs_per_sec) else "-";
+        const bw_str = if (median.sub_stats) |s| blk: {
+            const mb = if (s.bandwidth_mb > 0) s.bandwidth_mb else s.msgs_per_sec * @as(f64, @floatFromInt(opts.size)) / 1_000_000.0;
+            break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+        } else "-";
+
+        med_printer.printRowHighlight(&.{ sub_client.name(), pub_str, sub_str, bw_str });
+    }
+    med_printer.printBottom();
+}
+
+fn printTable3RowRun(
+    out: *StdOut,
+    name: []const u8,
+    run: usize,
+    result: PubSubResult,
+    size: usize,
+) void {
+    var pub_buf: [24]u8 = undefined;
+    var sub_buf: [24]u8 = undefined;
+    var bw_buf: [16]u8 = undefined;
+
+    const pub_str = if (result.pub_stats) |s|
+        fmtRate(&pub_buf, s.msgs_per_sec)
+    else
+        "-";
+    const sub_str = if (result.sub_stats) |s|
+        fmtRate(&sub_buf, s.msgs_per_sec)
+    else
+        "-";
+
+    const bw_str = if (result.sub_stats) |s| blk: {
+        const mb = if (s.bandwidth_mb > 0)
+            s.bandwidth_mb
+        else
+            s.msgs_per_sec * @as(f64, @floatFromInt(size)) / 1_000_000.0;
+        break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+    } else "-";
+
+    out.print(
+        "| {s:<10} | {d:>3} | {s:>18} | {s:>18} | {s:>10} |\n",
+        .{ name, run, pub_str, sub_str, bw_str },
+    );
+}
+
+fn printTable3Row(out: *StdOut, name: []const u8, result: PubSubResult, size: usize) void {
+    var pub_buf: [24]u8 = undefined;
+    var sub_buf: [24]u8 = undefined;
+    var bw_buf: [16]u8 = undefined;
+
+    const pub_str = if (result.pub_stats) |s|
+        fmtRate(&pub_buf, s.msgs_per_sec)
+    else
+        "-";
+    const sub_str = if (result.sub_stats) |s|
+        fmtRate(&sub_buf, s.msgs_per_sec)
+    else
+        "-";
+
+    const bw_str = if (result.sub_stats) |s| blk: {
+        const mb = if (s.bandwidth_mb > 0)
+            s.bandwidth_mb
+        else
+            s.msgs_per_sec * @as(f64, @floatFromInt(size)) / 1_000_000.0;
+        break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+    } else "-";
+
+    out.print(
+        "| {s:<10} | {s:>18} | {s:>18} | {s:>10} |\n",
+        .{ name, pub_str, sub_str, bw_str },
     );
 }
 
@@ -920,6 +2290,298 @@ fn fmtRate(buf: []u8, rate: f64) []const u8 {
     } else {
         return std.fmt.bufPrint(buf, "{d} msg/s", .{r}) catch "-";
     }
+}
+
+/// Calculate median of a slice of f64 values.
+fn calculateMedian(values: []f64) f64 {
+    assert(values.len > 0);
+    if (values.len == 1) return values[0];
+
+    // Sort the values
+    std.mem.sort(f64, values, {}, std.sort.asc(f64));
+
+    const mid = values.len / 2;
+    if (values.len % 2 == 0) {
+        return (values[mid - 1] + values[mid]) / 2.0;
+    } else {
+        return values[mid];
+    }
+}
+
+/// Calculate median of optional latency values (ignores nulls).
+fn calculateMedianLatency(values: []?f64) ?f64 {
+    var valid: [MAX_RUNS]f64 = undefined;
+    var count: usize = 0;
+    for (values) |v| {
+        if (v) |lat| {
+            valid[count] = lat;
+            count += 1;
+        }
+    }
+    if (count == 0) return null;
+    return calculateMedian(valid[0..count]);
+}
+
+/// Generate markdown report file with all benchmark results.
+fn generateMarkdown(
+    opts: BenchOpts,
+    all_results: *AllResults,
+    filename: []const u8,
+) !void {
+    assert(filename.len > 0);
+
+    const file = try std.fs.cwd().createFile(filename, .{});
+    defer file.close();
+
+    var write_buf: [8192]u8 = undefined;
+    var file_writer = file.writer(&write_buf);
+    const writer = &file_writer.interface;
+
+    // Header with metadata
+    try writer.print("# NATS Performance Benchmark Results\n\n", .{});
+
+    // Date/time using Instant
+    if (std.time.Instant.now()) |instant| {
+        const epoch_secs: u64 = @intCast(instant.timestamp.sec);
+        const epoch = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
+        const day_secs = epoch.getDaySeconds();
+        const year_day = epoch.getEpochDay().calculateYearDay();
+        const month_day = year_day.calculateMonthDay();
+
+        try writer.print("**Date:** {d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}\n", .{
+            year_day.year,
+            @intFromEnum(month_day.month),
+            month_day.day_index + 1,
+            day_secs.getHoursIntoDay(),
+            day_secs.getMinutesIntoHour(),
+            day_secs.getSecondsIntoMinute(),
+        });
+    } else |_| {
+        try writer.print("**Date:** (unavailable)\n", .{});
+    }
+
+    // System info
+    const uname = std.posix.uname();
+    try writer.print("**System:** {s} {s}\n", .{
+        @as([*:0]const u8, &uname.sysname),
+        @as([*:0]const u8, &uname.release),
+    });
+
+    try writer.print("**Messages:** {d}\n", .{opts.num_msgs});
+    try writer.print("**Payload:** {d} bytes\n", .{opts.size});
+    try writer.print("**Runs:** {d}\n\n", .{opts.num_runs});
+
+    // Table 1: Self Pub/Sub
+    try writeTable1Markdown(writer, opts, all_results);
+
+    // Table 2.1: Zig std publisher
+    try writeTable2Markdown(writer, "2.1", "Zig std", opts, all_results.table2_1[0..]);
+
+    // Table 2.2: Go publisher
+    try writeTable2Markdown(writer, "2.2", "Go", opts, all_results.table2_2[0..]);
+
+    // Table 3: Fire starter
+    try writeTable3Markdown(writer, opts, all_results);
+
+    try writer.print("---\n\nGenerated by `zig build run-perf-bench`\n", .{});
+
+    // Flush buffered data to file
+    try writer.flush();
+}
+
+fn writeTable1Markdown(
+    writer: anytype,
+    opts: BenchOpts,
+    all_results: *AllResults,
+) !void {
+    const clients = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
+    const num_runs = opts.num_runs;
+
+    try writer.print("## Table 1: Self Pub/Sub (Median Results)\n\n", .{});
+    try writer.print(
+        "| Client     | Publisher       | Subscriber      | Bandwidth  | Latency  |\n",
+        .{},
+    );
+    try writer.print(
+        "|------------|-----------------|-----------------|------------|----------|\n",
+        .{},
+    );
+
+    for (clients, 0..) |client, ci| {
+        // Calculate median
+        var pub_rates: [MAX_RUNS]f64 = undefined;
+        var sub_rates: [MAX_RUNS]f64 = undefined;
+        var sub_bw: [MAX_RUNS]f64 = undefined;
+        var pub_count: usize = 0;
+        var sub_count: usize = 0;
+
+        for (0..num_runs) |run| {
+            const r = all_results.table1[ci][run];
+            if (r.success) {
+                if (r.pub_stats) |ps| {
+                    pub_rates[pub_count] = ps.msgs_per_sec;
+                    pub_count += 1;
+                }
+                if (r.sub_stats) |ss| {
+                    sub_rates[sub_count] = ss.msgs_per_sec;
+                    sub_bw[sub_count] = ss.bandwidth_mb;
+                    sub_count += 1;
+                }
+            }
+        }
+
+        var pub_buf: [24]u8 = undefined;
+        var sub_buf: [24]u8 = undefined;
+        var bw_buf: [16]u8 = undefined;
+
+        const pub_str = if (pub_count > 0)
+            fmtRate(&pub_buf, calculateMedian(pub_rates[0..pub_count]))
+        else
+            "-";
+        const sub_str = if (sub_count > 0)
+            fmtRate(&sub_buf, calculateMedian(sub_rates[0..sub_count]))
+        else
+            "-";
+        const bw_str = if (sub_count > 0) blk: {
+            const mb = calculateMedian(sub_bw[0..sub_count]);
+            break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+        } else "-";
+
+        try writer.print("| {s:<10} | {s:>15} | {s:>15} | {s:>10} | -        |\n", .{
+            client.name(),
+            pub_str,
+            sub_str,
+            bw_str,
+        });
+    }
+    try writer.print("\n", .{});
+}
+
+fn writeTable2Markdown(
+    writer: anytype,
+    table_num: []const u8,
+    pub_name: []const u8,
+    opts: BenchOpts,
+    results: []const [MAX_RUNS]BenchRun,
+) !void {
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
+    const num_runs = opts.num_runs;
+
+    try writer.print("## Table {s}: Subscriber Comparison ({s} publisher)\n\n", .{
+        table_num,
+        pub_name,
+    });
+    try writer.print(
+        "| Subscriber | Rate            | Bandwidth  | Latency  |\n",
+        .{},
+    );
+    try writer.print(
+        "|------------|-----------------|------------|----------|\n",
+        .{},
+    );
+
+    for (subscribers, 0..) |sub, si| {
+        var rates: [MAX_RUNS]f64 = undefined;
+        var bw: [MAX_RUNS]f64 = undefined;
+        var count: usize = 0;
+
+        for (0..num_runs) |run| {
+            const r = results[si][run];
+            if (r.success) {
+                if (r.sub_stats) |ss| {
+                    rates[count] = ss.msgs_per_sec;
+                    bw[count] = ss.bandwidth_mb;
+                    count += 1;
+                }
+            }
+        }
+
+        var rate_buf: [24]u8 = undefined;
+        var bw_buf: [16]u8 = undefined;
+
+        const rate_str = if (count > 0)
+            fmtRate(&rate_buf, calculateMedian(rates[0..count]))
+        else
+            "-";
+        const bw_str = if (count > 0) blk: {
+            const mb = calculateMedian(bw[0..count]);
+            break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+        } else "-";
+
+        try writer.print("| {s:<10} | {s:>15} | {s:>10} | -        |\n", .{
+            sub.name(),
+            rate_str,
+            bw_str,
+        });
+    }
+    try writer.print("\n", .{});
+}
+
+fn writeTable3Markdown(
+    writer: anytype,
+    opts: BenchOpts,
+    all_results: *AllResults,
+) !void {
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
+    const num_runs = opts.num_runs;
+
+    try writer.print("## Table 3: Fire Starter (io_uring direct)\n\n", .{});
+    try writer.print(
+        "| Subscriber | Fire Starter    | Subscriber      | Bandwidth  |\n",
+        .{},
+    );
+    try writer.print(
+        "|------------|-----------------|-----------------|------------|\n",
+        .{},
+    );
+
+    for (subscribers, 0..) |sub, si| {
+        var pub_rates: [MAX_RUNS]f64 = undefined;
+        var sub_rates: [MAX_RUNS]f64 = undefined;
+        var sub_bw: [MAX_RUNS]f64 = undefined;
+        var pub_count: usize = 0;
+        var sub_count: usize = 0;
+
+        for (0..num_runs) |run| {
+            const r = all_results.table3[si][run];
+            if (r.success) {
+                if (r.pub_stats) |ps| {
+                    pub_rates[pub_count] = ps.msgs_per_sec;
+                    pub_count += 1;
+                }
+                if (r.sub_stats) |ss| {
+                    sub_rates[sub_count] = ss.msgs_per_sec;
+                    sub_bw[sub_count] = ss.bandwidth_mb;
+                    sub_count += 1;
+                }
+            }
+        }
+
+        var pub_buf: [24]u8 = undefined;
+        var sub_buf: [24]u8 = undefined;
+        var bw_buf: [16]u8 = undefined;
+
+        const pub_str = if (pub_count > 0)
+            fmtRate(&pub_buf, calculateMedian(pub_rates[0..pub_count]))
+        else
+            "-";
+        const sub_str = if (sub_count > 0)
+            fmtRate(&sub_buf, calculateMedian(sub_rates[0..sub_count]))
+        else
+            "-";
+        const bw_str = if (sub_count > 0) blk: {
+            const mb = calculateMedian(sub_bw[0..sub_count]);
+            break :blk std.fmt.bufPrint(&bw_buf, "{d:.0} MB/s", .{mb}) catch "-";
+        } else "-";
+
+        try writer.print("| {s:<10} | {s:>15} | {s:>15} | {s:>10} |\n", .{
+            sub.name(),
+            pub_str,
+            sub_str,
+            bw_str,
+        });
+    }
+    try writer.print("\n", .{});
 }
 
 // ============================================================================
@@ -946,6 +2608,21 @@ test "parseZigIouOutput" {
     try std.testing.expectApproxEqAbs(@as(f64, 56.25), stats.bandwidth_mb, 0.01);
 }
 
+test "parseFireStarterOutput" {
+    const output =
+        \\=== Fire Starter Statistics ===
+        \\Messages:     1000000
+        \\Total Bytes:  40000000
+        \\Duration:     227.326 ms (227325966 ns)
+        \\Throughput:   4398969.54 msg/s
+        \\Bandwidth:    167.81 MB/s
+        \\============================
+    ;
+    const stats = parseFireStarterOutput(output) orelse unreachable;
+    try std.testing.expectApproxEqAbs(@as(f64, 4398969.54), stats.msgs_per_sec, 1);
+    try std.testing.expectApproxEqAbs(@as(f64, 167.81), stats.bandwidth_mb, 0.01);
+}
+
 test "parseCOutput" {
     const output = "Received 100000 messages (3711494 msgs/sec)";
     const stats = parseCOutput(output) orelse unreachable;
@@ -953,16 +2630,17 @@ test "parseCOutput" {
 }
 
 test "parseRustOutput" {
-    // Rust output format from nats_bench (frequency and mbps on same line)
+    // Rust bench_pub/bench_sub output format
     const output =
-        \\duration: 5.354435ms frequency: 2500000 mbps: 40
-        \\publish latency breakdown in nanoseconds:
-        \\    50th percentile: 850
+        \\Results:
+        \\  Duration:   33.529854ms
+        \\  Messages:   100000
+        \\  Msg/sec:    2982417
+        \\  Throughput: 47.72 MB/s
     ;
     const stats = parseRustOutput(output) orelse unreachable;
-    try std.testing.expectApproxEqAbs(@as(f64, 2500000), stats.msgs_per_sec, 1);
-    try std.testing.expectApproxEqAbs(@as(f64, 40), stats.bandwidth_mb, 1);
-    try std.testing.expectApproxEqAbs(@as(f64, 0.85), stats.latency_us.?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f64, 2982417), stats.msgs_per_sec, 1);
+    try std.testing.expectApproxEqAbs(@as(f64, 47.72), stats.bandwidth_mb, 0.01);
 }
 
 test "parseGoOutput" {
@@ -977,7 +2655,7 @@ test "parseGoOutput" {
 test "buildExeArgs zig pub" {
     var payload: [64]u8 = undefined;
     var ab = ArgBuffer{};
-    buildExeArgs(&ab, .zig, .pub_, .{}, &payload);
+    buildExeArgs(&ab, .zig, .publisher, .{}, &payload);
     try std.testing.expectEqual(@as(usize, 4), ab.count);
     try std.testing.expectEqualStrings("./zig-out/bin/bench-pub", ab.args[0]);
 }
@@ -985,7 +2663,7 @@ test "buildExeArgs zig pub" {
 test "buildExeArgs go sub" {
     var payload: [64]u8 = undefined;
     var ab = ArgBuffer{};
-    buildExeArgs(&ab, .go, .sub, .{}, &payload);
+    buildExeArgs(&ab, .go, .subscriber, .{}, &payload);
     try std.testing.expectEqual(@as(usize, 7), ab.count);
     try std.testing.expectEqualStrings("nats", ab.args[0]);
     try std.testing.expectEqualStrings("bench", ab.args[1]);
@@ -995,7 +2673,7 @@ test "buildExeArgs go sub" {
 test "buildExeArgs c pub generates payload" {
     var payload: [64]u8 = undefined;
     var ab = ArgBuffer{};
-    buildExeArgs(&ab, .c, .pub_, .{ .size = 16 }, &payload);
+    buildExeArgs(&ab, .c, .publisher, .{ .size = 16 }, &payload);
     // Should have payload argument
     var found_txt = false;
     for (ab.args[0..ab.count], 0..) |arg, i| {
