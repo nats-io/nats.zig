@@ -14,14 +14,14 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create I/O system
-    var threaded = std.Io.Threaded.init(allocator);
+    // Create I/O system (Andrew Kelley pattern: type annotation + .init)
+    var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
     std.debug.print("Connecting to NATS...\n", .{});
 
-    // Connect to NATS (pass io to client)
+    // Connect to NATS
     const url = "nats://localhost:4222";
     const client = nats.Client.connect(allocator, io, url, .{
         .name = "zig-pubsub-example",
@@ -29,7 +29,7 @@ pub fn main() !void {
         std.debug.print("Connection failed: {}\n", .{err});
         return err;
     };
-    defer client.deinit(allocator, io);
+    defer client.deinit(allocator);
 
     std.debug.print("Connected!\n", .{});
 

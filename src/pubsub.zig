@@ -12,7 +12,6 @@ pub const subscription = @import("pubsub/subscription.zig");
 // Re-export subscription types
 pub const Message = subscription.Message;
 pub const ReceiveOptions = subscription.ReceiveOptions;
-pub const MessageQueue = subscription.MessageQueue;
 pub const SubscriptionState = subscription.State;
 
 // Comptime generic subscription - instantiate with client type

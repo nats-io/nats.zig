@@ -132,29 +132,6 @@ pub fn build(b: *std.Build) void {
     run_bench_sub.dependOn(&bench_sub_cmd.step);
     bench_sub_cmd.step.dependOn(b.getInstallStep());
 
-    // Performance test orchestrator
-    const perf_test_exe = b.addExecutable(.{
-        .name = "perf-test",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/testing/performance_tests.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "nats", .module = nats },
-            },
-        }),
-    });
-    b.installArtifact(perf_test_exe);
-
-    const run_perf_test = b.step(
-        "run-perf-test",
-        "Run performance comparison tests",
-    );
-    const perf_test_cmd = b.addRunArtifact(perf_test_exe);
-    if (b.args) |args| perf_test_cmd.addArgs(args);
-    run_perf_test.dependOn(&perf_test_cmd.step);
-    perf_test_cmd.step.dependOn(b.getInstallStep());
-
     // Performance benchmark orchestrator (multi-client comparison)
     const perf_bench_exe = b.addExecutable(.{
         .name = "perf-bench",

@@ -12,7 +12,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const File = std.fs.File;
+const File = std.Io.File;
 const Io = std.Io;
 
 pub const TMOUT = 5_000_000_000;
@@ -22,10 +22,12 @@ pub const MAX_RUNS = 32;
 const StdOut = struct {
     buffer: [4096]u8 = undefined,
     file_writer: File.Writer = undefined,
+    io: Io = undefined,
 
     /// Initialize buffered stdout.
-    pub fn init(self: *StdOut) void {
-        self.file_writer = File.stdout().writer(&self.buffer);
+    pub fn init(self: *StdOut, io: Io) void {
+        self.io = io;
+        self.file_writer = File.stdout().writer(io, &self.buffer);
     }
 
     /// Print formatted output.
@@ -45,21 +47,11 @@ const StdOut = struct {
 const TerminalUI = struct {
     is_tty: bool,
     stderr: File,
+    io: Io,
     spinner_idx: u8 = 0,
 
-    /// Braille spinner characters for smooth animation.
-    const SPINNER = [_][]const u8{
-        "\xe2\xa0\x8b", // ⠋
-        "\xe2\xa0\x99", // ⠙
-        "\xe2\xa0\xb9", // ⠹
-        "\xe2\xa0\xb8", // ⠸
-        "\xe2\xa0\xbc", // ⠼
-        "\xe2\xa0\xb4", // ⠴
-        "\xe2\xa0\xa6", // ⠦
-        "\xe2\xa0\xa7", // ⠧
-        "\xe2\xa0\x87", // ⠇
-        "\xe2\xa0\x8f", // ⠏
-    };
+    /// ASCII spinner characters for progress animation.
+    const SPINNER = [_][]const u8{ "|", "/", "-", "\\" };
 
     // ANSI escape codes - control
     const ESC_CLEAR_LINE = "\x1b[2K";
@@ -94,25 +86,26 @@ const TerminalUI = struct {
     const BOX_X = "\xe2\x94\xbc"; // ┼ cross
 
     /// Initialize the terminal UI.
-    pub fn init() TerminalUI {
-        const stderr = std.fs.File.stderr();
+    pub fn init(io: Io) TerminalUI {
+        const stderr = File.stderr();
         return .{
-            .is_tty = stderr.isTty(),
+            .is_tty = stderr.isTty(io) catch false,
             .stderr = stderr,
+            .io = io,
         };
     }
 
     /// Clear current line and move cursor to column 1.
     pub fn clearLine(self: *TerminalUI) void {
         if (!self.is_tty) return;
-        self.stderr.writeAll(ESC_CLEAR_LINE ++ ESC_CURSOR_COL1) catch {};
+        self.stderr.writeStreamingAll(self.io, ESC_CLEAR_LINE ++ ESC_CURSOR_COL1) catch {};
     }
 
     /// Write text with specified color (no-op if not TTY).
     fn writeColor(self: *TerminalUI, color: []const u8, text: []const u8) void {
-        if (self.is_tty) self.stderr.writeAll(color) catch {};
-        self.stderr.writeAll(text) catch {};
-        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, color) catch {};
+        self.stderr.writeStreamingAll(self.io, text) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_RESET) catch {};
     }
 
     /// Write colored text (green for success).
@@ -162,7 +155,7 @@ const TerminalUI = struct {
         var pad_buf: [12]u8 = undefined;
         const pad_len = if (name.len < 10) 10 - name.len else 0;
         @memset(pad_buf[0..pad_len], ' ');
-        self.stderr.writeAll(pad_buf[0..pad_len]) catch {};
+        self.stderr.writeStreamingAll(self.io, pad_buf[0..pad_len]) catch {};
 
         // Run X/Y in dark gray
         var run_buf: [16]u8 = undefined;
@@ -178,7 +171,7 @@ const TerminalUI = struct {
         // "Running..." in light slate
         self.writeColor(ESC_RUNNING, " Running...");
 
-        self.stderr.writeAll("\r") catch {};
+        self.stderr.writeStreamingAll(self.io, "\r") catch {};
     }
 
     /// Show success: "[1/5] Client  [OK]  rate"
@@ -209,17 +202,17 @@ const TerminalUI = struct {
         var pad_buf: [12]u8 = undefined;
         const pad_len = if (name.len < 10) 10 - name.len else 0;
         @memset(pad_buf[0..pad_len], ' ');
-        self.stderr.writeAll(pad_buf[0..pad_len]) catch {};
+        self.stderr.writeStreamingAll(self.io, pad_buf[0..pad_len]) catch {};
 
         // [OK] in soft green
         self.writeColor(ESC_OK, " [OK]");
 
-        self.stderr.writeAll("  ") catch {};
+        self.stderr.writeStreamingAll(self.io, "  ") catch {};
 
         // Rate in bright sky, extract number vs unit
         self.writeColor(ESC_RATE, rate_str);
 
-        self.stderr.writeAll("\n") catch {};
+        self.stderr.writeStreamingAll(self.io, "\n") catch {};
     }
 
     /// Show failure: "[1/5] Client  [FAIL] reason"
@@ -250,82 +243,82 @@ const TerminalUI = struct {
         var pad_buf: [12]u8 = undefined;
         const pad_len = if (name.len < 10) 10 - name.len else 0;
         @memset(pad_buf[0..pad_len], ' ');
-        self.stderr.writeAll(pad_buf[0..pad_len]) catch {};
+        self.stderr.writeStreamingAll(self.io, pad_buf[0..pad_len]) catch {};
 
         // [FAIL] in soft red
         self.writeColor(ESC_FAIL, " [FAIL]");
 
-        self.stderr.writeAll(" ") catch {};
+        self.stderr.writeStreamingAll(self.io, " ") catch {};
         self.writeColor(ESC_RUN, reason);
-        self.stderr.writeAll("\n") catch {};
+        self.stderr.writeStreamingAll(self.io, "\n") catch {};
     }
 
     /// Print a section header in slate blue.
     pub fn printHeader(self: *TerminalUI, title: []const u8) void {
-        self.stderr.writeAll("\n") catch {};
+        self.stderr.writeStreamingAll(self.io, "\n") catch {};
         self.writeColor(ESC_HEADER, title);
-        self.stderr.writeAll("\n") catch {};
+        self.stderr.writeStreamingAll(self.io, "\n") catch {};
     }
 
     /// Print plain text.
     pub fn print(self: *TerminalUI, text: []const u8) void {
-        self.stderr.writeAll(text) catch {};
+        self.stderr.writeStreamingAll(self.io, text) catch {};
     }
 
     /// Print a horizontal line of specified width.
     pub fn printHLine(self: *TerminalUI, width: usize) void {
-        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_BORDER) catch {};
         for (0..width) |_| {
-            self.stderr.writeAll(BOX_H) catch {};
+            self.stderr.writeStreamingAll(self.io, BOX_H) catch {};
         }
-        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_RESET) catch {};
     }
 
     /// Print top border: ┌────────────────────┐
     pub fn printBoxTop(self: *TerminalUI, width: usize) void {
-        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
-        self.stderr.writeAll(BOX_TL) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_BORDER) catch {};
+        self.stderr.writeStreamingAll(self.io, BOX_TL) catch {};
         for (0..width - 2) |_| {
-            self.stderr.writeAll(BOX_H) catch {};
+            self.stderr.writeStreamingAll(self.io, BOX_H) catch {};
         }
-        self.stderr.writeAll(BOX_TR) catch {};
-        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
-        self.stderr.writeAll("\n") catch {};
+        self.stderr.writeStreamingAll(self.io, BOX_TR) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_RESET) catch {};
+        self.stderr.writeStreamingAll(self.io, "\n") catch {};
     }
 
     /// Print bottom border: └────────────────────┘
     pub fn printBoxBottom(self: *TerminalUI, width: usize) void {
-        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
-        self.stderr.writeAll(BOX_BL) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_BORDER) catch {};
+        self.stderr.writeStreamingAll(self.io, BOX_BL) catch {};
         for (0..width - 2) |_| {
-            self.stderr.writeAll(BOX_H) catch {};
+            self.stderr.writeStreamingAll(self.io, BOX_H) catch {};
         }
-        self.stderr.writeAll(BOX_BR) catch {};
-        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
-        self.stderr.writeAll("\n") catch {};
+        self.stderr.writeStreamingAll(self.io, BOX_BR) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_RESET) catch {};
+        self.stderr.writeStreamingAll(self.io, "\n") catch {};
     }
 
     /// Print a boxed line: │ text                    │
     pub fn printBoxLine(self: *TerminalUI, width: usize, text: []const u8) void {
-        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
-        self.stderr.writeAll(BOX_V) catch {};
-        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
-        self.stderr.writeAll(" ") catch {};
-        self.stderr.writeAll(text) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_BORDER) catch {};
+        self.stderr.writeStreamingAll(self.io, BOX_V) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_RESET) catch {};
+        self.stderr.writeStreamingAll(self.io, " ") catch {};
+        self.stderr.writeStreamingAll(self.io, text) catch {};
 
         // Calculate padding needed
         const text_len = text.len;
         const content_width = width - 4; // minus │ and spaces
         if (text_len < content_width) {
             for (0..content_width - text_len) |_| {
-                self.stderr.writeAll(" ") catch {};
+                self.stderr.writeStreamingAll(self.io, " ") catch {};
             }
         }
-        self.stderr.writeAll(" ") catch {};
-        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
-        self.stderr.writeAll(BOX_V) catch {};
-        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
-        self.stderr.writeAll("\n") catch {};
+        self.stderr.writeStreamingAll(self.io, " ") catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_BORDER) catch {};
+        self.stderr.writeStreamingAll(self.io, BOX_V) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_RESET) catch {};
+        self.stderr.writeStreamingAll(self.io, "\n") catch {};
     }
 
     /// Print a boxed line with colored text.
@@ -335,10 +328,10 @@ const TerminalUI = struct {
         color: []const u8,
         text: []const u8,
     ) void {
-        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
-        self.stderr.writeAll(BOX_V) catch {};
-        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
-        self.stderr.writeAll(" ") catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_BORDER) catch {};
+        self.stderr.writeStreamingAll(self.io, BOX_V) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_RESET) catch {};
+        self.stderr.writeStreamingAll(self.io, " ") catch {};
         self.writeColor(color, text);
 
         // Calculate padding needed
@@ -346,14 +339,14 @@ const TerminalUI = struct {
         const content_width = width - 4;
         if (text_len < content_width) {
             for (0..content_width - text_len) |_| {
-                self.stderr.writeAll(" ") catch {};
+                self.stderr.writeStreamingAll(self.io, " ") catch {};
             }
         }
-        self.stderr.writeAll(" ") catch {};
-        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
-        self.stderr.writeAll(BOX_V) catch {};
-        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
-        self.stderr.writeAll("\n") catch {};
+        self.stderr.writeStreamingAll(self.io, " ") catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_BORDER) catch {};
+        self.stderr.writeStreamingAll(self.io, BOX_V) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_RESET) catch {};
+        self.stderr.writeStreamingAll(self.io, "\n") catch {};
     }
 
     /// Segment for multi-colored box line.
@@ -365,10 +358,10 @@ const TerminalUI = struct {
         width: usize,
         segments: []const Segment,
     ) void {
-        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
-        self.stderr.writeAll(BOX_V) catch {};
-        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
-        self.stderr.writeAll(" ") catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_BORDER) catch {};
+        self.stderr.writeStreamingAll(self.io, BOX_V) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_RESET) catch {};
+        self.stderr.writeStreamingAll(self.io, " ") catch {};
 
         var text_len: usize = 0;
         for (segments) |seg| {
@@ -380,14 +373,14 @@ const TerminalUI = struct {
         const content_width = width - 4;
         if (text_len < content_width) {
             for (0..content_width - text_len) |_| {
-                self.stderr.writeAll(" ") catch {};
+                self.stderr.writeStreamingAll(self.io, " ") catch {};
             }
         }
-        self.stderr.writeAll(" ") catch {};
-        if (self.is_tty) self.stderr.writeAll(ESC_BORDER) catch {};
-        self.stderr.writeAll(BOX_V) catch {};
-        if (self.is_tty) self.stderr.writeAll(ESC_RESET) catch {};
-        self.stderr.writeAll("\n") catch {};
+        self.stderr.writeStreamingAll(self.io, " ") catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_BORDER) catch {};
+        self.stderr.writeStreamingAll(self.io, BOX_V) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_RESET) catch {};
+        self.stderr.writeStreamingAll(self.io, "\n") catch {};
     }
 };
 
@@ -399,63 +392,63 @@ const TablePrinter = struct {
 
     /// Helper: set border color
     fn borderOn(self: *TablePrinter) void {
-        if (self.ui.is_tty) self.ui.stderr.writeAll(TerminalUI.ESC_BORDER) catch {};
+        if (self.ui.is_tty) self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.ESC_BORDER) catch {};
     }
 
     /// Helper: reset color
     fn colorOff(self: *TablePrinter) void {
-        if (self.ui.is_tty) self.ui.stderr.writeAll(TerminalUI.ESC_RESET) catch {};
+        if (self.ui.is_tty) self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.ESC_RESET) catch {};
     }
 
     /// Print top border: ┌───────┬───────┬───────┐
     pub fn printTop(self: *TablePrinter) void {
         self.borderOn();
-        self.ui.stderr.writeAll(TerminalUI.BOX_TL) catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_TL) catch {};
         for (self.col_widths, 0..) |w, i| {
             for (0..w) |_| {
-                self.ui.stderr.writeAll(TerminalUI.BOX_H) catch {};
+                self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_H) catch {};
             }
             if (i < self.col_widths.len - 1) {
-                self.ui.stderr.writeAll(TerminalUI.BOX_TT) catch {};
+                self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_TT) catch {};
             }
         }
-        self.ui.stderr.writeAll(TerminalUI.BOX_TR) catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_TR) catch {};
         self.colorOff();
-        self.ui.stderr.writeAll("\n") catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, "\n") catch {};
     }
 
     /// Print separator: ├───────┼───────┼───────┤
     pub fn printSeparator(self: *TablePrinter) void {
         self.borderOn();
-        self.ui.stderr.writeAll(TerminalUI.BOX_LT) catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_LT) catch {};
         for (self.col_widths, 0..) |w, i| {
             for (0..w) |_| {
-                self.ui.stderr.writeAll(TerminalUI.BOX_H) catch {};
+                self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_H) catch {};
             }
             if (i < self.col_widths.len - 1) {
-                self.ui.stderr.writeAll(TerminalUI.BOX_X) catch {};
+                self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_X) catch {};
             }
         }
-        self.ui.stderr.writeAll(TerminalUI.BOX_RT) catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_RT) catch {};
         self.colorOff();
-        self.ui.stderr.writeAll("\n") catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, "\n") catch {};
     }
 
     /// Print bottom border: └───────┴───────┴───────┘
     pub fn printBottom(self: *TablePrinter) void {
         self.borderOn();
-        self.ui.stderr.writeAll(TerminalUI.BOX_BL) catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_BL) catch {};
         for (self.col_widths, 0..) |w, i| {
             for (0..w) |_| {
-                self.ui.stderr.writeAll(TerminalUI.BOX_H) catch {};
+                self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_H) catch {};
             }
             if (i < self.col_widths.len - 1) {
-                self.ui.stderr.writeAll(TerminalUI.BOX_BT) catch {};
+                self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_BT) catch {};
             }
         }
-        self.ui.stderr.writeAll(TerminalUI.BOX_BR) catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_BR) catch {};
         self.colorOff();
-        self.ui.stderr.writeAll("\n") catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, "\n") catch {};
     }
 
     /// Print header row with colored text.
@@ -463,22 +456,22 @@ const TablePrinter = struct {
         assert(headers.len == self.col_widths.len);
 
         self.borderOn();
-        self.ui.stderr.writeAll(TerminalUI.BOX_V) catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_V) catch {};
         self.colorOff();
         for (headers, 0..) |header, i| {
-            self.ui.stderr.writeAll(" ") catch {};
+            self.ui.stderr.writeStreamingAll(self.ui.io, " ") catch {};
             self.ui.writeColor(TerminalUI.ESC_HEADER, header);
 
             // Pad to column width
             const pad = self.col_widths[i] - header.len - 1;
             for (0..pad) |_| {
-                self.ui.stderr.writeAll(" ") catch {};
+                self.ui.stderr.writeStreamingAll(self.ui.io, " ") catch {};
             }
             self.borderOn();
-            self.ui.stderr.writeAll(TerminalUI.BOX_V) catch {};
+            self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_V) catch {};
             self.colorOff();
         }
-        self.ui.stderr.writeAll("\n") catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, "\n") catch {};
     }
 
     /// Print a data row.
@@ -486,11 +479,11 @@ const TablePrinter = struct {
         assert(cells.len == self.col_widths.len);
 
         self.borderOn();
-        self.ui.stderr.writeAll(TerminalUI.BOX_V) catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_V) catch {};
         self.colorOff();
         for (cells, 0..) |cell, i| {
-            self.ui.stderr.writeAll(" ") catch {};
-            self.ui.stderr.writeAll(cell) catch {};
+            self.ui.stderr.writeStreamingAll(self.ui.io, " ") catch {};
+            self.ui.stderr.writeStreamingAll(self.ui.io, cell) catch {};
 
             // Pad to column width
             const cell_len = cell.len;
@@ -499,13 +492,13 @@ const TablePrinter = struct {
             else
                 0;
             for (0..pad) |_| {
-                self.ui.stderr.writeAll(" ") catch {};
+                self.ui.stderr.writeStreamingAll(self.ui.io, " ") catch {};
             }
             self.borderOn();
-            self.ui.stderr.writeAll(TerminalUI.BOX_V) catch {};
+            self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_V) catch {};
             self.colorOff();
         }
-        self.ui.stderr.writeAll("\n") catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, "\n") catch {};
     }
 
     /// Print a data row with first cell colored (for client name).
@@ -513,10 +506,10 @@ const TablePrinter = struct {
         assert(cells.len == self.col_widths.len);
 
         self.borderOn();
-        self.ui.stderr.writeAll(TerminalUI.BOX_V) catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_V) catch {};
         self.colorOff();
         for (cells, 0..) |cell, i| {
-            self.ui.stderr.writeAll(" ") catch {};
+            self.ui.stderr.writeStreamingAll(self.ui.io, " ") catch {};
             if (i == 0) {
                 self.ui.writeColor(TerminalUI.ESC_BOLD, cell);
             } else {
@@ -530,13 +523,13 @@ const TablePrinter = struct {
             else
                 0;
             for (0..pad) |_| {
-                self.ui.stderr.writeAll(" ") catch {};
+                self.ui.stderr.writeStreamingAll(self.ui.io, " ") catch {};
             }
             self.borderOn();
-            self.ui.stderr.writeAll(TerminalUI.BOX_V) catch {};
+            self.ui.stderr.writeStreamingAll(self.ui.io, TerminalUI.BOX_V) catch {};
             self.colorOff();
         }
-        self.ui.stderr.writeAll("\n") catch {};
+        self.ui.stderr.writeStreamingAll(self.ui.io, "\n") catch {};
     }
 };
 
@@ -765,6 +758,7 @@ fn suppressOtherPipe(client: Client) bool {
 /// Spawn a benchmark process.
 pub fn runExe(
     allocator: Allocator,
+    io: Io,
     client: Client,
     role: Role,
     opts: BenchOpts,
@@ -788,7 +782,7 @@ pub fn runExe(
         child.stderr_behavior = if (suppress) .Ignore else .Inherit;
     }
 
-    try child.spawn();
+    try child.spawn(io);
     return child;
 }
 
@@ -1004,7 +998,7 @@ fn parseGoStatsLine(data: []const u8) ?BenchStats {
 
 /// Read from pipe with timeout.
 fn readPipeWithTimeout(
-    pipe: ?std.fs.File,
+    pipe: ?File,
     buf: []u8,
     timeout_ns: u64,
 ) []const u8 {
@@ -1036,12 +1030,13 @@ fn hasStatsMarker(data: []const u8) bool {
 }
 
 /// Read all available data from a pipe (non-blocking).
-fn readAllFromPipe(pipe: ?std.fs.File, buf: []u8) []const u8 {
+fn readAllFromPipe(io: Io, pipe: ?File, buf: []u8) []const u8 {
     const file = pipe orelse return "";
     var total: usize = 0;
 
     while (total < buf.len) {
-        const n = file.read(buf[total..]) catch break;
+        var slice = [_][]u8{buf[total..]};
+        const n = file.readStreaming(io, &slice) catch break;
         if (n == 0) break;
         total += n;
     }
@@ -1049,13 +1044,14 @@ fn readAllFromPipe(pipe: ?std.fs.File, buf: []u8) []const u8 {
 }
 
 /// Read until we see end markers indicating output is complete.
-fn readUntilDone(pipe: ?std.fs.File, buf: []u8, timeout_ns: u64) []const u8 {
+fn readUntilDone(io: Io, pipe: ?File, buf: []u8, timeout_ns: u64) []const u8 {
     const file = pipe orelse return "";
     var total: usize = 0;
     const start = std.time.Instant.now() catch return "";
 
     while (total < buf.len) {
-        const n = file.read(buf[total..]) catch break;
+        var slice = [_][]u8{buf[total..]};
+        const n = file.readStreaming(io, &slice) catch break;
         if (n == 0) {
             const now = std.time.Instant.now() catch break;
             if (now.since(start) > timeout_ns) break;
@@ -1074,7 +1070,8 @@ fn readUntilDone(pipe: ?std.fs.File, buf: []u8, timeout_ns: u64) []const u8 {
         if (has_marker) {
             // Wait for trailing lines, then do one more read
             std.posix.nanosleep(0, 50_000_000); // 50ms
-            const extra = file.read(buf[total..]) catch 0;
+            var extra_slice = [_][]u8{buf[total..]};
+            const extra = file.readStreaming(io, &extra_slice) catch 0;
             total += extra;
             break;
         }
@@ -1085,11 +1082,12 @@ fn readUntilDone(pipe: ?std.fs.File, buf: []u8, timeout_ns: u64) []const u8 {
 /// Run publisher and return stats.
 pub fn runPublisher(
     allocator: Allocator,
+    io: Io,
     client: Client,
     opts: BenchOpts,
 ) !?BenchStats {
     var payload_buf: [4096]u8 = undefined;
-    var child = try runExe(allocator, client, .publisher, opts, &payload_buf);
+    var child = try runExe(allocator, io, client, .publisher, opts, &payload_buf);
 
     var buf: [8192]u8 = undefined;
     const pipe = if (getOutputPipe(client) == .stderr)
@@ -1097,7 +1095,7 @@ pub fn runPublisher(
     else
         child.stdout;
     const output = readPipeWithTimeout(pipe, &buf, TMOUT);
-    _ = child.wait() catch {};
+    _ = child.wait(io) catch {};
 
     return parseOutput(client, output);
 }
@@ -1105,13 +1103,14 @@ pub fn runPublisher(
 /// Run subscriber and return stats.
 pub fn runSubscriber(
     allocator: Allocator,
+    io: Io,
     client: Client,
     opts: BenchOpts,
 ) !?BenchStats {
     assert(client.hasSubscriber());
 
     var payload_buf: [4096]u8 = undefined;
-    var child = try runExe(allocator, client, .subscriber, opts, &payload_buf);
+    var child = try runExe(allocator, io, client, .subscriber, opts, &payload_buf);
 
     var buf: [8192]u8 = undefined;
     const pipe = if (getOutputPipe(client) == .stderr)
@@ -1119,7 +1118,7 @@ pub fn runSubscriber(
     else
         child.stdout;
     const output = readPipeWithTimeout(pipe, &buf, TMOUT);
-    _ = child.wait() catch {};
+    _ = child.wait(io) catch {};
 
     return parseOutput(client, output);
 }
@@ -1127,6 +1126,7 @@ pub fn runSubscriber(
 /// Run coordinated pub/sub test.
 pub fn runPubSub(
     allocator: Allocator,
+    io: Io,
     pub_client: Client,
     sub_client: Client,
     opts: BenchOpts,
@@ -1137,13 +1137,13 @@ pub fn runPubSub(
     var sub_payload: [4096]u8 = undefined;
 
     // Start subscriber first
-    var sub = try runExe(allocator, sub_client, .subscriber, opts, &sub_payload);
+    var sub = try runExe(allocator, io, sub_client, .subscriber, opts, &sub_payload);
 
     // Wait for subscriber to connect
     std.posix.nanosleep(0, 750_000_000);
 
     // Start publisher
-    var publ = try runExe(allocator, pub_client, .publisher, opts, &pub_payload);
+    var publ = try runExe(allocator, io, pub_client, .publisher, opts, &pub_payload);
 
     // Read publisher output (wait for "Done!" marker)
     var pub_buf: [16384]u8 = undefined;
@@ -1151,10 +1151,10 @@ pub fn runPubSub(
         publ.stderr
     else
         publ.stdout;
-    const pub_output = readUntilDone(pub_pipe, &pub_buf, TMOUT);
+    const pub_output = readUntilDone(io, pub_pipe, &pub_buf, TMOUT);
 
     // Wait for publisher to complete
-    _ = publ.wait() catch {};
+    _ = publ.wait(io) catch {};
 
     // Give subscriber time to receive all messages
     std.posix.nanosleep(2, 0);
@@ -1165,8 +1165,8 @@ pub fn runPubSub(
         sub.stderr
     else
         sub.stdout;
-    const sub_output = readUntilDone(sub_pipe, &sub_buf, TMOUT);
-    _ = sub.wait() catch {};
+    const sub_output = readUntilDone(io, sub_pipe, &sub_buf, TMOUT);
+    _ = sub.wait(io) catch {};
 
     return .{
         .name = pub_client.name(),
@@ -1178,7 +1178,7 @@ pub fn runPubSub(
 /// Spawn fire_starter (io_uring server + publisher).
 /// Usage: fire_starter <msg_count> <msg_size>
 /// Fixed subject: stress.test
-pub fn runFireStarter(allocator: Allocator, opts: BenchOpts) !std.process.Child {
+pub fn runFireStarter(allocator: Allocator, io: Io, opts: BenchOpts) !std.process.Child {
     assert(opts.num_msgs > 0);
     assert(opts.size > 0);
 
@@ -1192,13 +1192,14 @@ pub fn runFireStarter(allocator: Allocator, opts: BenchOpts) !std.process.Child 
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Pipe;
 
-    try child.spawn();
+    try child.spawn(io);
     return child;
 }
 
 /// Run fire_starter with a subscriber (max throughput test).
 pub fn runFireStarterTest(
     allocator: Allocator,
+    io: Io,
     sub_client: Client,
     opts: BenchOpts,
 ) !PubSubResult {
@@ -1207,7 +1208,7 @@ pub fn runFireStarterTest(
     assert(opts.size > 0);
 
     // Start fire_starter
-    var fire = try runFireStarter(allocator, opts);
+    var fire = try runFireStarter(allocator, io, opts);
 
     // Wait for fire_starter to be ready
     std.posix.nanosleep(0, 500_000_000);
@@ -1217,7 +1218,7 @@ pub fn runFireStarterTest(
     sub_opts.subject = "stress.test";
 
     var sub_payload: [4096]u8 = undefined;
-    var sub = try runExe(allocator, sub_client, .subscriber, sub_opts, &sub_payload);
+    var sub = try runExe(allocator, io, sub_client, .subscriber, sub_opts, &sub_payload);
 
     // Read subscriber output
     var sub_buf: [16384]u8 = undefined;
@@ -1225,13 +1226,13 @@ pub fn runFireStarterTest(
         sub.stderr
     else
         sub.stdout;
-    const sub_output = readUntilDone(sub_pipe, &sub_buf, TMOUT);
-    _ = sub.wait() catch {};
+    const sub_output = readUntilDone(io, sub_pipe, &sub_buf, TMOUT);
+    _ = sub.wait(io) catch {};
 
     // Read fire_starter output from stderr (should have exited after sending)
     var fire_buf: [16384]u8 = undefined;
-    const fire_output = readAllFromPipe(fire.stderr, &fire_buf);
-    _ = fire.wait() catch {};
+    const fire_output = readAllFromPipe(io, fire.stderr, &fire_buf);
+    _ = fire.wait(io) catch {};
 
     return .{
         .name = sub_client.name(),
@@ -1240,14 +1241,15 @@ pub fn runFireStarterTest(
     };
 }
 
-// ============================================================================
-// Main and output formatting
-// ============================================================================
-
 pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    // Create I/O system for process management
+    var threaded: Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
     const opts = parseArgs(allocator) catch |err| {
         if (err == error.ShowHelp) {
@@ -1258,35 +1260,35 @@ pub fn main() !void {
     };
 
     // Initialize terminal UI, stdout, and results storage
-    var ui = TerminalUI.init();
+    var ui = TerminalUI.init(io);
     var stdout: StdOut = .{};
-    stdout.init();
+    stdout.init(io);
     var all_results = AllResults{};
 
     // Ensure nats-server is running
-    ensureNatsServer();
+    ensureNatsServer(io);
 
     printHeader(&stdout, opts, &ui);
     stdout.flush();
 
     // Table 1: Each client runs own pub+sub
-    try runTable1(allocator, opts, &ui, &all_results, &stdout);
+    try runTable1(allocator, io, opts, &ui, &all_results, &stdout);
 
     // Table 2.1: Subscriber comparison with Zig std publisher
-    try runTable2(allocator, opts, &ui, &all_results, &stdout);
+    try runTable2(allocator, io, opts, &ui, &all_results, &stdout);
 
     // Table 2.2: Subscriber comparison with Go publisher
-    try runTable2_2(allocator, opts, &ui, &all_results, &stdout);
+    try runTable2_2(allocator, io, opts, &ui, &all_results, &stdout);
 
     // Table 3: Fire starter test (needs nats-server stopped)
-    stopNatsServer();
-    try runTable3(allocator, opts, &ui, &all_results, &stdout);
+    stopNatsServer(io);
+    try runTable3(allocator, io, opts, &ui, &all_results, &stdout);
 
     stdout.flush();
 
     // Generate markdown report if requested
     if (opts.output_file) |filename| {
-        try generateMarkdown(opts, &all_results, filename);
+        try generateMarkdown(io, opts, &all_results, filename);
         ui.printHeader("Markdown report written to:");
         ui.print("  ");
         ui.writeGreen(filename);
@@ -1370,7 +1372,7 @@ fn parseSizeArg(val: []const u8) !usize {
     return error.InvalidSize;
 }
 
-fn ensureNatsServer() void {
+fn ensureNatsServer(io: Io) void {
     // Check if nats-server is running
     var child = std.process.Child.init(
         &.{ "pgrep", "nats-server" },
@@ -1378,8 +1380,8 @@ fn ensureNatsServer() void {
     );
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch return;
-    const term = child.wait() catch return;
+    child.spawn(io) catch return;
+    const term = child.wait(io) catch return;
 
     if (term.Exited != 0) {
         // Start nats-server
@@ -1389,12 +1391,12 @@ fn ensureNatsServer() void {
         );
         server.stdout_behavior = .Ignore;
         server.stderr_behavior = .Ignore;
-        server.spawn() catch {};
+        server.spawn(io) catch {};
         std.posix.nanosleep(1, 0);
     }
 }
 
-fn stopNatsServer() void {
+fn stopNatsServer(io: Io) void {
     // Kill nats-server if running (needed before fire_starter test)
     var child = std.process.Child.init(
         &.{ "pkill", "nats-server" },
@@ -1402,8 +1404,8 @@ fn stopNatsServer() void {
     );
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch return;
-    _ = child.wait() catch {};
+    child.spawn(io) catch return;
+    _ = child.wait(io) catch {};
     // Wait for port to be released
     std.posix.nanosleep(0, 500_000_000);
 }
@@ -1413,7 +1415,7 @@ fn printHeader(out: *StdOut, opts: BenchOpts, ui: *TerminalUI) void {
     const W: usize = 56;
     const Seg = TerminalUI.Segment;
 
-    ui.stderr.writeAll("\n") catch {};
+    ui.stderr.writeStreamingAll(ui.io, "\n") catch {};
     ui.printBoxTop(W);
 
     // Line 1: Title in bold white
@@ -1456,6 +1458,7 @@ fn printHeader(out: *StdOut, opts: BenchOpts, ui: *TerminalUI) void {
 
 fn runTable1(
     allocator: Allocator,
+    io: Io,
     opts: BenchOpts,
     ui: *TerminalUI,
     all_results: *AllResults,
@@ -1476,7 +1479,7 @@ fn runTable1(
             // Show running state with spinner
             ui.showRunning(ci + 1, total_clients, client.name(), run + 1, num_runs);
 
-            const result = runPubSub(allocator, client, client, opts) catch |err| {
+            const result = runPubSub(allocator, io, client, client, opts) catch |err| {
                 all_results.table1[ci][run] = .{
                     .success = false,
                     .error_msg = @errorName(err),
@@ -1523,12 +1526,12 @@ fn runTable1(
     }
 
     // Print detailed tables at the end
-    printTable1Details(out, opts, all_results);
+    printTable1Details(io, out, opts, all_results);
     out.flush();
 }
 
 /// Print the detailed Table 1 results (all runs + median).
-fn printTable1Details(out: *StdOut, opts: BenchOpts, all_results: *AllResults) void {
+fn printTable1Details(io: Io, out: *StdOut, opts: BenchOpts, all_results: *AllResults) void {
     _ = out; // Using ui for ANSI output
 
     const clients = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
@@ -1550,7 +1553,7 @@ fn printTable1Details(out: *StdOut, opts: BenchOpts, all_results: *AllResults) v
     }
 
     // Use stderr for ANSI table output
-    var ui = TerminalUI.init();
+    var ui = TerminalUI.init(io);
 
     // Print section title
     var title_buf: [64]u8 = undefined;
@@ -1771,6 +1774,7 @@ fn printTable1Row(out: *StdOut, name: []const u8, result: PubSubResult, size: us
 
 fn runTable2(
     allocator: Allocator,
+    io: Io,
     opts: BenchOpts,
     ui: *TerminalUI,
     all_results: *AllResults,
@@ -1789,7 +1793,7 @@ fn runTable2(
         for (0..num_runs) |run| {
             ui.showRunning(si + 1, total, sub_client.name(), run + 1, num_runs);
 
-            const result = runPubSub(allocator, .zig, sub_client, opts) catch |err| {
+            const result = runPubSub(allocator, io, .zig, sub_client, opts) catch |err| {
                 all_results.table2_1[si][run] = .{
                     .success = false,
                     .error_msg = @errorName(err),
@@ -1830,12 +1834,13 @@ fn runTable2(
         }
     }
 
-    printTable2Details(out, "2.1", "Zig std", opts, all_results.table2_1[0..], num_runs);
+    printTable2Details(io, out, "2.1", "Zig std", opts, all_results.table2_1[0..], num_runs);
     out.flush();
 }
 
 /// Print detailed Table 2 results.
 fn printTable2Details(
+    io: Io,
     out: *StdOut,
     table_num: []const u8,
     pub_name: []const u8,
@@ -1857,7 +1862,7 @@ fn printTable2Details(
         }
     }
 
-    var ui = TerminalUI.init();
+    var ui = TerminalUI.init(io);
 
     // Print all runs table
     var title_buf: [64]u8 = undefined;
@@ -1937,6 +1942,7 @@ fn printTable2Details(
 
 fn runTable2_2(
     allocator: Allocator,
+    io: Io,
     opts: BenchOpts,
     ui: *TerminalUI,
     all_results: *AllResults,
@@ -1955,7 +1961,7 @@ fn runTable2_2(
         for (0..num_runs) |run| {
             ui.showRunning(si + 1, total, sub_client.name(), run + 1, num_runs);
 
-            const result = runPubSub(allocator, .go, sub_client, opts) catch |err| {
+            const result = runPubSub(allocator, io, .go, sub_client, opts) catch |err| {
                 all_results.table2_2[si][run] = .{
                     .success = false,
                     .error_msg = @errorName(err),
@@ -1996,7 +2002,7 @@ fn runTable2_2(
         }
     }
 
-    printTable2Details(out, "2.2", "Go", opts, all_results.table2_2[0..], num_runs);
+    printTable2Details(io, out, "2.2", "Go", opts, all_results.table2_2[0..], num_runs);
     out.flush();
 }
 
@@ -2062,6 +2068,7 @@ fn printTable2Row(out: *StdOut, name: []const u8, stats: ?BenchStats, size: usiz
 
 fn runTable3(
     allocator: Allocator,
+    io: Io,
     opts: BenchOpts,
     ui: *TerminalUI,
     all_results: *AllResults,
@@ -2080,7 +2087,7 @@ fn runTable3(
         for (0..num_runs) |run| {
             ui.showRunning(si + 1, total, sub_client.name(), run + 1, num_runs);
 
-            const result = runFireStarterTest(allocator, sub_client, opts) catch |err| {
+            const result = runFireStarterTest(allocator, io, sub_client, opts) catch |err| {
                 all_results.table3[si][run] = .{
                     .success = false,
                     .error_msg = @errorName(err),
@@ -2122,12 +2129,12 @@ fn runTable3(
         }
     }
 
-    printTable3Details(out, opts, all_results);
+    printTable3Details(io, out, opts, all_results);
     out.flush();
 }
 
 /// Print detailed Table 3 results.
-fn printTable3Details(out: *StdOut, opts: BenchOpts, all_results: *AllResults) void {
+fn printTable3Details(io: Io, out: *StdOut, opts: BenchOpts, all_results: *AllResults) void {
     _ = out; // Using ui for ANSI output
 
     const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
@@ -2148,7 +2155,7 @@ fn printTable3Details(out: *StdOut, opts: BenchOpts, all_results: *AllResults) v
         }
     }
 
-    var ui = TerminalUI.init();
+    var ui = TerminalUI.init(io);
 
     // Print all runs table
     var title_buf: [64]u8 = undefined;
@@ -2331,17 +2338,19 @@ fn calculateMedianLatency(values: []?f64) ?f64 {
 
 /// Generate markdown report file with all benchmark results.
 fn generateMarkdown(
+    io: Io,
     opts: BenchOpts,
     all_results: *AllResults,
     filename: []const u8,
 ) !void {
     assert(filename.len > 0);
 
-    const file = try std.fs.cwd().createFile(filename, .{});
-    defer file.close();
+    const Dir = std.Io.Dir;
+    const file = try Dir.createFile(Dir.cwd(), io, filename, .{});
+    defer file.close(io);
 
     var write_buf: [8192]u8 = undefined;
-    var file_writer = file.writer(&write_buf);
+    var file_writer = file.writer(io, &write_buf);
     const writer = &file_writer.interface;
 
     // Header with metadata
@@ -2590,10 +2599,6 @@ fn writeTable3Markdown(
     }
     try writer.print("\n", .{});
 }
-
-// ============================================================================
-// Unit tests
-// ============================================================================
 
 test "parseZigOutput" {
     const output = "NATS publisher stats: 2891871 msgs/sec ~ 361484 KiB/sec ~ 0.35us";

@@ -58,11 +58,6 @@ pub const validateSubject = pubsub.validatePublish;
 pub const ServerInfo = protocol.OwnedServerInfo;
 pub const ConnectOptions = protocol.ConnectOptions;
 
-// Memory types for fast owned messages
-pub const SlabPool = memory.SlabPool;
-pub const Slab = memory.Slab;
-pub const RefSlice = memory.RefSlice;
-
 /// Library version
 pub const version = "0.1.0";
 

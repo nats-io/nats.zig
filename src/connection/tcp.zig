@@ -3,6 +3,8 @@
 //! Implements TCP transport for NATS connections using std.Io.net.
 //! This module provides the TcpTransport type that satisfies the
 //! Transport interface for use with the Connection type.
+//!
+//! Follows std.Io philosophy: Io is passed to methods, never stored.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -15,11 +17,10 @@ const WriteError = transport.WriteError;
 
 /// TCP transport for NATS connections.
 /// Wraps std.Io.net.Stream with buffered I/O.
+///
+/// NOTE: Io is NOT stored - pass to all I/O methods per std.Io philosophy.
 pub const TcpTransport = struct {
     stream: net.Stream,
-    io: Io,
-    reader: net.Stream.Reader,
-    writer: net.Stream.Writer,
     read_buffer: [8192]u8,
     write_buffer: [8192]u8,
     connected: bool,
@@ -52,20 +53,12 @@ pub const TcpTransport = struct {
             std.mem.asBytes(&enable),
         ) catch {};
 
-        var result = TcpTransport{
+        return TcpTransport{
             .stream = stream,
-            .io = io,
-            .reader = undefined,
-            .writer = undefined,
             .read_buffer = undefined,
             .write_buffer = undefined,
             .connected = true,
         };
-
-        result.reader = stream.reader(io, &result.read_buffer);
-        result.writer = stream.writer(io, &result.write_buffer);
-
-        return result;
     }
 
     pub const ConnectError = error{
@@ -76,16 +69,17 @@ pub const TcpTransport = struct {
     };
 
     /// Reads data from the TCP connection.
-    pub fn read(self: *TcpTransport, buf: []u8) ReadError!usize {
+    /// Io is passed as parameter per std.Io philosophy.
+    pub fn read(self: *TcpTransport, io: Io, buf: []u8) ReadError!usize {
         assert(buf.len > 0);
         if (!self.connected) return ReadError.ConnectionClosed;
 
-        const n = self.reader.interface.readAll(buf) catch |err| {
+        var reader = self.stream.reader(io, &self.read_buffer);
+        const n = reader.interface.readAll(buf) catch |err| {
             return switch (err) {
                 error.EndOfStream => ReadError.ConnectionClosed,
                 error.ReadFailed => blk: {
-                    if (self.reader.err) |e| {
-                        _ = e;
+                    if (reader.err) |_| {
                         break :blk ReadError.ConnectionReset;
                     }
                     break :blk ReadError.Unexpected;
@@ -97,15 +91,16 @@ pub const TcpTransport = struct {
     }
 
     /// Writes data to the TCP connection.
-    pub fn write(self: *TcpTransport, data: []const u8) WriteError!usize {
+    /// Io is passed as parameter per std.Io philosophy.
+    pub fn write(self: *TcpTransport, io: Io, data: []const u8) WriteError!usize {
         assert(data.len > 0);
         if (!self.connected) return WriteError.ConnectionClosed;
 
-        self.writer.interface.writeAll(data) catch |err| {
+        var writer = self.stream.writer(io, &self.write_buffer);
+        writer.interface.writeAll(data) catch |err| {
             return switch (err) {
                 error.WriteFailed => blk: {
-                    if (self.writer.err) |e| {
-                        _ = e;
+                    if (writer.err) |_| {
                         break :blk WriteError.ConnectionReset;
                     }
                     break :blk WriteError.BrokenPipe;
@@ -117,19 +112,22 @@ pub const TcpTransport = struct {
     }
 
     /// Flushes the write buffer.
-    pub fn flush(self: *TcpTransport) WriteError!void {
+    /// Io is passed as parameter per std.Io philosophy.
+    pub fn flush(self: *TcpTransport, io: Io) WriteError!void {
         assert(self.connected);
         if (!self.connected) return WriteError.ConnectionClosed;
 
-        self.writer.interface.flush() catch {
+        var writer = self.stream.writer(io, &self.write_buffer);
+        writer.interface.flush() catch {
             return WriteError.Unexpected;
         };
     }
 
     /// Closes the TCP connection.
-    pub fn close(self: *TcpTransport) void {
+    /// Io is passed as parameter per std.Io philosophy.
+    pub fn close(self: *TcpTransport, io: Io) void {
         if (self.connected) {
-            self.stream.close(self.io);
+            self.stream.close(io);
             self.connected = false;
         }
     }

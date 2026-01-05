@@ -7,6 +7,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 
 /// Configuration for a NATS server instance.
 pub const ServerConfig = struct {
@@ -31,7 +32,7 @@ pub const ServerInstance = struct {
     }
 
     /// Starts the nats-server process.
-    pub fn start(self: *ServerInstance, allocator: Allocator) !void {
+    pub fn start(self: *ServerInstance, allocator: Allocator, io: Io) !void {
         assert(self.process == null);
 
         const port_str = std.fmt.bufPrint(
@@ -60,7 +61,7 @@ pub const ServerInstance = struct {
         self.process.?.stdout_behavior = .Ignore;
         self.process.?.stderr_behavior = .Ignore;
 
-        try self.process.?.spawn();
+        try self.process.?.spawn(io);
         assert(self.process != null);
     }
 
@@ -105,10 +106,10 @@ pub const ServerInstance = struct {
     }
 
     /// Stops the server process.
-    pub fn stop(self: *ServerInstance) void {
+    pub fn stop(self: *ServerInstance, io: Io) void {
         if (self.process) |*proc| {
-            _ = proc.kill() catch {};
-            _ = proc.wait() catch {};
+            _ = proc.kill(io) catch {};
+            _ = proc.wait(io) catch {};
             self.process = null;
         }
         assert(self.process == null);
@@ -131,8 +132,8 @@ pub const ServerManager = struct {
     }
 
     /// Frees resources and stops all servers.
-    pub fn deinit(self: *ServerManager, allocator: Allocator) void {
-        self.stopAll();
+    pub fn deinit(self: *ServerManager, allocator: Allocator, io: Io) void {
+        self.stopAll(io);
         self.servers.deinit(allocator);
     }
 
@@ -140,10 +141,11 @@ pub const ServerManager = struct {
     pub fn startServer(
         self: *ServerManager,
         allocator: Allocator,
+        io: Io,
         config: ServerConfig,
     ) !*ServerInstance {
         var instance = ServerInstance.init(config);
-        try instance.start(allocator);
+        try instance.start(allocator, io);
         try instance.waitReady(5000);
 
         try self.servers.append(allocator, instance);
@@ -151,16 +153,16 @@ pub const ServerManager = struct {
     }
 
     /// Stops all managed servers.
-    pub fn stopAll(self: *ServerManager) void {
+    pub fn stopAll(self: *ServerManager, io: Io) void {
         for (self.servers.items) |*server| {
-            server.stop();
+            server.stop(io);
         }
     }
 
     /// Stops a specific server by index.
-    pub fn stopServer(self: *ServerManager, index: usize) void {
+    pub fn stopServer(self: *ServerManager, index: usize, io: Io) void {
         if (index < self.servers.items.len) {
-            self.servers.items[index].stop();
+            self.servers.items[index].stop(io);
         }
     }
 

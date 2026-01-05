@@ -4,6 +4,8 @@
 //! Uses comptime generics for zero-overhead Go-style API.
 //! Messages are delivered via client.poll(), which uses posix.poll()
 //! for efficient timeout handling without background threads.
+//!
+//! Connection-scoped: Client stores Io, Reader, Writer for connection lifetime.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -11,13 +13,11 @@ const Allocator = std.mem.Allocator;
 
 const subject_mod = @import("subject.zig");
 const sync = @import("../sync.zig");
-const memory = @import("../memory.zig");
 
 /// Message received on a subscription.
 /// For zero-copy (owned=false): slices point into read buffer, valid until
 /// next nextMessage() call. For owned (owned=true): data is allocated and
-/// must be freed via deinit(). Slab-based owned uses SlabPool for fast
-/// allocation.
+/// must be freed via deinit().
 pub const Message = struct {
     subject: []const u8,
     sid: u64,
@@ -25,35 +25,20 @@ pub const Message = struct {
     data: []const u8,
     headers: ?[]const u8,
     owned: bool = false,
-    slab: ?*memory.Slab = null,
-    pool: ?*memory.SlabPool = null,
 
     /// Frees owned message data. No-op for zero-copy messages.
-    /// For slab-based: releases slab back to pool.
-    /// For allocator-based: frees with provided allocator.
     pub fn deinit(self: *const Message, allocator: Allocator) void {
         if (!self.owned) return;
-
-        if (self.slab) |s| {
-            // Slab-based: release slab (returns to pool when refcount=0)
-            assert(self.pool != null);
-            if (s.release()) {
-                self.pool.?.returnSlab(s);
-            }
-        } else {
-            // Allocator-based
-            allocator.free(self.subject);
-            allocator.free(self.data);
-            if (self.reply_to) |rt| allocator.free(rt);
-            if (self.headers) |h| allocator.free(h);
-        }
+        allocator.free(self.subject);
+        allocator.free(self.data);
+        if (self.reply_to) |rt| allocator.free(rt);
+        if (self.headers) |h| allocator.free(h);
     }
 };
 
 /// Options for receiving messages.
 pub const ReceiveOptions = struct {
     timeout_ms: ?u64 = null,
-    slab_pool: ?*memory.SlabPool = null,
 };
 
 /// Subscription state.
@@ -63,63 +48,7 @@ pub const State = enum {
     unsubscribed,
 };
 
-/// Ring buffer for messages. Dynamically allocated.
-pub const MessageQueue = struct {
-    messages: []Message,
-    head: usize = 0,
-    tail: usize = 0,
-    count: usize = 0,
-
-    /// Creates a new message queue with given capacity.
-    pub fn init(allocator: Allocator, queue_capacity: usize) !MessageQueue {
-        assert(queue_capacity > 0);
-        const messages = try allocator.alloc(Message, queue_capacity);
-        return .{ .messages = messages };
-    }
-
-    /// Frees the queue buffer.
-    pub fn deinit(self: *MessageQueue, allocator: Allocator) void {
-        allocator.free(self.messages);
-        self.* = undefined;
-    }
-
-    /// Pushes a message to the queue. Returns error if full.
-    pub fn push(self: *MessageQueue, msg: Message) !void {
-        if (self.count >= self.messages.len) return error.QueueFull;
-
-        self.messages[self.tail] = msg;
-        self.tail = (self.tail + 1) % self.messages.len;
-        self.count += 1;
-    }
-
-    /// Pops a message from the queue. Returns null if empty.
-    pub fn pop(self: *MessageQueue) ?Message {
-        if (self.count == 0) return null;
-
-        const msg = self.messages[self.head];
-        self.head = (self.head + 1) % self.messages.len;
-        self.count -= 1;
-        return msg;
-    }
-
-    pub fn len(self: *const MessageQueue) usize {
-        return self.count;
-    }
-
-    pub fn isEmpty(self: *const MessageQueue) bool {
-        return self.count == 0;
-    }
-
-    pub fn isFull(self: *const MessageQueue) bool {
-        return self.count >= self.messages.len;
-    }
-
-    pub fn capacity(self: *const MessageQueue) usize {
-        return self.messages.len;
-    }
-};
-
-/// Tiger Style: Fixed-size message queue with zero allocations.
+/// Fixed-size message queue with zero allocations.
 /// Pre-allocated ring buffer for high-throughput message handling.
 pub fn FixedMessageQueue(comptime capacity: u16) type {
     return struct {
@@ -187,14 +116,14 @@ pub fn FixedMessageQueue(comptime capacity: u16) type {
     };
 }
 
-/// Tiger Style subscription slot configuration.
+/// FixedSubscription slot configuration.
 pub const FixedSubConfig = struct {
     max_subject_len: u16 = 256,
     max_queue_group_len: u16 = 64,
     queue_capacity: u16 = 256,
 };
 
-/// Tiger Style: Zero-allocation subscription slot.
+/// Zero-allocation subscription slot.
 /// Uses fixed buffers for subject, queue_group, and message queue.
 /// Designed for embedding in fixed arrays (no heap allocation).
 pub fn FixedSubscription(
@@ -292,6 +221,7 @@ pub fn FixedSubscription(
             allocator: Allocator,
             opts: ReceiveOptions,
         ) !?Message {
+            assert(self.active);
             // Return error if subscription is closed
             if (self.state != .active and self.state != .draining) {
                 return error.SubscriptionClosed;
@@ -355,7 +285,7 @@ pub fn FixedSubscription(
             }
         }
 
-        /// Owned receive with optional slab pool.
+        /// Owned receive - copies message data so it outlives read buffer.
         pub fn nextMessageOwned(
             self: *Self,
             allocator: Allocator,
@@ -365,11 +295,6 @@ pub fn FixedSubscription(
             if (msg) |m| {
                 if (m.owned) return m;
 
-                if (opts.slab_pool) |pool| {
-                    return copyToSlabFixed(pool, m);
-                }
-
-                // Allocator fallback
                 const subj = try allocator.dupe(u8, m.subject);
                 errdefer allocator.free(subj);
 
@@ -394,8 +319,6 @@ pub fn FixedSubscription(
                     .data = data,
                     .headers = hdrs,
                     .owned = true,
-                    .slab = null,
-                    .pool = null,
                 };
             }
             return null;
@@ -406,7 +329,7 @@ pub fn FixedSubscription(
             return self.messages.count;
         }
 
-        /// Unsubscribe from subject.
+        /// Unsubscribe from subject (protocol only, no memory cleanup).
         pub fn unsubscribe(self: *Self) !void {
             if (self.state == .unsubscribed) return;
             self.state = .unsubscribed;
@@ -430,63 +353,14 @@ pub fn FixedSubscription(
             return subject_mod.matches(self.subject(), msg_subject);
         }
 
-        /// No-op deinit (fixed slots don't need cleanup).
-        /// Just deactivates the slot.
+        /// Clean up subscription: unsubscribe and release slot.
+        /// This is the single cleanup function - use with defer.
         pub fn deinit(self: *Self, allocator: Allocator) void {
             _ = allocator;
+            // Unsubscribe from server (ignore errors during cleanup)
+            self.unsubscribe() catch {};
             self.client.releaseSubscriptionSlot(self);
         }
-    };
-}
-
-/// Copy message to slab (for FixedSubscription).
-fn copyToSlabFixed(pool: *memory.SlabPool, m: Message) ?Message {
-    assert(m.subject.len > 0);
-
-    var total: usize = m.subject.len + m.data.len;
-    if (m.reply_to) |rt| total += rt.len;
-    if (m.headers) |h| total += h.len;
-
-    if (total > pool.slab_size) return null;
-
-    const slab = pool.acquireSlab() orelse return null;
-    const buf = slab.slice();
-    var offset: usize = 0;
-
-    const subj_end = offset + m.subject.len;
-    @memcpy(buf[offset..subj_end], m.subject);
-    const subject_slice = buf[offset..subj_end];
-    offset = subj_end;
-
-    const reply_slice = if (m.reply_to) |rt| blk: {
-        const rt_end = offset + rt.len;
-        @memcpy(buf[offset..rt_end], rt);
-        const slice = buf[offset..rt_end];
-        offset = rt_end;
-        break :blk slice;
-    } else null;
-
-    const headers_slice = if (m.headers) |h| blk: {
-        const h_end = offset + h.len;
-        @memcpy(buf[offset..h_end], h);
-        const slice = buf[offset..h_end];
-        offset = h_end;
-        break :blk slice;
-    } else null;
-
-    const data_end = offset + m.data.len;
-    @memcpy(buf[offset..data_end], m.data);
-    const data_slice = buf[offset..data_end];
-
-    return Message{
-        .subject = subject_slice,
-        .sid = m.sid,
-        .reply_to = reply_slice,
-        .data = data_slice,
-        .headers = headers_slice,
-        .owned = true,
-        .slab = slab,
-        .pool = pool,
     };
 }
 
@@ -513,6 +387,7 @@ pub fn Subscription(comptime ClientType: type) type {
             allocator: Allocator,
             opts: ReceiveOptions,
         ) !?Message {
+            assert(self.sid > 0);
             // Return error if subscription is closed
             if (self.state != .active and self.state != .draining) {
                 return error.SubscriptionClosed;
@@ -573,22 +448,22 @@ pub fn Subscription(comptime ClientType: type) type {
                         };
                     } else {
                         // Message for different subscription - queue it
-                        // Tiger Style: O(1) lookup via SidMap
+                        // O(1) lookup via SidMap
                         const other = self.client.getSubscriptionBySid(d.sid);
                         if (other) |other_sub| {
                             const alloc = allocator;
-                            const subject = alloc.dupe(u8, d.subject) catch {
+                            const subj = alloc.dupe(u8, d.subject) catch {
                                 self.client.tossPending();
                                 continue;
                             };
                             const data = alloc.dupe(u8, d.data) catch {
-                                alloc.free(subject);
+                                alloc.free(subj);
                                 self.client.tossPending();
                                 continue;
                             };
                             const reply_to = if (d.reply_to) |rt|
                                 alloc.dupe(u8, rt) catch {
-                                    alloc.free(subject);
+                                    alloc.free(subj);
                                     alloc.free(data);
                                     self.client.tossPending();
                                     continue;
@@ -597,7 +472,7 @@ pub fn Subscription(comptime ClientType: type) type {
                                 null;
                             const headers = if (d.headers) |h|
                                 alloc.dupe(u8, h) catch {
-                                    alloc.free(subject);
+                                    alloc.free(subj);
                                     alloc.free(data);
                                     if (reply_to) |rt| alloc.free(rt);
                                     self.client.tossPending();
@@ -607,14 +482,14 @@ pub fn Subscription(comptime ClientType: type) type {
                                 null;
 
                             other_sub.messages.push(.{
-                                .subject = subject,
+                                .subject = subj,
                                 .sid = d.sid,
                                 .reply_to = reply_to,
                                 .data = data,
                                 .headers = headers,
                                 .owned = true,
                             }) catch {
-                                alloc.free(subject);
+                                alloc.free(subj);
                                 alloc.free(data);
                                 if (reply_to) |rt| alloc.free(rt);
                                 if (headers) |h| alloc.free(h);
@@ -630,9 +505,7 @@ pub fn Subscription(comptime ClientType: type) type {
             }
         }
 
-        /// Owned receive - copies message data, caller owns memory.
-        /// Use when message data needs to outlive the next nextMessage() call.
-        /// If opts.slab_pool is set, uses fast slab-based allocation.
+        /// Owned receive - copies message data so it outlives read buffer.
         pub fn nextMessageOwned(
             self: *Self,
             allocator: Allocator,
@@ -642,14 +515,8 @@ pub fn Subscription(comptime ClientType: type) type {
             if (msg) |m| {
                 if (m.owned) return m;
 
-                // If slab_pool provided, use fast slab path
-                if (opts.slab_pool) |pool| {
-                    return copyToSlab(pool, m);
-                }
-
-                // Fallback: allocator-based copy
-                const subject = try allocator.dupe(u8, m.subject);
-                errdefer allocator.free(subject);
+                const subj = try allocator.dupe(u8, m.subject);
+                errdefer allocator.free(subj);
 
                 const data = try allocator.dupe(u8, m.data);
                 errdefer allocator.free(data);
@@ -666,76 +533,122 @@ pub fn Subscription(comptime ClientType: type) type {
                     null;
 
                 return Message{
-                    .subject = subject,
+                    .subject = subj,
                     .sid = m.sid,
                     .reply_to = reply_to,
                     .data = data,
                     .headers = headers,
                     .owned = true,
-                    .slab = null,
-                    .pool = null,
                 };
             }
             return null;
         }
 
-        /// Copy message into slab for fast owned allocation.
-        /// Falls back to null if message too large or pool exhausted.
-        fn copyToSlab(pool: *memory.SlabPool, m: Message) ?Message {
-            assert(m.subject.len > 0);
+        /// Async message receive - returns Future for true async/await.
+        /// Usage:
+        ///   var future = sub.nextMessageAsync(allocator);
+        ///   defer if (future.cancel(io)) |m| {
+        ///       if (m) |msg| msg.deinit(allocator);
+        ///   } else |_| {};
+        ///   if (try future.await(io)) |msg| { ... }
+        pub fn nextMessageAsync(
+            self: *Self,
+            allocator: Allocator,
+        ) std.Io.Future(anyerror!?Message) {
+            return self.client.io.async(asyncNextMessageImpl, .{
+                self.client.io,
+                self,
+                allocator,
+            });
+        }
 
-            // Calculate total size needed
-            var total: usize = m.subject.len + m.data.len;
-            if (m.reply_to) |rt| total += rt.len;
-            if (m.headers) |h| total += h.len;
+        /// Internal async implementation (standalone fn for io.async).
+        fn asyncNextMessageImpl(
+            io: std.Io,
+            self: *Self,
+            allocator: Allocator,
+        ) anyerror!?Message {
+            _ = io; // Captured for cancellation points in pollDirect
 
-            // Check if fits in slab
-            if (total > pool.slab_size) return null;
+            // Poll until message received or cancelled
+            while (self.state == .active or self.state == .draining) {
+                // Check queue first
+                if (self.messages.tryPop()) |m| {
+                    self.received_msgs += 1;
+                    return m;
+                }
 
-            // Acquire slab
-            const slab = pool.acquireSlab() orelse return null;
-            const buf = slab.slice();
-            var offset: usize = 0;
+                if (self.state == .draining) return null;
 
-            // Copy subject
-            const subj_end = offset + m.subject.len;
-            @memcpy(buf[offset..subj_end], m.subject);
-            const subject_slice = buf[offset..subj_end];
-            offset = subj_end;
+                // Poll with 100ms timeout - acts as cancellation point
+                const direct = self.client.pollDirect(allocator, 100) catch |err| {
+                    return err;
+                };
 
-            // Copy reply_to
-            const reply_to_slice = if (m.reply_to) |rt| blk: {
-                const rt_end = offset + rt.len;
-                @memcpy(buf[offset..rt_end], rt);
-                const slice = buf[offset..rt_end];
-                offset = rt_end;
-                break :blk slice;
-            } else null;
+                if (direct) |d| {
+                    if (d.sid == self.sid) {
+                        self.received_msgs += 1;
+                        return Message{
+                            .subject = d.subject,
+                            .sid = d.sid,
+                            .reply_to = d.reply_to,
+                            .data = d.data,
+                            .headers = d.headers,
+                            .owned = false,
+                        };
+                    } else {
+                        // Route to other subscription
+                        const other = self.client.getSubscriptionBySid(d.sid);
+                        if (other) |other_sub| {
+                            const subj = allocator.dupe(u8, d.subject) catch {
+                                self.client.tossPending();
+                                continue;
+                            };
+                            const data = allocator.dupe(u8, d.data) catch {
+                                allocator.free(subj);
+                                self.client.tossPending();
+                                continue;
+                            };
+                            const reply_to = if (d.reply_to) |rt|
+                                allocator.dupe(u8, rt) catch {
+                                    allocator.free(subj);
+                                    allocator.free(data);
+                                    self.client.tossPending();
+                                    continue;
+                                }
+                            else
+                                null;
+                            const headers = if (d.headers) |h|
+                                allocator.dupe(u8, h) catch {
+                                    allocator.free(subj);
+                                    allocator.free(data);
+                                    if (reply_to) |rt| allocator.free(rt);
+                                    self.client.tossPending();
+                                    continue;
+                                }
+                            else
+                                null;
 
-            // Copy headers
-            const headers_slice = if (m.headers) |h| blk: {
-                const h_end = offset + h.len;
-                @memcpy(buf[offset..h_end], h);
-                const slice = buf[offset..h_end];
-                offset = h_end;
-                break :blk slice;
-            } else null;
-
-            // Copy data
-            const data_end = offset + m.data.len;
-            @memcpy(buf[offset..data_end], m.data);
-            const data_slice = buf[offset..data_end];
-
-            return Message{
-                .subject = subject_slice,
-                .sid = m.sid,
-                .reply_to = reply_to_slice,
-                .data = data_slice,
-                .headers = headers_slice,
-                .owned = true,
-                .slab = slab,
-                .pool = pool,
-            };
+                            other_sub.messages.push(.{
+                                .subject = subj,
+                                .sid = d.sid,
+                                .reply_to = reply_to,
+                                .data = data,
+                                .headers = headers,
+                                .owned = true,
+                            }) catch {
+                                allocator.free(subj);
+                                allocator.free(data);
+                                if (reply_to) |rt| allocator.free(rt);
+                                if (headers) |h| allocator.free(h);
+                            };
+                        }
+                        self.client.tossPending();
+                    }
+                }
+                // No message yet, loop - cancellation can happen at pollDirect
+            }
+            return error.SubscriptionClosed;
         }
 
         /// Returns number of pending messages.
@@ -743,7 +656,7 @@ pub fn Subscription(comptime ClientType: type) type {
             return self.messages.len();
         }
 
-        /// Unsubscribe from the subject.
+        /// Unsubscribe from the subject (protocol only, no memory cleanup).
         pub fn unsubscribe(self: *Self) !void {
             if (self.state == .unsubscribed) return;
             self.state = .unsubscribed;
@@ -767,10 +680,13 @@ pub fn Subscription(comptime ClientType: type) type {
             return subject_mod.matches(self.subject, msg_subject);
         }
 
-        /// Clean up subscription resources.
-        /// Removes self from client's maps to prevent double-free.
+        /// Clean up subscription: unsubscribe and free all resources.
+        /// This is the single cleanup function - use with defer.
         pub fn deinit(self: *Self, allocator: Allocator) void {
-            // Remove from Tiger Style SidMap and sub_ptrs
+            // Unsubscribe from server (ignore errors during cleanup)
+            self.unsubscribe() catch {};
+
+            // Remove from SidMap and sub_ptrs
             if (self.client.sidmap.get(self.sid)) |slot_idx| {
                 self.client.sub_ptrs[slot_idx] = null;
                 _ = self.client.sidmap.remove(self.sid);
@@ -789,55 +705,4 @@ pub fn Subscription(comptime ClientType: type) type {
             allocator.destroy(self);
         }
     };
-}
-
-test "message queue basic" {
-    const allocator = std.testing.allocator;
-
-    var queue = try MessageQueue.init(allocator, 4);
-    defer queue.deinit(allocator);
-
-    try std.testing.expect(queue.isEmpty());
-    try std.testing.expectEqual(@as(usize, 4), queue.capacity());
-
-    const msg1 = Message{
-        .subject = "test",
-        .sid = 1,
-        .reply_to = null,
-        .data = "hello",
-        .headers = null,
-    };
-
-    try queue.push(msg1);
-    try std.testing.expectEqual(@as(usize, 1), queue.len());
-
-    const popped = queue.pop();
-    try std.testing.expect(popped != null);
-    try std.testing.expectEqualSlices(u8, "test", popped.?.subject);
-    try std.testing.expect(queue.isEmpty());
-}
-
-test "message queue full" {
-    const allocator = std.testing.allocator;
-
-    var queue = try MessageQueue.init(allocator, 2);
-    defer queue.deinit(allocator);
-
-    const msg = Message{
-        .subject = "x",
-        .sid = 1,
-        .reply_to = null,
-        .data = "",
-        .headers = null,
-    };
-
-    try queue.push(msg);
-    try queue.push(msg);
-    try std.testing.expect(queue.isFull());
-
-    try std.testing.expectError(error.QueueFull, queue.push(msg));
-
-    _ = queue.pop();
-    try std.testing.expect(!queue.isFull());
-    try queue.push(msg);
 }

@@ -14,8 +14,8 @@ pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
-    // Create threaded I/O
-    var threaded = Io.Threaded.init(gpa.allocator());
+    // Create threaded I/O (Andrew Kelley pattern: type annotation + .init)
+    var threaded: Io.Threaded = .init(gpa.allocator(), .{});
     defer threaded.deinit();
 
     const io = threaded.io();

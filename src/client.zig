@@ -2,6 +2,8 @@
 //!
 //! High-level client API for connecting to NATS servers.
 //! Provides publish, subscribe, and request/reply functionality.
+//!
+//! Connection-scoped: Io, Reader, Writer stored for lifetime of connection.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -116,11 +118,13 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     };
 }
 
-/// Tiger Style subscription limits.
+/// Fixed subscription limits.
 pub const MAX_SUBSCRIPTIONS: u16 = 256;
 pub const SIDMAP_CAPACITY: u32 = 512; // 2x for load factor
 
 /// NATS Client for pub/sub messaging.
+///
+/// Connection-scoped: Io, Reader, Writer stored for connection lifetime.
 pub const Client = struct {
     /// Subscription type instantiated with Client.
     pub const Sub = subscription_mod.Subscription(Client);
@@ -135,9 +139,12 @@ pub const Client = struct {
         consumed: usize,
     };
 
+    // Connection-scoped: stored for lifetime
+    io: Io,
     stream: net.Stream,
     reader: net.Stream.Reader,
     writer: net.Stream.Writer,
+
     parser: Parser,
     server_info: ?OwnedServerInfo,
     events: EventQueue,
@@ -147,7 +154,7 @@ pub const Client = struct {
     write_buffer: [32768]u8,
     pending_toss: usize,
 
-    // Tiger Style: Pre-allocated subscription routing
+    // Pre-allocated subscription routing
     sidmap: SidMap,
     sidmap_keys: [SIDMAP_CAPACITY]u64,
     sidmap_vals: [SIDMAP_CAPACITY]u16,
@@ -160,7 +167,7 @@ pub const Client = struct {
 
     /// Connects to a NATS server.
     /// URL format: nats://[user:pass@]host[:port]
-    /// The caller owns the Io instance and must keep it alive.
+    /// Io stored for connection lifetime.
     pub fn connect(
         allocator: Allocator,
         io: Io,
@@ -201,8 +208,6 @@ pub const Client = struct {
         };
 
         // Set TCP_NODELAY to disable Nagle's algorithm for low latency
-        // This is critical for NATS performance - without it, latency can be
-        // 2-5x higher due to delayed TCP acknowledgments
         const enable: u32 = 1;
         std.posix.setsockopt(
             client.stream.socket.handle,
@@ -211,9 +216,12 @@ pub const Client = struct {
             std.mem.asBytes(&enable),
         ) catch {};
 
-        // Initialize buffers and reader/writer
+        // Initialize buffers
         client.read_buffer = undefined;
         client.write_buffer = undefined;
+
+        // Store Io and create Reader/Writer once for connection lifetime
+        client.io = io;
         client.reader = client.stream.reader(io, &client.read_buffer);
         client.writer = client.stream.writer(io, &client.write_buffer);
 
@@ -224,7 +232,7 @@ pub const Client = struct {
         client.state = .connecting;
         client.pending_toss = 0;
 
-        // Tiger Style: Initialize SidMap and free slot stack
+        // Initialize SidMap and free slot stack
         client.sidmap_keys = undefined;
         client.sidmap_vals = undefined;
         client.sidmap = SidMap.init(&client.sidmap_keys, &client.sidmap_vals);
@@ -253,7 +261,7 @@ pub const Client = struct {
         assert(self.state == .connecting);
         assert(parsed.host.len > 0);
 
-        // Read INFO from server
+        // Read INFO from server (use stored reader)
         const info_data = self.reader.interface.peekGreedy(1) catch {
             return error.ConnectionFailed;
         };
@@ -281,8 +289,6 @@ pub const Client = struct {
         }
 
         // Send CONNECT
-        // Token auth: nats://token@host uses token, not user
-        // User auth: nats://user:pass@host uses user/pass
         const pass = opts.pass orelse parsed.pass;
         var user = opts.user orelse parsed.user;
         var auth_token = opts.auth_token;
@@ -317,14 +323,12 @@ pub const Client = struct {
         };
 
         // Check for auth rejection from server
-        // Server sends -ERR immediately if auth fails
         if (self.server_info.?.auth_required) {
             try self.checkAuthRejection();
         }
     }
 
     /// Checks for -ERR auth rejection after CONNECT.
-    /// Uses poll with 250ms timeout to detect server rejection.
     fn checkAuthRejection(self: *Client) !void {
         assert(self.state == .connected);
 
@@ -336,17 +340,13 @@ pub const Client = struct {
         }};
 
         const poll_result = std.posix.poll(&poll_fds, 250) catch {
-            // Poll failed - assume auth ok
             return;
         };
 
-        // No data available after timeout = auth accepted
         if (poll_result == 0) return;
 
-        // Data available - check if it's -ERR
         if (poll_fds[0].revents & std.posix.POLL.IN != 0) {
             const response = self.reader.interface.peekGreedy(1) catch {
-                // Connection closed = auth rejected
                 self.state = .closed;
                 return error.AuthorizationViolation;
             };
@@ -355,25 +355,21 @@ pub const Client = struct {
                 self.state = .closed;
                 return error.AuthorizationViolation;
             }
-            // Other data (like +OK in verbose mode) = auth ok
         }
     }
 
     /// Closes the connection and frees resources.
-    /// The Io instance must be the same one used to connect.
-    /// Safe to call after drain() - skips already-closed stream.
-    pub fn deinit(self: *Client, allocator: Allocator, io: Io) void {
+    pub fn deinit(self: *Client, allocator: Allocator) void {
         assert(self.next_sid >= 1);
 
         // Skip close if already closed by drain()
         if (self.state != .closed) {
-            self.stream.close(io);
+            self.stream.close(self.io);
         }
 
-        // Tiger Style: Clean up subscriptions via slot array
+        // Clean up subscriptions via slot array
         for (self.sub_ptrs) |maybe_sub| {
             if (maybe_sub) |sub| {
-                // Don't call sub.deinit() as it would try to remove from map
                 sub.messages.close();
                 sub.messages.deinit(allocator);
                 allocator.free(sub.subject);
@@ -397,7 +393,6 @@ pub const Client = struct {
         payload: []const u8,
     ) !void {
         assert(subject.len > 0);
-        // Return error if not connected instead of panicking
         if (!self.state.canSend()) {
             return error.NotConnected;
         }
@@ -489,6 +484,8 @@ pub const Client = struct {
 
         // Verify with PING/PONG roundtrip
         try self.ping();
+
+        // Flush after ping
         self.writer.interface.flush() catch {
             return error.WriteFailed;
         };
@@ -535,8 +532,60 @@ pub const Client = struct {
         }
     }
 
+    /// Async flush - returns Future for true async/await.
+    /// Usage:
+    ///   var future = client.flushAsync();
+    ///   defer future.cancel(io) catch {};
+    ///   try future.await(io);
+    pub fn flushAsync(self: *Client) std.Io.Future(anyerror!void) {
+        return self.io.async(asyncFlushImpl, .{ self.io, self });
+    }
+
+    /// Internal async flush implementation.
+    fn asyncFlushImpl(io: std.Io, self: *Client) anyerror!void {
+        _ = io; // Captured for cancellation
+        try self.flush();
+    }
+
+    /// Async request/reply - returns Future for true async/await.
+    /// Usage:
+    ///   var future = client.requestAsync(allocator, "service", "data", 5000);
+    ///   defer if (future.cancel(io)) |m| {
+    ///       if (m) |msg| msg.deinit(allocator);
+    ///   } else |_| {};
+    ///   if (try future.await(io)) |reply| { ... }
+    pub fn requestAsync(
+        self: *Client,
+        allocator: Allocator,
+        subject: []const u8,
+        payload: []const u8,
+        timeout_ms: u32,
+    ) std.Io.Future(anyerror!?DirectMsg) {
+        return self.io.async(asyncRequestImpl, .{
+            self.io,
+            self,
+            allocator,
+            subject,
+            payload,
+            timeout_ms,
+        });
+    }
+
+    /// Internal async request implementation.
+    fn asyncRequestImpl(
+        io: std.Io,
+        self: *Client,
+        allocator: Allocator,
+        subject: []const u8,
+        payload: []const u8,
+        timeout_ms: u32,
+    ) anyerror!?DirectMsg {
+        _ = io; // Captured for cancellation
+        return self.request(allocator, subject, payload, timeout_ms);
+    }
+
     /// Gracefully drains subscriptions and closes (Go client parity).
-    pub fn drain(self: *Client, allocator: Allocator, io: Io) !void {
+    pub fn drain(self: *Client, allocator: Allocator) !void {
         if (self.state != .connected) {
             return error.NotConnected;
         }
@@ -572,10 +621,10 @@ pub const Client = struct {
         self.state = .draining;
 
         // Close connection
-        self.stream.close(io);
+        self.stream.close(self.io);
         self.state = .closed;
 
-        // Free server_info to prevent leak (caller still calls deinit)
+        // Free server_info to prevent leak
         if (self.server_info) |*info| {
             info.deinit(allocator);
             self.server_info = null;
@@ -607,11 +656,10 @@ pub const Client = struct {
         if (!self.state.canSend()) {
             return error.NotConnected;
         }
-        // validateSubscribe checks for empty subject, wildcards, spaces, etc.
         try pubsub.validateSubscribe(subject);
         assert(self.next_sid >= 1);
 
-        // Tiger Style: Allocate slot from free stack
+        // Allocate slot from free stack
         if (self.free_count == 0) {
             return error.TooManySubscriptions;
         }
@@ -638,7 +686,7 @@ pub const Client = struct {
             null;
         errdefer if (owned_queue) |qg| allocator.free(qg);
 
-        // Message queue (4096 capacity - saves memory, sufficient for bursts)
+        // Message queue (4096 capacity)
         const msg_queue = try sync.ThreadSafeQueue(
             subscription_mod.Message,
         ).init(allocator, 4096);
@@ -654,9 +702,8 @@ pub const Client = struct {
             .received_msgs = 0,
         };
 
-        // Tiger Style: Store in SidMap and slot array
+        // Store in SidMap and slot array
         self.sidmap.put(sid, slot_idx) catch {
-            // SidMap full - shouldn't happen if free_count works correctly
             self.free_slots[self.free_count] = slot_idx;
             self.free_count += 1;
             return error.TooManySubscriptions;
@@ -689,17 +736,16 @@ pub const Client = struct {
             return error.EncodingFailed;
         };
 
-        // Tiger Style: Remove from SidMap and release slot
+        // Remove from SidMap and release slot
         if (self.sidmap.get(sid)) |slot_idx| {
             self.sub_ptrs[slot_idx] = null;
             _ = self.sidmap.remove(sid);
-            // Return slot to free stack
             self.free_slots[self.free_count] = slot_idx;
             self.free_count += 1;
         }
     }
 
-    /// Tiger Style: Get subscription by SID using O(1) SidMap lookup.
+    /// Get subscription by SID using O(1) SidMap lookup.
     pub fn getSubscriptionBySid(self: *Client, sid: u64) ?*Sub {
         assert(sid > 0);
         if (self.sidmap.get(sid)) |slot_idx| {
@@ -755,9 +801,6 @@ pub const Client = struct {
     }
 
     /// Polls for incoming data and processes commands.
-    /// Call regularly to receive messages and handle server pings.
-    /// Returns true if any data was processed, false on timeout/no data.
-    /// Uses posix.poll() for efficient timeout handling.
     pub fn poll(
         self: *Client,
         allocator: Allocator,
@@ -855,7 +898,6 @@ pub const Client = struct {
     }
 
     /// Toss bytes that were consumed in previous pollDirect() call.
-    /// Must be called before reading more data.
     pub fn tossPending(self: *Client) void {
         assert(self.pending_toss <= self.read_buffer.len);
         if (self.pending_toss > 0) {
@@ -865,10 +907,6 @@ pub const Client = struct {
     }
 
     /// Polls for a single message (zero-copy).
-    /// Returns slices directly into read buffer - valid until next poll call.
-    /// Handles PING/PONG/OK/ERR internally, only returns on MSG/HMSG.
-    /// Returns null on timeout. Caller must call tossPending() before next
-    /// poll to release the buffer space.
     pub fn pollDirect(
         self: *Client,
         allocator: Allocator,
@@ -954,12 +992,10 @@ pub const Client = struct {
             if (cmd) |c| {
                 switch (c) {
                     .ping => {
-                        // Handle PING, toss consumed, continue
                         self.reader.interface.toss(consumed);
                         try self.sendPong();
                     },
                     .pong, .ok => {
-                        // Toss and continue
                         self.reader.interface.toss(consumed);
                     },
                     .err => |msg| {
@@ -974,11 +1010,9 @@ pub const Client = struct {
                         self.server_info = new_info;
                     },
                     .msg => |args| {
-                        // Update stats
                         self.stats.msgs_in += 1;
                         self.stats.bytes_in += args.payload.len;
 
-                        // Record consumed for later toss, return slices
                         self.pending_toss = consumed;
                         return .{
                             .subject = args.subject,
@@ -990,7 +1024,6 @@ pub const Client = struct {
                         };
                     },
                     .hmsg => |args| {
-                        // Update stats (include headers in byte count)
                         self.stats.msgs_in += 1;
                         self.stats.bytes_in += args.payload.len + args.headers.len;
 
@@ -1027,7 +1060,6 @@ pub const Client = struct {
     }
 
     /// Returns the next event from the event queue.
-    /// Returns null if no events are pending.
     pub fn nextEvent(self: *Client) ?Event {
         assert(self.next_sid >= 1);
         return self.events.pop();
@@ -1050,7 +1082,6 @@ pub const Client = struct {
             .msg => |args| try self.handleMessage(allocator, args),
             .hmsg => |args| try self.handleHMessage(allocator, args),
             .info => |new_info| {
-                // Server may send updated INFO (e.g., cluster changes)
                 if (self.server_info) |*info| {
                     info.deinit(std.heap.page_allocator);
                 }
@@ -1060,7 +1091,6 @@ pub const Client = struct {
     }
 
     /// Handles MSG command - routes message to subscription queue.
-    /// Copies message data since buffer will be reused.
     fn handleMessage(
         self: *Client,
         allocator: Allocator,
@@ -1069,15 +1099,12 @@ pub const Client = struct {
         assert(args.subject.len > 0);
         assert(args.sid > 0);
 
-        // Update stats
         self.stats.msgs_in += 1;
         self.stats.bytes_in += args.payload.len;
 
-        // Tiger Style: O(1) lookup via SidMap
         if (self.getSubscriptionBySid(args.sid)) |sub| {
             const alloc = allocator;
 
-            // Copy data - buffer will be reused by reader thread
             const subject = try alloc.dupe(u8, args.subject);
             errdefer alloc.free(subject);
 
@@ -1096,7 +1123,6 @@ pub const Client = struct {
                 .headers = null,
                 .owned = true,
             }) catch {
-                // Queue full - drop message, free memory
                 alloc.free(subject);
                 alloc.free(data);
                 if (reply_to) |rt| alloc.free(rt);
@@ -1105,7 +1131,6 @@ pub const Client = struct {
     }
 
     /// Handles HMSG command - routes message with headers to subscription.
-    /// Copies message data since buffer will be reused.
     fn handleHMessage(
         self: *Client,
         allocator: Allocator,
@@ -1114,11 +1139,9 @@ pub const Client = struct {
         assert(args.subject.len > 0);
         assert(args.sid > 0);
 
-        // Update stats (include headers in byte count)
         self.stats.msgs_in += 1;
         self.stats.bytes_in += args.payload.len + args.headers.len;
 
-        // Tiger Style: O(1) lookup via SidMap
         if (self.getSubscriptionBySid(args.sid)) |sub| {
             const alloc = allocator;
 
@@ -1147,7 +1170,6 @@ pub const Client = struct {
                 .headers = headers,
                 .owned = true,
             }) catch {
-                // Queue full - drop message, free memory
                 alloc.free(subject);
                 alloc.free(data);
                 if (reply_to) |rt| alloc.free(rt);
@@ -1205,7 +1227,6 @@ test "parse url with user only" {
 }
 
 test "parse url invalid" {
-    // Empty URL triggers assert (programming error), not tested here
     try std.testing.expectError(error.InvalidUrl, parseUrl("nats://"));
     try std.testing.expectError(error.InvalidUrl, parseUrl("nats://:4222"));
 }

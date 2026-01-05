@@ -15,7 +15,6 @@ const BenchConfig = struct {
     msgs: u64 = 100_000,
     url: []const u8 = "nats://127.0.0.1:4222",
     progress: bool = true,
-    use_slab: bool = true,
 };
 
 pub fn main() !void {
@@ -51,8 +50,6 @@ fn parseArgs(allocator: Allocator) !BenchConfig {
             config.progress = true;
         } else if (std.mem.eql(u8, arg, "--no-progress")) {
             config.progress = false;
-        } else if (std.mem.eql(u8, arg, "--no-slab")) {
-            config.use_slab = false;
         } else if (!std.mem.startsWith(u8, arg, "--")) {
             config.subject = arg;
         }
@@ -69,46 +66,31 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     assert(config.subject.len > 0);
     assert(config.msgs > 0);
 
-    // // Create SlabPool if enabled
-    // var slab_pool: ?nats.SlabPool = if (config.use_slab)
-    //     try nats.SlabPool.init(allocator, .{
-    //         .slab_count = 256,
-    //         .slab_size = 65536,
-    //         .enable_page_warming = true,
-    //     })
-    // else
-    //     null;
-    // defer if (slab_pool) |*p| p.deinit(allocator);
-
-    // Print start message with current time
-    const mode_str = if (config.use_slab) " (slab)" else "";
     if (bench.TimeOfDay.now()) |tod| {
         var buf: [8]u8 = undefined;
         std.debug.print(
-            "{s} Starting subscriber benchmark{s} " ++
-                "[msgs={d}, subject={s}]\n",
-            .{ tod.format(&buf), mode_str, config.msgs, config.subject },
+            "{s} Starting subscriber benchmark [msgs={d}, subject={s}]\n",
+            .{ tod.format(&buf), config.msgs, config.subject },
         );
     } else {
         std.debug.print(
-            "Starting subscriber benchmark{s} " ++
-                "[msgs={d}, subject={s}]\n",
-            .{ mode_str, config.msgs, config.subject },
+            "Starting subscriber benchmark [msgs={d}, subject={s}]\n",
+            .{ config.msgs, config.subject },
         );
     }
 
-    // Create I/O and connect
-    var io = std.Io.Threaded.init(allocator);
-    defer io.deinit();
+    // Create I/O and connect (Andrew Kelley pattern: type annotation + .init)
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const io_instance = io.io();
-    const client = nats.Client.connect(allocator, io_instance, config.url, .{
+    const client = nats.Client.connect(allocator, io, config.url, .{
         .name = "bench-sub",
     }) catch |err| {
         std.debug.print("Failed to connect: {}\n", .{err});
         return err;
     };
-    defer client.deinit(allocator, io_instance);
+    defer client.deinit(allocator);
 
     // Subscribe - returns *Subscription for Go-style polling
     const sub = client.subscribe(allocator, config.subject) catch |err| {
@@ -134,27 +116,10 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     // Progress interval
     const progress_interval = config.msgs / 10;
 
-    // // Get pointer to pool for receive options
-    // const pool_ptr: ?*nats.SlabPool = if (slab_pool != null)
-    //     &slab_pool.?
-    // else
-    //     null;
-
     // Go-style receive loop with timeout
     while (msg_count < config.msgs) {
-        // // Block until message or timeout (15 seconds)
-        // const msg = sub.nextMessageOwned(allocator, .{
-        //     .timeout_ms = 15000,
-        //     .slab_pool = pool_ptr,
-        // }) catch |err| {
-        //     std.debug.print("Receive error: {}\n", .{err});
-        //     return err;
-        // };
-
-        // Block until message or timeout (15 seconds)
         const msg = sub.nextMessage(allocator, .{
             .timeout_ms = 15000,
-            .slab_pool = null,
         }) catch |err| {
             std.debug.print("Receive error: {}\n", .{err});
             return err;

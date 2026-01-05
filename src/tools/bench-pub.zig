@@ -83,18 +83,18 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         );
     }
 
-    // Create I/O and connect
-    var io = std.Io.Threaded.init(allocator);
-    defer io.deinit();
+    // Create I/O and connect (Andrew Kelley pattern: type annotation + .init)
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const io_instance = io.io();
-    const client = nats.Client.connect(allocator, io_instance, config.url, .{
+    const client = nats.Client.connect(allocator, io, config.url, .{
         .name = "bench-pub",
     }) catch |err| {
         std.debug.print("Failed to connect: {}\n", .{err});
         return err;
     };
-    defer client.deinit(allocator, io_instance);
+    defer client.deinit(allocator);
 
     // Create payload buffer
     const payload = try allocator.alloc(u8, config.size);
