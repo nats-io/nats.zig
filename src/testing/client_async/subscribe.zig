@@ -1,0 +1,474 @@
+//! Subscribe Tests for NATS Async Client
+//!
+//! Tests for async subscriptions.
+
+const std = @import("std");
+const utils = @import("../test_utils.zig");
+const nats = utils.nats;
+
+const reportResult = utils.reportResult;
+const formatUrl = utils.formatUrl;
+const formatAuthUrl = utils.formatAuthUrl;
+const test_port = utils.test_port;
+const auth_port = utils.auth_port;
+const test_token = utils.test_token;
+const ServerManager = utils.ServerManager;
+
+pub fn testClientAsyncManySubs(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    // Publisher client
+    const publisher = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("client_async_many_subs", false, "pub connect failed");
+        return;
+    };
+    defer publisher.deinit(allocator);
+
+    // Async client with multiple subs
+    const client = nats.ClientAsync.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .async_queue_size = 32 },
+    ) catch {
+        reportResult("client_async_many_subs", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    // Create 5 subscriptions
+    const NUM_SUBS = 5;
+    var subs: [NUM_SUBS]*nats.ClientAsync.Sub = undefined;
+    var sub_buf: [NUM_SUBS][32]u8 = undefined;
+    var topics: [NUM_SUBS][]const u8 = undefined;
+
+    for (0..NUM_SUBS) |i| {
+        topics[i] = std.fmt.bufPrint(
+            &sub_buf[i],
+            "async.many.{d}",
+            .{i},
+        ) catch "err";
+        subs[i] = client.subscribe(allocator, topics[i]) catch {
+            reportResult("client_async_many_subs", false, "sub failed");
+            return;
+        };
+    }
+    defer for (subs) |s| s.deinit(allocator);
+
+    client.flush() catch {};
+
+    // Wait for subscriptions to register
+    std.posix.nanosleep(0, 50_000_000);
+
+    // Publish to all topics
+    for (topics) |t| {
+        publisher.publish(t, "hello") catch {};
+    }
+    publisher.flush() catch {};
+
+    // Use async/await - reader task routes messages automatically
+    var received: usize = 0;
+    for (subs) |s| {
+        var future = io.io().async(nats.ClientAsync.Sub.next, .{ s, io.io() });
+        defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+
+        if (future.await(io.io())) |_| {
+            received += 1;
+        } else |_| {}
+    }
+
+    if (received == NUM_SUBS) {
+        reportResult("client_async_many_subs", true, "");
+    } else {
+        var buf: [32]u8 = undefined;
+        const msg = std.fmt.bufPrint(
+            &buf,
+            "got {d}/{d}",
+            .{ received, NUM_SUBS },
+        ) catch "e";
+        reportResult("client_async_many_subs", false, msg);
+    }
+}
+
+// ClientAsync Test 3: tryNext non-blocking
+
+pub fn testClientAsyncWildcard(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const publisher = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("client_async_wildcard", false, "pub connect failed");
+        return;
+    };
+    defer publisher.deinit(allocator);
+
+    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("client_async_wildcard", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    const sub = client.subscribe(allocator, "async.wild.*") catch {
+        reportResult("client_async_wildcard", false, "sub failed");
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    client.flush() catch {};
+
+    // Publish to matching subjects
+    publisher.publish("async.wild.a", "msg-a") catch {};
+    publisher.publish("async.wild.b", "msg-b") catch {};
+    publisher.publish("async.wild.c", "msg-c") catch {};
+    publisher.flush() catch {};
+
+    // Use async/await - reader task routes messages automatically
+    var received: usize = 0;
+    for (0..3) |_| {
+        var future = io.io().async(nats.ClientAsync.Sub.next, .{ sub, io.io() });
+        defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+
+        if (future.await(io.io())) |_| {
+            received += 1;
+        } else |_| {}
+    }
+
+    if (received >= 3) {
+        reportResult("client_async_wildcard", true, "");
+    } else {
+        var buf: [32]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "got {d}/3", .{received}) catch "e";
+        reportResult("client_async_wildcard", false, msg);
+    }
+}
+
+// ClientAsync Test 6: Multiple subs to same subject
+
+pub fn testClientAsyncDuplicateSubs(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const publisher = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("client_async_dup_subs", false, "pub connect failed");
+        return;
+    };
+    defer publisher.deinit(allocator);
+
+    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("client_async_dup_subs", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    // Two subs to same subject
+    const sub1 = client.subscribe(allocator, "async.dup") catch {
+        reportResult("client_async_dup_subs", false, "sub1 failed");
+        return;
+    };
+    defer sub1.deinit(allocator);
+
+    const sub2 = client.subscribe(allocator, "async.dup") catch {
+        reportResult("client_async_dup_subs", false, "sub2 failed");
+        return;
+    };
+    defer sub2.deinit(allocator);
+
+    client.flush() catch {};
+
+    // Wait for subscriptions to register server-side
+    std.posix.nanosleep(0, 50_000_000);
+
+    publisher.publish("async.dup", "hello") catch {};
+    publisher.flush() catch {};
+
+    // Use async/await - reader task routes messages automatically
+    // Both subscriptions should receive the same message
+    var future1 = io.io().async(nats.ClientAsync.Sub.next, .{ sub1, io.io() });
+    defer if (future1.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+
+    var future2 = io.io().async(nats.ClientAsync.Sub.next, .{ sub2, io.io() });
+    defer if (future2.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+
+    const got1 = if (future1.await(io.io())) |_| true else |_| false;
+    const got2 = if (future2.await(io.io())) |_| true else |_| false;
+
+    if (got1 and got2) {
+        reportResult("client_async_dup_subs", true, "");
+    } else {
+        reportResult("client_async_dup_subs", false, "not both received");
+    }
+}
+
+// ClientAsync Test 7: Statistics tracking
+
+pub fn testClientAsyncQueueGroup(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const publisher = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("client_async_queue_group", false, "pub connect failed");
+        return;
+    };
+    defer publisher.deinit(allocator);
+
+    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("client_async_queue_group", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    // Subscribe with queue group
+    const sub = client.subscribeQueue(allocator, "async.qg", "workers") catch {
+        reportResult("client_async_queue_group", false, "sub failed");
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    client.flush() catch {};
+
+    // Wait for subscription to register server-side
+    std.posix.nanosleep(0, 50_000_000);
+
+    publisher.publish("async.qg", "task") catch {};
+    publisher.flush() catch {};
+
+    // Use async/await - reader task routes messages automatically
+    var future = io.io().async(nats.ClientAsync.Sub.next, .{ sub, io.io() });
+    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+
+    if (future.await(io.io())) |_| {
+        reportResult("client_async_queue_group", true, "");
+        return;
+    } else |_| {}
+
+    reportResult("client_async_queue_group", false, "no message");
+}
+
+// NEW TESTS: Connection & Lifecycle
+
+// Test: Connection refused error handling
+
+pub fn testAsyncWildcardMatching(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("async_wildcard_matching", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    const sub = client.subscribe(allocator, "async.wc.*") catch {
+        reportResult("async_wildcard_matching", false, "sub failed");
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    client.flush() catch {};
+
+    // Publish to matching subject
+    client.publish("async.wc.test", "msg") catch {};
+    client.flush() catch {};
+
+    var future = io.io().async(nats.ClientAsync.Sub.next, .{ sub, io.io() });
+    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+
+    if (future.await(io.io())) |_| {
+        reportResult("async_wildcard_matching", true, "");
+        return;
+    } else |_| {}
+
+    reportResult("async_wildcard_matching", false, "no match");
+}
+
+// Test: Wildcard > matching
+
+pub fn testAsyncWildcardGreater(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("async_wildcard_greater", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    const sub = client.subscribe(allocator, "async.gt.>") catch {
+        reportResult("async_wildcard_greater", false, "sub failed");
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    client.flush() catch {};
+
+    // Publish to deeply nested subject
+    client.publish("async.gt.a.b.c", "msg") catch {};
+    client.flush() catch {};
+
+    var future = io.io().async(nats.ClientAsync.Sub.next, .{ sub, io.io() });
+    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+
+    if (future.await(io.io())) |_| {
+        reportResult("async_wildcard_greater", true, "");
+        return;
+    } else |_| {}
+
+    reportResult("async_wildcard_greater", false, "no match");
+}
+
+// Test: Subject case sensitivity
+
+pub fn testAsyncSubjectCaseSensitivity(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("async_subject_case", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    // Subscribe to lowercase
+    const sub = client.subscribe(allocator, "async.case.test") catch {
+        reportResult("async_subject_case", false, "sub failed");
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    client.flush() catch {};
+
+    // Publish to exact match
+    client.publish("async.case.test", "msg") catch {};
+    client.flush() catch {};
+
+    var future = io.io().async(nats.ClientAsync.Sub.next, .{ sub, io.io() });
+    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+
+    if (future.await(io.io())) |_| {
+        reportResult("async_subject_case", true, "");
+        return;
+    } else |_| {}
+
+    reportResult("async_subject_case", false, "no match");
+}
+
+// Test: Unsubscribe stops delivery
+
+pub fn testAsyncUnsubscribeStopsDelivery(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("async_unsub_stops", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    const sub = client.subscribe(allocator, "async.unsub.test") catch {
+        reportResult("async_unsub_stops", false, "sub failed");
+        return;
+    };
+
+    client.flush() catch {};
+
+    // Unsubscribe
+    sub.unsubscribe() catch {};
+    sub.deinit(allocator);
+
+    // Publish after unsubscribe - should not receive
+    client.publish("async.unsub.test", "msg") catch {};
+    client.flush() catch {};
+
+    // Brief sleep to allow any potential delivery
+    std.posix.nanosleep(0, 10_000_000);
+
+    // Client should still be connected
+    if (client.isConnected()) {
+        reportResult("async_unsub_stops", true, "");
+    } else {
+        reportResult("async_unsub_stops", false, "disconnected");
+    }
+}
+
+// NEW TESTS: Multi-Client Patterns
+
+// Test: Cross-client message routing
+
+pub fn testAsyncHierarchicalSubject(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("async_hierarchical", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    // Deep hierarchical subject
+    const subject = "a.b.c.d.e.f.g.h";
+    const sub = client.subscribe(allocator, subject) catch {
+        reportResult("async_hierarchical", false, "sub failed");
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    client.publish(subject, "deep") catch {
+        reportResult("async_hierarchical", false, "pub failed");
+        return;
+    };
+    client.flush() catch {};
+
+    var future = io.io().async(nats.ClientAsync.Sub.next, .{ sub, io.io() });
+    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+
+    if (future.await(io.io())) |_| {
+        reportResult("async_hierarchical", true, "");
+        return;
+    } else |_| {}
+
+    reportResult("async_hierarchical", false, "no message");
+}
+
+// Authentication & Server Management Tests
+
+/// Test: Authentication with valid token
+/// Runs all async subscribe tests.
+pub fn runAll(allocator: std.mem.Allocator) void {
+    testClientAsyncManySubs(allocator);
+    testClientAsyncWildcard(allocator);
+    testClientAsyncDuplicateSubs(allocator);
+    testClientAsyncQueueGroup(allocator);
+    testAsyncWildcardMatching(allocator);
+    testAsyncWildcardGreater(allocator);
+    testAsyncSubjectCaseSensitivity(allocator);
+    testAsyncUnsubscribeStopsDelivery(allocator);
+    testAsyncHierarchicalSubject(allocator);
+}

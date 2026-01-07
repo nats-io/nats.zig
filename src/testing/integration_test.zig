@@ -8,8 +8,8 @@ const nats = @import("nats");
 
 // Import shared test utilities
 const utils = @import("test_utils.zig");
-const client_tests = @import("client_tests.zig");
-const client_async_tests = @import("client_async_tests.zig");
+const client_tests = @import("client/tests.zig");
+const client_async_tests = @import("client_async/tests.zig");
 
 const ServerManager = utils.ServerManager;
 
