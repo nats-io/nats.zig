@@ -43,6 +43,8 @@ pub const Options = struct {
     auth_token: ?[]const u8 = null,
     /// Connection timeout in nanoseconds.
     connect_timeout_ns: u64 = 5_000_000_000,
+    /// Per-subscription async queue size (for ClientAsync).
+    async_queue_size: u16 = 256,
 };
 
 /// Connection statistics (Go client parity).

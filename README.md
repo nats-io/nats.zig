@@ -2,18 +2,19 @@
 
 Production-grade NATS client library for Zig 0.16+.
 
-Built on `std.Io` for native async support. The client stores Io internally
-for connection-scoped state, providing a clean API without io parameters.
+Built on `std.Io` for native async support with two client types:
+- **Client** - Sync, poll-based for simple use cases
+- **ClientAsync** - Background reader with `Io.Queue` per subscription
 
 ## Features
 
 - Native Zig implementation (zero C dependencies)
 - Built on `std.Io` for async-aware I/O
+- Two client types: sync polling or async queues
 - Zero-copy message handling
 - Go-inspired API design
 - Tiger-style pre-allocation for predictable performance
-- Event queues (not callbacks)
-- Full cancellation support
+- Full cancellation support via `std.Io.Future`
 
 ## Requirements
 
@@ -45,64 +46,120 @@ exe.root_module.addImport("nats", nats.module("nats"));
 
 ## Quick Start
 
+### Sync Client (Simple Polling)
+
 ```zig
 const std = @import("std");
 const nats = @import("nats");
 
 pub fn main() !void {
-    // Set up allocator
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Set up Io implementation (Andrew Kelley pattern)
-    var threaded: std.Io.Threaded = .init(allocator, .{});
+    // Setup Io (Andrew Kelley pattern)
+    var threaded: std.Io.Threaded = .init(allocator);
     defer threaded.deinit();
     const io = threaded.io();
 
-    // Connect to NATS (io passed only here)
-    const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
-        .name = "my-app",
-    });
+    // Connect
+    const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{});
     defer client.deinit(allocator);
 
-    // Publish a message
+    // Subscribe
+    const sub = try client.subscribe(allocator, "greet.*");
+    defer sub.deinit(allocator);
+
+    // Publish
     try client.publish("greet.hello", "Hello, NATS!");
     try client.flush();
 
-    // Subscribe and receive
-    const sub = try client.subscribe(allocator, "greet.*");
-    defer sub.cancel() catch {};
-
-    if (try sub.nextMessage(allocator, .{ .timeout_ms = 1000 })) |msg| {
-        defer msg.deinit(allocator);
+    // Poll for message (zero-copy)
+    if (try client.pollDirect(allocator, 1000)) |msg| {
         std.debug.print("Received: {s}\n", .{msg.data});
+        client.tossPending();  // Release buffer
     }
 }
 ```
 
-## API Reference
-
-### Client
-
-#### Connection
+### Async Client (Multiple Subscriptions)
 
 ```zig
-// Connect to NATS server (io passed only at connection time)
-const client = try nats.Client.connect(allocator, io, url, .{
-    .name = "app-name",           // Optional client name
-    .verbose = false,             // Protocol verbosity
-    .pedantic = false,            // Strict protocol checking
-    .connect_timeout_ms = 5000,   // Connection timeout
+const std = @import("std");
+const nats = @import("nats");
+
+pub fn main() !void {
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    // Connect (starts background reader automatically)
+    const client = try nats.ClientAsync.connect(allocator, io, "nats://localhost:4222", .{});
+    defer client.deinit(allocator);
+
+    // Create multiple subscriptions
+    const sub1 = try client.subscribe(allocator, "events.a");
+    defer sub1.deinit(allocator);
+
+    const sub2 = try client.subscribe(allocator, "events.b");
+    defer sub2.deinit(allocator);
+
+    // Publish test messages
+    try client.publish("events.a", "Event A");
+    try client.publish("events.b", "Event B");
+    try client.flush();
+
+    // Receive from each subscription (blocking)
+    const msg1 = try sub1.next(io);
+    defer msg1.deinit(allocator);
+    std.debug.print("Sub1: {s}\n", .{msg1.data});
+
+    const msg2 = try sub2.next(io);
+    defer msg2.deinit(allocator);
+    std.debug.print("Sub2: {s}\n", .{msg2.data});
+}
+```
+
+## When to Use Which
+
+| Scenario | Recommendation |
+|----------|----------------|
+| Single subscription, simple polling | **Client** |
+| Multiple subscriptions, concurrent handling | **ClientAsync** |
+| Request/reply with timeout | Both work, **ClientAsync** preferred |
+| High-throughput pub/sub | **ClientAsync** |
+| Low-latency, zero-copy receives | **Client** with `pollDirect()` |
+| Background message processing | **ClientAsync** |
+
+## Client (Sync) API
+
+The sync client uses poll-based message retrieval. You explicitly call `poll()`
+or `pollDirect()` to check for incoming messages.
+
+### Connection
+
+```zig
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    .name = "my-app",           // Optional client name
+    .verbose = false,           // Protocol verbosity
+    .pedantic = false,          // Strict protocol checking
+    .user = "user",             // Optional username
+    .pass = "pass",             // Optional password
+    .auth_token = "token",      // Optional auth token
+    .connect_timeout_ns = 5_000_000_000,  // 5 second timeout
 });
 defer client.deinit(allocator);
 
-// Check connection status
-const connected = client.isConnected();
+// Check connection
+if (client.isConnected()) { ... }
 const info = client.getServerInfo();
 ```
 
-#### Publishing
+### Publishing
 
 ```zig
 // Simple publish
@@ -113,178 +170,70 @@ try client.publishRequest("subject", "reply.inbox", "payload");
 
 // Flush pending writes
 try client.flush();
-try client.flushWithTimeout(5000);  // With timeout
+try client.flushWithTimeout(5000);  // With timeout (ms)
 
 // Ping server
 try client.ping();
 ```
 
-#### Request/Reply
-
-```zig
-// Send request and wait for reply
-if (try client.request(allocator, "service.add", "1+2", 5000)) |reply| {
-    defer reply.deinit(allocator);
-    std.debug.print("Result: {s}\n", .{reply.data});
-}
-```
-
-### Subscriptions
-
-#### Creating Subscriptions
+### Subscribing
 
 ```zig
 // Simple subscription
 const sub = try client.subscribe(allocator, "events.>");
-defer sub.cancel() catch {};
+defer sub.deinit(allocator);
 
 // Queue subscription (load balancing)
 const qsub = try client.subscribeQueue(allocator, "tasks.*", "workers");
-defer qsub.cancel() catch {};
+defer qsub.deinit(allocator);
+
+// Unsubscribe
+try client.unsubscribe(allocator, sub);
 ```
 
-#### Receiving Messages
+### Receiving Messages
 
-**Blocking with timeout (Go-style):**
+**Poll-based (routes to subscription queues):**
 
 ```zig
-while (try sub.nextMessage(allocator, .{ .timeout_ms = 1000 })) |msg| {
-    defer msg.deinit(allocator);
+// Poll for messages (routes MSG to subscription queues)
+while (try client.poll(allocator, 1000)) {
+    // Messages routed to subscription.messages queue
+}
 
+// Get message from subscription queue
+while (sub.messages.pop()) |msg| {
+    defer msg.deinit(allocator);
+    std.debug.print("Subject: {s}, Data: {s}\n", .{ msg.subject, msg.data });
+}
+```
+
+**Zero-copy direct polling:**
+
+```zig
+// Poll directly - returns zero-copy slice into read buffer
+if (try client.pollDirect(allocator, 1000)) |msg| {
     std.debug.print("Subject: {s}\n", .{msg.subject});
     std.debug.print("Data: {s}\n", .{msg.data});
 
-    // Reply if requested
-    if (msg.reply_to) |reply| {
-        try client.publish(reply, "response");
-    }
+    // IMPORTANT: Release buffer before next pollDirect
+    client.tossPending();
 }
 ```
 
-**Async with Future:**
+### Request/Reply
 
 ```zig
-// Launch async receive - runs in background
-var future = sub.nextMessageAsync(allocator);
-defer if (future.cancel(io)) |m| {
-    if (m) |msg| msg.deinit(allocator);
-} else |_| {};
-
-// Do other work while waiting...
-
-// Await result - DON'T call deinit here, defer handles cleanup!
-// cancel() and await() are idempotent - they return the same result
-if (try future.await(io)) |msg| {
-    processMessage(msg);
-}
-// When scope exits, defer runs cancel() which frees the message
-```
-
-**Parallel operations:**
-
-For true parallel async receives, use separate clients (each client has one
-connection, so concurrent async receives on the same client would contend
-for the same stream):
-
-```zig
-// Client A with its own connection
-var io_a: std.Io.Threaded = .init(allocator, .{});
-const client_a = try nats.Client.connect(allocator, io_a.io(), url, .{});
-const sub_a = try client_a.subscribe(allocator, "events.a");
-
-// Client B with its own connection
-var io_b: std.Io.Threaded = .init(allocator, .{});
-const client_b = try nats.Client.connect(allocator, io_b.io(), url, .{});
-const sub_b = try client_b.subscribe(allocator, "events.b");
-
-// Launch parallel receives (each on its own connection)
-var future_a = sub_a.nextMessageAsync(allocator);
-defer if (future_a.cancel(io_a.io())) |m| {
-    if (m) |msg| msg.deinit(allocator);
-} else |_| {};
-
-var future_b = sub_b.nextMessageAsync(allocator);
-defer if (future_b.cancel(io_b.io())) |m| {
-    if (m) |msg| msg.deinit(allocator);
-} else |_| {};
-
-// Await both - defers handle cleanup
-const msg_a = try future_a.await(io_a.io());
-const msg_b = try future_b.await(io_b.io());
-```
-
-#### Unsubscribing
-
-```zig
-// Immediate unsubscribe
-try sub.unsubscribe();
-
-// Graceful drain (finish pending messages)
-try sub.drain(allocator, .{ .timeout_ms = 5000 });
-
-// Cancel (recommended - use with defer)
-sub.cancel() catch {};
-```
-
-### Messages
-
-```zig
-pub const Message = struct {
-    subject: []const u8,      // Message subject
-    sid: u64,                 // Subscription ID
-    reply_to: ?[]const u8,    // Reply inbox (for requests)
-    data: []const u8,         // Message payload
-    headers: ?[]const u8,     // NATS headers (if any)
-
-    pub fn deinit(self: *const Message, allocator: Allocator) void;
-};
-```
-
-**Zero-copy vs Owned:**
-
-- Messages from `nextMessage()` are zero-copy slices into the read buffer
-- Valid only until the next `poll()` or `nextMessage()` call
-- Use `nextMessageOwned()` for messages that outlive the poll cycle
-
-### Events
-
-```zig
-// Process client events
-while (client.nextEvent()) |event| {
-    switch (event) {
-        .connected => |info| {
-            std.debug.print("Connected to {s}\n", .{info.server_name});
-        },
-        .disconnected => |info| {
-            std.debug.print("Disconnected: {s}\n", .{info.reason});
-        },
-        .message => |msg| {
-            // Handle message
-        },
-        .server_error => |err| {
-            std.debug.print("Server error: {s}\n", .{err});
-        },
-    }
+// Send request and wait for reply (timeout in ms)
+if (try client.request(allocator, "service.add", "1+2", 5000)) |reply| {
+    std.debug.print("Result: {s}\n", .{reply.data});
+    client.tossPending();  // Release buffer
 }
 ```
 
-## Design Philosophy
+### Async Variants
 
-### Dual API: Sync and Async
-
-This library provides both synchronous and asynchronous APIs:
-
-**Synchronous (Go-style):**
-- `nextMessage()` - blocks with optional timeout
-- Simple, predictable control flow
-- Good for single-threaded consumers
-
-**Asynchronous (Future-based):**
-- `nextMessageAsync()` - returns `std.Io.Future`
-- `flushAsync()`, `requestAsync()` - async client operations
-- Enables parallel operations
-- Cancellation via `future.cancel(io)`
-- Follows Zig 0.16 `io.async()` patterns
+The sync Client provides async variants that return `std.Io.Future`:
 
 ```zig
 // Async flush
@@ -294,63 +243,292 @@ try flush_future.await(io);
 
 // Async request/reply
 var req_future = client.requestAsync(allocator, "service", "data", 5000);
-defer _ = req_future.cancel(io) catch {};
+defer if (req_future.cancel(io)) |m| {
+    if (m) |msg| client.tossPending();
+} else |_| {};
+
 if (try req_future.await(io)) |reply| {
     std.debug.print("Reply: {s}\n", .{reply.data});
 }
 ```
 
-### Connection-Scoped Io
-
-This client follows a connection-scoped pattern for `std.Io`:
-
-1. **Io stored in Client** - Passed once at `connect()`, stored for lifetime
-2. **Reader/Writer stored** - Preserves buffer state across method calls
-3. **Never stores Allocator** - Allocator passed to methods that allocate
-
-This design enables:
-- Clean API without io parameters on every method
-- Correct buffer state preservation (Reader/Writer store seek positions)
-- Same code works with blocking, threaded, or evented I/O
-
-### Memory Management
-
-- **Slab allocator** for fast message allocation
-- **Pre-allocated slots** for subscriptions (Tiger-style)
-- **Zero-copy** when possible, owned copies when needed
-- **No allocations** in hot paths (publish, poll)
-
-### The Golden Patterns
-
-**Sync - always defer cancel:**
+### Drain and Cleanup
 
 ```zig
-const sub = try client.subscribe(allocator, subject);
-defer sub.cancel() catch {};  // ALWAYS defer cancel
-// ... use subscription ...
+// Graceful drain (unsubscribes all, flushes, closes)
+try client.drain(allocator);
+
+// Or just close
+client.deinit(allocator);
 ```
 
-**Async - always defer cancel on futures:**
+## ClientAsync API
+
+The async client runs a background reader task via `io.concurrent()` that
+automatically routes incoming messages to per-subscription `Io.Queue` instances.
+
+### Connection
 
 ```zig
-var future = sub.nextMessageAsync(allocator);
-defer if (future.cancel(io)) |m| {
-    if (m) |msg| msg.deinit(allocator);
-} else |_| {};
+const client = try nats.ClientAsync.connect(allocator, io, "nats://localhost:4222", .{
+    .name = "my-app",
+    .async_queue_size = 256,  // Per-subscription queue size
+});
+defer client.deinit(allocator);
+// Background reader starts automatically
+```
 
-// Use the result - DON'T call deinit() here!
-// cancel() and await() are idempotent - return same result
-if (try future.await(io)) |msg| {
-    processMessage(msg);
+### Publishing
+
+Same as sync Client:
+
+```zig
+try client.publish("subject", "payload");
+try client.publishRequest("subject", "reply.inbox", "payload");
+try client.flush();
+```
+
+### Subscribing
+
+```zig
+// Simple subscription (returns Sub with Io.Queue)
+const sub = try client.subscribe(allocator, "events.>");
+defer sub.deinit(allocator);
+
+// Queue subscription
+const qsub = try client.subscribeQueue(allocator, "tasks.*", "workers");
+defer qsub.deinit(allocator);
+
+// Unsubscribe
+try sub.unsubscribe();
+```
+
+### Receiving Messages
+
+**Blocking receive:**
+
+```zig
+// Blocks until message available (uses Io.Queue.getOne)
+const msg = try sub.next(io);
+defer msg.deinit(allocator);
+std.debug.print("Received: {s}\n", .{msg.data});
+```
+
+**Non-blocking check:**
+
+```zig
+// Returns immediately, null if no message
+if (sub.tryNext()) |msg| {
+    defer msg.deinit(allocator);
+    std.debug.print("Got: {s}\n", .{msg.data});
 }
-// Defer handles cleanup when scope exits
 ```
 
-This pattern works because:
-- `cancel()` and `await()` are **idempotent** - both return the same result
-- If the operation completed, `cancel()` returns the result (not an error)
-- The defer frees the message regardless of how the scope exits
-- Never call `msg.deinit()` after `await()` when using this pattern!
+**With timeout:**
+
+```zig
+// Blocks up to timeout_ms, returns null on timeout
+if (try sub.nextWithTimeout(allocator, 5000)) |msg| {
+    defer msg.deinit(allocator);
+    std.debug.print("Got: {s}\n", .{msg.data});
+} else {
+    std.debug.print("Timeout\n", .{});
+}
+```
+
+### Request/Reply
+
+```zig
+// Send request and wait for reply
+if (try client.request(allocator, "service.add", "1+2", 5000)) |reply| {
+    defer reply.deinit(allocator);
+    std.debug.print("Result: {s}\n", .{reply.data});
+}
+```
+
+### Drain and Cleanup
+
+```zig
+// Graceful drain
+try client.drain(allocator);
+
+// Or just close
+client.deinit(allocator);
+```
+
+## Async Patterns with std.Io
+
+### The Golden Pattern
+
+Always defer cancel when using `io.async()`:
+
+```zig
+var future = io.async(someFn, .{args});
+defer future.cancel(io) catch {};  // ALWAYS defer cancel
+const result = try future.await(io);
+```
+
+### Wrapping sub.next() in a Future
+
+```zig
+// Launch async receive
+var future = io.async(nats.ClientAsync.Sub.next, .{ sub, io });
+
+// Defer handles cleanup (cancel and await are idempotent)
+defer if (future.cancel(io)) |msg| msg.deinit(allocator) else |_| {};
+
+// Do other work while waiting...
+
+// Await result
+const msg = try future.await(io);
+std.debug.print("Received: {s}\n", .{msg.data});
+```
+
+### Wait for First of Multiple Subscriptions
+
+Use `io.select()` to wait for the first message from any subscription:
+
+```zig
+// Create futures for each subscription
+var f1 = io.async(nats.ClientAsync.Sub.next, .{ sub1, io });
+var f2 = io.async(nats.ClientAsync.Sub.next, .{ sub2, io });
+
+// Wait for first to complete
+const result = io.select(.{
+    .sub1 = &f1,
+    .sub2 = &f2,
+}) catch |err| {
+    // On error, cancel both
+    if (f1.cancel(io)) |m| m.deinit(allocator) else |_| {}
+    if (f2.cancel(io)) |m| m.deinit(allocator) else |_| {}
+    return err;
+};
+
+switch (result) {
+    .sub1 => |msg_result| {
+        // sub1 won - cancel sub2
+        if (f2.cancel(io)) |m| m.deinit(allocator) else |_| {}
+        const msg = try msg_result;
+        defer msg.deinit(allocator);
+        std.debug.print("Sub1 received: {s}\n", .{msg.data});
+    },
+    .sub2 => |msg_result| {
+        // sub2 won - cancel sub1
+        if (f1.cancel(io)) |m| m.deinit(allocator) else |_| {}
+        const msg = try msg_result;
+        defer msg.deinit(allocator);
+        std.debug.print("Sub2 received: {s}\n", .{msg.data});
+    },
+}
+```
+
+### Timeout with io.select()
+
+```zig
+fn sleepMs(io: std.Io, ms: u32) void {
+    io.sleep(.fromMilliseconds(ms), .awake) catch {};
+}
+
+// Receive with custom timeout using select
+var recv_future = io.async(nats.ClientAsync.Sub.next, .{ sub, io });
+var timeout_future = io.async(sleepMs, .{ io, 5000 });
+
+const result = io.select(.{
+    .message = &recv_future,
+    .timeout = &timeout_future,
+}) catch |err| {
+    _ = timeout_future.cancel(io);
+    if (recv_future.cancel(io)) |m| m.deinit(allocator) else |_| {}
+    return err;
+};
+
+switch (result) {
+    .message => |msg_result| {
+        _ = timeout_future.cancel(io);  // Cancel unused timeout
+        const msg = try msg_result;
+        defer msg.deinit(allocator);
+        std.debug.print("Received: {s}\n", .{msg.data});
+    },
+    .timeout => |_| {
+        // Cancel recv and clean up
+        if (recv_future.cancel(io)) |m| m.deinit(allocator) else |_| {}
+        std.debug.print("Timeout!\n", .{});
+    },
+}
+```
+
+## Architecture
+
+### Client (Sync) - Poll-Based
+
+```
+User Code                          Client
+    |                                |
+    +-- client.poll() ------------->+
+    |                               | reads socket
+    |                               | parses MSG/HMSG
+    |                               | routes to sub.messages queue
+    |                               |
+    +-- sub.messages.pop() -------->+ returns message
+    |                                |
+```
+
+### ClientAsync - Background Reader
+
+```
+ClientAsync.connect()
+    |
+    +-- io.concurrent(readerTaskFn)
+           |
+           +-- [Background Task] ----+
+                    |                 |
+                    | loop:           |
+                    |   read socket   |
+                    |   parse command |
+                    |   route MSG --> Io.Queue(sub1)
+                    |   route MSG --> Io.Queue(sub2)
+                    |   ...           |
+                    +-----------------|
+
+User Code                          Subscription
+    |                                |
+    +-- sub.next(io) -------------->+
+    |                               | queue.getOne(io)  [blocks]
+    |                               | <-- message from background reader
+    +<-- msg -----------------------+
+```
+
+## Message Types
+
+### Client.DirectMsg (zero-copy)
+
+```zig
+pub const DirectMsg = struct {
+    subject: []const u8,      // Slice into read buffer
+    sid: u64,                 // Subscription ID
+    reply_to: ?[]const u8,    // Reply inbox (slice)
+    data: []const u8,         // Payload (slice)
+    headers: ?[]const u8,     // NATS headers (slice)
+    consumed: usize,          // Bytes consumed
+};
+// Valid only until client.tossPending() or next pollDirect()
+```
+
+### ClientAsync.Message (owned)
+
+```zig
+pub const Message = struct {
+    subject: []const u8,      // Owned copy
+    sid: u64,
+    reply_to: ?[]const u8,    // Owned copy
+    data: []const u8,         // Owned copy
+    headers: ?[]const u8,     // Owned copy
+    owned: bool,
+
+    pub fn deinit(self: *const Message, allocator: Allocator) void;
+};
+// Must call deinit() when done
+```
 
 ## Examples
 
@@ -412,40 +590,26 @@ nats bench sub test.subject --msgs=100000
 
 ## Error Handling
 
-All I/O operations return errors that should be handled:
-
 ```zig
 client.publish(subject, data) catch |err| switch (err) {
-    error.ConnectionClosed => {
-        // Reconnect logic
+    error.NotConnected => {
+        // Connection lost
     },
-    error.InvalidSubject => {
-        // Invalid subject format
+    error.EncodingFailed => {
+        // Protocol encoding error
     },
     else => return err,
 };
 ```
 
 Common errors:
-- `error.ConnectionClosed` - Server disconnected
-- `error.Timeout` - Operation timed out
-- `error.InvalidSubject` - Malformed subject
-- `error.MaxPayloadExceeded` - Message too large
+- `error.NotConnected` - Not connected to server
+- `error.ConnectionFailed` - Failed to connect
+- `error.InvalidAddress` - Invalid server address
+- `error.AuthorizationViolation` - Auth failed
+- `error.ProtocolError` - Protocol parse error
+- `error.TooManySubscriptions` - Subscription limit reached
 - `error.Canceled` - Operation was cancelled
-
-## Thread Safety
-
-- Single `Client` instance is NOT thread-safe
-- Use separate clients per thread, or synchronize access
-- `Subscription` message queues are thread-safe for multi-consumer patterns
-
-## Async Considerations
-
-- Each client has **one connection** to the server
-- Multiple async receives on same client poll the same connection stream
-- For true parallel async receives, use **separate clients**
-- `flushAsync()` and `requestAsync()` work on the same client (they don't
-  compete for the receive buffer)
 
 ## Status
 
@@ -454,6 +618,8 @@ Common errors:
 | Core Protocol | Complete |
 | Pub/Sub | Complete |
 | Request/Reply | Complete |
+| Client (Sync) | Complete |
+| ClientAsync | Complete |
 | JetStream | Planned |
 | Key-Value | Planned |
 | Object Store | Planned |

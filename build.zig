@@ -132,6 +132,52 @@ pub fn build(b: *std.Build) void {
     run_bench_sub.dependOn(&bench_sub_cmd.step);
     bench_sub_cmd.step.dependOn(b.getInstallStep());
 
+    // Async publisher benchmark (ClientAsync)
+    const bench_pub_async_exe = b.addExecutable(.{
+        .name = "bench-pub-async",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/bench-pub-async.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(bench_pub_async_exe);
+
+    const run_bench_pub_async = b.step(
+        "run-bench-pub-async",
+        "Run async publisher benchmark (pass args after --)",
+    );
+    const bench_pub_async_cmd = b.addRunArtifact(bench_pub_async_exe);
+    if (b.args) |args| bench_pub_async_cmd.addArgs(args);
+    run_bench_pub_async.dependOn(&bench_pub_async_cmd.step);
+    bench_pub_async_cmd.step.dependOn(b.getInstallStep());
+
+    // Async subscriber benchmark (ClientAsync with Io.Queue)
+    const bench_sub_async_exe = b.addExecutable(.{
+        .name = "bench-sub-async",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/bench-sub-async.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(bench_sub_async_exe);
+
+    const run_bench_sub_async = b.step(
+        "run-bench-sub-async",
+        "Run async subscriber benchmark (pass args after --)",
+    );
+    const bench_sub_async_cmd = b.addRunArtifact(bench_sub_async_exe);
+    if (b.args) |args| bench_sub_async_cmd.addArgs(args);
+    run_bench_sub_async.dependOn(&bench_sub_async_cmd.step);
+    bench_sub_async_cmd.step.dependOn(b.getInstallStep());
+
     // Performance benchmark orchestrator (multi-client comparison)
     const perf_bench_exe = b.addExecutable(.{
         .name = "perf-bench",

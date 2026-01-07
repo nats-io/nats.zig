@@ -43,6 +43,10 @@ pub const client = @import("client.zig");
 pub const Client = client.Client;
 pub const Stats = client.Stats;
 
+// Re-export async client
+pub const client_async = @import("client_async.zig");
+pub const ClientAsync = client_async.ClientAsync;
+
 // Convenience re-exports for common types
 pub const Message = types.Message;
 pub const Options = types.Options;

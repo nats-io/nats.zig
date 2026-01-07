@@ -1,7 +1,7 @@
-//! NATS Publisher Benchmark
+//! NATS Async Publisher Benchmark
 //!
-//! Measures publish throughput to a NATS server.
-//! Usage: bench-pub <subject> [--msgs=N] [--size=NB]
+//! Measures publish throughput using ClientAsync.
+//! Usage: bench-pub-async <subject> [--msgs=N] [--size=NB]
 
 const std = @import("std");
 const nats = @import("nats");
@@ -71,25 +71,26 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     if (bench.TimeOfDay.now()) |tod| {
         var buf: [8]u8 = undefined;
         std.debug.print(
-            "{s} Starting publisher benchmark " ++
+            "{s} Starting async publisher benchmark " ++
                 "[msgs={d}, size={d}B, subject={s}]\n",
             .{ tod.format(&buf), config.msgs, config.size, config.subject },
         );
     } else {
         std.debug.print(
-            "Starting publisher benchmark " ++
+            "Starting async publisher benchmark " ++
                 "[msgs={d}, size={d}B, subject={s}]\n",
             .{ config.msgs, config.size, config.subject },
         );
     }
 
-    // Create I/O and connect
+    // Create I/O
     var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
-    const client = nats.Client.connect(allocator, io, config.url, .{
-        .name = "bench-pub",
+    // Connect using ClientAsync
+    const client = nats.ClientAsync.connect(allocator, io, config.url, .{
+        .name = "bench-pub-async",
     }) catch |err| {
         std.debug.print("Failed to connect: {}\n", .{err});
         return err;
@@ -107,7 +108,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         return error.TimerUnavailable;
     };
 
-    // Publish loop
+    // Publish loop - tight loop, no syscalls per message
     var i: u64 = 0;
     while (i < config.msgs) : (i += 1) {
         client.publish(config.subject, payload) catch |err| {
@@ -116,7 +117,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         };
     }
 
-    // Flush
+    // Single flush at end
     client.flush() catch |err| {
         std.debug.print("Flush failed: {}\n", .{err});
         return err;
@@ -129,12 +130,14 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         .msg_count = config.msgs,
         .total_bytes = config.msgs * config.size,
     };
-    stats.print("publisher");
+    stats.print("async publisher");
 }
 
 fn printUsage() void {
     std.debug.print(
-        \\Usage: bench-pub <subject> [options]
+        \\Usage: bench-pub-async <subject> [options]
+        \\
+        \\Async publisher benchmark using ClientAsync.
         \\
         \\Arguments:
         \\  <subject>       Subject to publish to (required)
@@ -146,9 +149,9 @@ fn printUsage() void {
         \\  --url=URL       NATS server URL (default: nats://127.0.0.1:4222)
         \\
         \\Examples:
-        \\  bench-pub test.subject
-        \\  bench-pub test.subject --msgs=1000000 --size=256B
-        \\  bench-pub test.subject --size=1K
+        \\  bench-pub-async test.subject
+        \\  bench-pub-async test.subject --msgs=1000000 --size=256B
+        \\  bench-pub-async test.subject --size=1K
         \\
     , .{});
 }

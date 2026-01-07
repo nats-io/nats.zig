@@ -17,8 +17,6 @@ const WriteError = transport.WriteError;
 
 /// TCP transport for NATS connections.
 /// Wraps std.Io.net.Stream with buffered I/O.
-///
-/// NOTE: Io is NOT stored - pass to all I/O methods per std.Io philosophy.
 pub const TcpTransport = struct {
     stream: net.Stream,
     read_buffer: [8192]u8,

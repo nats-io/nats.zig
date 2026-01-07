@@ -25,10 +25,19 @@ pub const Message = struct {
     data: []const u8,
     headers: ?[]const u8,
     owned: bool = false,
+    /// Single backing buffer (when set, all slices point into this).
+    /// Enables single allocation per message for async client.
+    backing_buf: ?[]u8 = null,
 
     /// Frees owned message data. No-op for zero-copy messages.
     pub fn deinit(self: *const Message, allocator: Allocator) void {
         if (!self.owned) return;
+        // Fast path: single backing buffer (async client optimization)
+        if (self.backing_buf) |buf| {
+            allocator.free(buf);
+            return;
+        }
+        // Legacy path: separate allocations (sync client routed messages)
         allocator.free(self.subject);
         allocator.free(self.data);
         if (self.reply_to) |rt| allocator.free(rt);
