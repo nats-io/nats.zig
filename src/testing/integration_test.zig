@@ -8,8 +8,7 @@ const nats = @import("nats");
 
 // Import shared test utilities
 const utils = @import("test_utils.zig");
-const client_tests = @import("client/tests.zig");
-const client_async_tests = @import("client_async/tests.zig");
+const client_tests = @import("client_async/tests.zig");
 
 const ServerManager = utils.ServerManager;
 
@@ -57,7 +56,6 @@ pub fn main() !void {
     std.debug.print("\nRunning tests...\n\n", .{});
 
     client_tests.runAll(allocator, &manager);
-    client_async_tests.runAll(allocator, &manager);
 
     // Print summary
     const summary = utils.getSummary();

@@ -21,7 +21,7 @@ pub fn testClientAsyncBasic(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{
+    const client = nats.Client.connect(allocator, io.io(), url, .{
         .name = "async-client-test",
         .async_queue_size = 64,
     }) catch |err| {
@@ -59,7 +59,7 @@ pub fn testClientAsyncTryNext(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
         reportResult("client_async_try_next", false, "connect failed");
         return;
     };
@@ -89,7 +89,7 @@ pub fn testClientAsyncServerInfo(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
         reportResult("client_async_server_info", false, "connect failed");
         return;
     };
@@ -113,7 +113,7 @@ pub fn testClientAsyncRapidSubUnsub(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
         reportResult("client_async_rapid_sub", false, "connect failed");
         return;
     };
@@ -144,7 +144,74 @@ pub fn testClientAsyncRapidSubUnsub(allocator: std.mem.Allocator) void {
     }
 }
 
-// ClientAsync Test 10: High message rate
+pub fn testClientName(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.Client.connect(allocator, io.io(), url, .{
+        .name = "test-client-name",
+    }) catch {
+        reportResult("client_name_opt", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    if (client.isConnected()) {
+        reportResult("client_name_opt", true, "");
+    } else {
+        reportResult("client_name_opt", false, "not connected");
+    }
+}
+
+pub fn testClientVerbose(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.Client.connect(allocator, io.io(), url, .{
+        .verbose = true,
+    }) catch {
+        reportResult("client_verbose", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    // Publish and flush should work with verbose mode
+    client.publish("verbose.test", "data") catch {
+        reportResult("client_verbose", false, "publish failed");
+        return;
+    };
+    client.flush() catch {
+        reportResult("client_verbose", false, "flush failed");
+        return;
+    };
+
+    reportResult("client_verbose", true, "");
+}
+
+pub fn testMultipleConnectDisconnect(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    // Connect and disconnect 5 times in a row
+    for (0..5) |_| {
+        var io: std.Io.Threaded = .init(allocator, .{});
+        const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+            io.deinit();
+            reportResult("multi_connect_disconnect", false, "connect failed");
+            return;
+        };
+        client.deinit(allocator);
+        io.deinit();
+    }
+
+    reportResult("multi_connect_disconnect", true, "");
+}
 
 /// Runs all basic async tests.
 pub fn runAll(allocator: std.mem.Allocator) void {
@@ -152,4 +219,7 @@ pub fn runAll(allocator: std.mem.Allocator) void {
     testClientAsyncTryNext(allocator);
     testClientAsyncServerInfo(allocator);
     testClientAsyncRapidSubUnsub(allocator);
+    testClientName(allocator);
+    testClientVerbose(allocator);
+    testMultipleConnectDisconnect(allocator);
 }

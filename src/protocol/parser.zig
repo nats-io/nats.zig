@@ -76,58 +76,98 @@ pub const Parser = struct {
         const line = data[0..line_end];
         const header_len = line_end + 2;
 
-        // Parse based on command type
-        if (std.mem.startsWith(u8, line, "INFO ")) {
-            const json_data = line[5..];
-            var parsed = std.json.parseFromSlice(
-                ServerInfo,
-                allocator,
-                json_data,
-                .{ .ignore_unknown_fields = true },
-            ) catch return Error.InvalidJson;
-            defer parsed.deinit();
+        assert(line.len > 0);
 
-            const owned = OwnedServerInfo.fromParsed(allocator, parsed) catch
-                return error.OutOfMemory;
-            consumed.* = header_len;
-            return .{ .info = owned };
+        // First-byte dispatch for fast command detection
+        switch (line[0]) {
+            'M' => {
+                // MSG <subject> <sid> [reply-to] <size>
+                if (line.len >= 4 and line[1] == 'S' and
+                    line[2] == 'G' and line[3] == ' ')
+                {
+                    return parseFullMsgFast(data, line[4..], header_len, consumed);
+                }
+                return Error.InvalidCommand;
+            },
+            'H' => {
+                // HMSG <subject> <sid> [reply-to] <hdr_len> <total_len>
+                if (line.len >= 5 and line[1] == 'M' and line[2] == 'S' and
+                    line[3] == 'G' and line[4] == ' ')
+                {
+                    return parseFullHMsgFast(data, line[5..], header_len, consumed);
+                }
+                return Error.InvalidCommand;
+            },
+            'P' => {
+                // PING or PONG
+                if (line.len == 4) {
+                    if (line[1] == 'I' and line[2] == 'N' and line[3] == 'G') {
+                        consumed.* = header_len;
+                        return .ping;
+                    }
+                    if (line[1] == 'O' and line[2] == 'N' and line[3] == 'G') {
+                        consumed.* = header_len;
+                        return .pong;
+                    }
+                }
+                return Error.InvalidCommand;
+            },
+            '+' => {
+                // +OK
+                if (line.len == 3 and line[1] == 'O' and line[2] == 'K') {
+                    consumed.* = header_len;
+                    return .ok;
+                }
+                return Error.InvalidCommand;
+            },
+            '-' => {
+                // -ERR <message>
+                if (line.len >= 5 and line[1] == 'E' and line[2] == 'R' and
+                    line[3] == 'R' and line[4] == ' ')
+                {
+                    consumed.* = header_len;
+                    return .{ .err = line[5..] };
+                }
+                return Error.InvalidCommand;
+            },
+            'I' => {
+                // INFO <json>
+                if (line.len >= 5 and line[1] == 'N' and line[2] == 'F' and
+                    line[3] == 'O' and line[4] == ' ')
+                {
+                    const json_data = line[5..];
+                    var parsed = std.json.parseFromSlice(
+                        ServerInfo,
+                        allocator,
+                        json_data,
+                        .{ .ignore_unknown_fields = true },
+                    ) catch return Error.InvalidJson;
+                    defer parsed.deinit();
+
+                    const owned = OwnedServerInfo.fromParsed(
+                        allocator,
+                        parsed,
+                    ) catch return error.OutOfMemory;
+                    consumed.* = header_len;
+                    return .{ .info = owned };
+                }
+                return Error.InvalidCommand;
+            },
+            else => return Error.InvalidCommand,
         }
-
-        if (std.mem.eql(u8, line, "PING")) {
-            consumed.* = header_len;
-            return .ping;
-        }
-
-        if (std.mem.eql(u8, line, "PONG")) {
-            consumed.* = header_len;
-            return .pong;
-        }
-
-        if (std.mem.eql(u8, line, "+OK")) {
-            consumed.* = header_len;
-            return .ok;
-        }
-
-        if (std.mem.startsWith(u8, line, "-ERR ")) {
-            consumed.* = header_len;
-            return .{ .err = line[5..] };
-        }
-
-        if (std.mem.startsWith(u8, line, "MSG ")) {
-            return parseFullMsg(data, line[4..], header_len, consumed);
-        }
-
-        if (std.mem.startsWith(u8, line, "HMSG ")) {
-            return parseFullHMsg(data, line[5..], header_len, consumed);
-        }
-
-        return Error.InvalidCommand;
     }
 };
 
-/// Parse complete MSG in single pass.
+/// Verify trailing CRLF using u16 comparison (little-endian).
+inline fn verifyCRLF(data: []const u8, offset: usize) bool {
+    if (offset + 2 > data.len) return false;
+    const word = @as(u16, @bitCast([2]u8{ data[offset], data[offset + 1] }));
+    return word == 0x0A0D; // '\r\n' in little-endian
+}
+
+/// Parse complete MSG using manual byte scanning (no iterator allocation).
 /// Returns null if payload not yet available.
-inline fn parseFullMsg(
+inline fn parseFullMsgFast(
     data: []const u8,
     args_line: []const u8,
     header_len: usize,
@@ -136,37 +176,69 @@ inline fn parseFullMsg(
     assert(args_line.len > 0);
     assert(header_len > 0);
 
-    var it = std.mem.splitScalar(u8, args_line, ' ');
+    var i: usize = 0;
 
-    const subject = it.next() orelse return Parser.Error.InvalidArguments;
-    const sid_str = it.next() orelse return Parser.Error.InvalidArguments;
-
-    const sid = parseU64Fast(sid_str) catch
-        return Parser.Error.InvalidArguments;
-
-    var reply_to: ?[]const u8 = null;
-    var payload_len_str: []const u8 = undefined;
-
-    if (it.next()) |third| {
-        if (it.next()) |fourth| {
-            reply_to = third;
-            payload_len_str = fourth;
-        } else {
-            payload_len_str = third;
-        }
-    } else {
+    // Parse subject (scan to first space)
+    const subj_start = i;
+    while (i < args_line.len and args_line[i] != ' ') : (i += 1) {}
+    if (i == subj_start or i >= args_line.len) {
         return Parser.Error.InvalidArguments;
     }
+    const subject = args_line[subj_start..i];
+    i += 1; // skip space
 
-    const payload_len = parseUsizeFast(payload_len_str) catch
-        return Parser.Error.InvalidArguments;
+    // Parse SID inline (avoids separate function call overhead)
+    var sid: u64 = 0;
+    var have_sid = false;
+    while (i < args_line.len and args_line[i] != ' ') : (i += 1) {
+        const c = args_line[i];
+        if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
+        have_sid = true;
+        sid = sid *% 10 +% @as(u64, c - '0');
+    }
+    if (!have_sid) return Parser.Error.InvalidArguments;
+
+    // Check if there's more to parse
+    if (i >= args_line.len) return Parser.Error.InvalidArguments;
+    i += 1; // skip space
+
+    // Parse third token
+    const t3_start = i;
+    while (i < args_line.len and args_line[i] != ' ') : (i += 1) {}
+    if (i == t3_start) return Parser.Error.InvalidArguments;
+    const third = args_line[t3_start..i];
+
+    // Check for optional fourth token (reply-to case)
+    var reply_to: ?[]const u8 = null;
+    var payload_len_slice: []const u8 = undefined;
+
+    if (i < args_line.len and args_line[i] == ' ') {
+        i += 1; // skip space
+        reply_to = third;
+        const t4_start = i;
+        while (i < args_line.len and args_line[i] != ' ') : (i += 1) {}
+        if (i == t4_start) return Parser.Error.InvalidArguments;
+        payload_len_slice = args_line[t4_start..i];
+    } else {
+        payload_len_slice = third;
+    }
+
+    // Parse payload length inline
+    var payload_len: usize = 0;
+    for (payload_len_slice) |c| {
+        if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
+        payload_len = payload_len *% 10 +% @as(usize, c - '0');
+    }
 
     // Calculate total message size: header + payload + trailing \r\n
     const total_len = header_len + payload_len + 2;
 
     // Check if we have the complete message
-    if (data.len < total_len) {
-        return null;
+    if (data.len < total_len) return null;
+
+    // Verify trailing CRLF with u16 comparison
+    if (!verifyCRLF(data, header_len + payload_len)) {
+        return Parser.Error.InvalidArguments;
     }
 
     // Extract payload - it's right after the header
@@ -174,9 +246,9 @@ inline fn parseFullMsg(
 
     consumed.* = total_len;
     assert(consumed.* <= data.len);
-
     assert(subject.len > 0);
     assert(sid > 0);
+
     return .{ .msg = .{
         .subject = subject,
         .sid = sid,
@@ -186,9 +258,20 @@ inline fn parseFullMsg(
     } };
 }
 
-/// Parse complete HMSG in single pass.
+/// Parse complete MSG in single pass (legacy, kept for test compatibility).
+/// Returns null if payload not yet available.
+inline fn parseFullMsg(
+    data: []const u8,
+    args_line: []const u8,
+    header_len: usize,
+    consumed: *usize,
+) Parser.Error!?ServerCommand {
+    return parseFullMsgFast(data, args_line, header_len, consumed);
+}
+
+/// Parse complete HMSG using manual byte scanning (no iterator allocation).
 /// Returns null if headers/payload not yet available.
-inline fn parseFullHMsg(
+inline fn parseFullHMsgFast(
     data: []const u8,
     args_line: []const u8,
     header_len: usize,
@@ -197,38 +280,82 @@ inline fn parseFullHMsg(
     assert(args_line.len > 0);
     assert(header_len > 0);
 
-    var it = std.mem.splitScalar(u8, args_line, ' ');
+    var i: usize = 0;
 
-    const subject = it.next() orelse return Parser.Error.InvalidArguments;
-    const sid_str = it.next() orelse return Parser.Error.InvalidArguments;
-
-    const sid = parseU64Fast(sid_str) catch
+    // Parse subject (scan to first space)
+    const subj_start = i;
+    while (i < args_line.len and args_line[i] != ' ') : (i += 1) {}
+    if (i == subj_start or i >= args_line.len) {
         return Parser.Error.InvalidArguments;
+    }
+    const subject = args_line[subj_start..i];
+    i += 1; // skip space
 
-    const parts = blk: {
-        const p1 = it.next() orelse return Parser.Error.InvalidArguments;
-        const p2 = it.next() orelse return Parser.Error.InvalidArguments;
-        const p3 = it.next();
+    // Parse SID inline
+    var sid: u64 = 0;
+    var have_sid = false;
+    while (i < args_line.len and args_line[i] != ' ') : (i += 1) {
+        const c = args_line[i];
+        if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
+        have_sid = true;
+        sid = sid *% 10 +% @as(u64, c - '0');
+    }
+    if (!have_sid or i >= args_line.len) return Parser.Error.InvalidArguments;
+    i += 1; // skip space
 
-        if (p3) |third| {
-            break :blk .{ p1, p2, third };
-        } else {
-            break :blk .{ null, p1, p2 };
-        }
-    };
+    // Collect remaining tokens (2 or 3: [reply-to] hdr_len total_len)
+    var tokens: [3][]const u8 = undefined;
+    var token_count: usize = 0;
 
-    const reply_to = parts[0];
-    const hdr_len = parseUsizeFast(parts[1]) catch
-        return Parser.Error.InvalidArguments;
-    const total_content_len = parseUsizeFast(parts[2]) catch
-        return Parser.Error.InvalidArguments;
+    while (i < args_line.len and token_count < 3) {
+        const t_start = i;
+        while (i < args_line.len and args_line[i] != ' ') : (i += 1) {}
+        if (i == t_start) break;
+        tokens[token_count] = args_line[t_start..i];
+        token_count += 1;
+        if (i < args_line.len and args_line[i] == ' ') i += 1;
+    }
+
+    if (token_count < 2) return Parser.Error.InvalidArguments;
+
+    var reply_to: ?[]const u8 = null;
+    var hdr_len_slice: []const u8 = undefined;
+    var total_len_slice: []const u8 = undefined;
+
+    if (token_count == 3) {
+        reply_to = tokens[0];
+        hdr_len_slice = tokens[1];
+        total_len_slice = tokens[2];
+    } else {
+        hdr_len_slice = tokens[0];
+        total_len_slice = tokens[1];
+    }
+
+    // Parse hdr_len inline
+    var hdr_len: usize = 0;
+    for (hdr_len_slice) |c| {
+        if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
+        hdr_len = hdr_len *% 10 +% @as(usize, c - '0');
+    }
+
+    // Parse total_content_len inline
+    var total_content_len: usize = 0;
+    for (total_len_slice) |c| {
+        if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
+        total_content_len = total_content_len *% 10 +% @as(usize, c - '0');
+    }
+
+    if (hdr_len > total_content_len) return Parser.Error.InvalidArguments;
 
     // Calculate total message size: header line + content + trailing \r\n
     const total_len = header_len + total_content_len + 2;
 
     // Check if we have the complete message
-    if (data.len < total_len) {
-        return null;
+    if (data.len < total_len) return null;
+
+    // Verify trailing CRLF with u16 comparison
+    if (!verifyCRLF(data, header_len + total_content_len)) {
+        return Parser.Error.InvalidArguments;
     }
 
     // Extract headers and payload - they're right after the header line
@@ -238,10 +365,10 @@ inline fn parseFullHMsg(
 
     consumed.* = total_len;
     assert(consumed.* <= data.len);
-
     assert(subject.len > 0);
     assert(sid > 0);
     assert(hdr_len <= total_content_len);
+
     return .{ .hmsg = .{
         .subject = subject,
         .sid = sid,
@@ -251,6 +378,17 @@ inline fn parseFullHMsg(
         .headers = headers,
         .payload = payload,
     } };
+}
+
+/// Parse complete HMSG in single pass (legacy, kept for test compatibility).
+/// Returns null if headers/payload not yet available.
+inline fn parseFullHMsg(
+    data: []const u8,
+    args_line: []const u8,
+    header_len: usize,
+    consumed: *usize,
+) Parser.Error!?ServerCommand {
+    return parseFullHMsgFast(data, args_line, header_len, consumed);
 }
 
 test "parse PING" {

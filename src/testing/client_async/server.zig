@@ -33,8 +33,6 @@ pub fn testServerInfo(allocator: std.mem.Allocator) void {
     reportResult("server_info", has_version, "no version in info");
 }
 
-// Test 6: Multiple subscriptions
-
 pub fn testServerInfoFields(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -69,8 +67,6 @@ pub fn testServerInfoFields(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test 52: Stats increment correctly
-
 pub fn testServerVersion(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -99,8 +95,6 @@ pub fn testServerVersion(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test 91: bytes_in stats accuracy
-
 pub fn testServerMaxPayloadEnforced(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -128,8 +122,6 @@ pub fn testServerMaxPayloadEnforced(allocator: std.mem.Allocator) void {
         reportResult("max_payload_enforced", false, "max_payload is 0");
     }
 }
-
-// Test 88: Unsubscribe by SID
 
 pub fn testMaxPayloadRespected(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
@@ -164,8 +156,6 @@ pub fn testMaxPayloadRespected(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test 60: Rapid subscribe/unsubscribe cycles
-
 pub fn testProtocolVersion(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -193,8 +183,6 @@ pub fn testProtocolVersion(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test 100: Complete pub/sub round-trip verification
-
 pub fn testClientName(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -217,8 +205,6 @@ pub fn testClientName(allocator: std.mem.Allocator) void {
         reportResult("client_name", false, "not connected");
     }
 }
-
-// Test 46: Double drain should be safe
 
 /// Runs all server tests.
 pub fn runAll(allocator: std.mem.Allocator) void {

@@ -1,7 +1,7 @@
 //! NATS Client Library for Zig
 //!
 //! A pure Zig implementation of the NATS messaging protocol with native
-//! async I/O, zero external C dependencies, and JetStream support.
+//! async I/O using std.Io, zero external C dependencies.
 //!
 //! ## Quick Start
 //!
@@ -14,47 +14,40 @@
 //!     defer _ = gpa.deinit();
 //!     const allocator = gpa.allocator();
 //!
-//!     const url = "nats://localhost:4222";
-//!     var client = try nats.Client.connect(allocator, io, url, .{});
-//!     defer client.deinit(allocator, io);
+//!     var threaded: std.Io.Threaded = .init(allocator);
+//!     defer threaded.deinit();
+//!     const io = threaded.io();
 //!
-//!     try client.publish(allocator, "hello", "world");
+//!     const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{});
+//!     defer client.deinit(allocator);
+//!
+//!     try client.publish("hello", "world");
+//!     try client.flush();
 //! }
+//! ```
 
 const std = @import("std");
 
-// Re-export protocol types
+// Module exports
 pub const protocol = @import("protocol.zig");
-
-// Re-export core types
-pub const types = @import("types.zig");
-
-// Re-export connection types
 pub const connection = @import("connection.zig");
-
-// Re-export pub/sub types
 pub const pubsub = @import("pubsub.zig");
-
-// Re-export memory management
 pub const memory = @import("memory.zig");
 
-// Re-export client
+// Client module
 pub const client = @import("client.zig");
+
+// Primary types
 pub const Client = client.Client;
+pub const Subscription = client.Subscription;
+pub const Message = client.Message;
+pub const Options = client.Options;
 pub const Stats = client.Stats;
 
-// Re-export async client
-pub const client_async = @import("client_async.zig");
-pub const ClientAsync = client_async.ClientAsync;
-
-// Convenience re-exports for common types
-pub const Message = types.Message;
-pub const Options = types.Options;
+// Connection types
 pub const Status = connection.State;
-pub const Error = types.Error;
-pub const Subscription = pubsub.Subscription;
 
-// Pub/Sub convenience exports
+// Convenience exports
 pub const newInbox = pubsub.newInbox;
 pub const validateSubject = pubsub.validatePublish;
 
@@ -72,6 +65,5 @@ pub const default_port: u16 = 4222;
 pub const default_max_payload: u32 = 1048576;
 
 test {
-    // Run tests from all submodules
     std.testing.refAllDecls(@This());
 }

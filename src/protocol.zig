@@ -12,6 +12,7 @@ pub const commands = @import("protocol/commands.zig");
 pub const parser = @import("protocol/parser.zig");
 pub const encoder = @import("protocol/encoder.zig");
 pub const headers = @import("protocol/headers.zig");
+pub const errors = @import("protocol/errors.zig");
 
 // Re-export common types
 pub const ServerInfo = commands.ServerInfo;
@@ -26,6 +27,11 @@ pub const SubArgs = commands.SubArgs;
 
 pub const Parser = parser.Parser;
 pub const Encoder = encoder.Encoder;
+
+// Protocol errors
+pub const Error = errors.Error;
+pub const parseServerError = errors.parseServerError;
+pub const isAuthError = errors.isAuthError;
 
 test {
     std.testing.refAllDecls(@This());

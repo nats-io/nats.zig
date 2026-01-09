@@ -1,7 +1,7 @@
 //! Pub/Sub Module
 //!
-//! Provides publish/subscribe functionality including inbox generation,
-//! subject validation, and subscription management.
+//! Provides publish/subscribe utilities including inbox generation
+//! and subject validation. For Message and Subscription types, see client.zig.
 
 const std = @import("std");
 
@@ -9,13 +9,14 @@ pub const inbox = @import("pubsub/inbox.zig");
 pub const subject = @import("pubsub/subject.zig");
 pub const subscription = @import("pubsub/subscription.zig");
 
-// Re-export subscription types
-pub const Message = subscription.Message;
-pub const ReceiveOptions = subscription.ReceiveOptions;
+// Subscription state enum (for embedded/fixed use)
 pub const SubscriptionState = subscription.State;
+pub const SubscriptionError = subscription.Error;
 
-// Comptime generic subscription - instantiate with client type
-pub const Subscription = subscription.Subscription;
+// Fixed types for embedded use (no allocations)
+pub const FixedQueue = subscription.FixedQueue;
+pub const FixedSubscription = subscription.FixedSubscription;
+pub const FixedSubConfig = subscription.FixedSubConfig;
 
 // Inbox functions
 pub const newInbox = inbox.newInbox;

@@ -1,35 +1,30 @@
 //! Connection Module
 //!
-//! Provides connection management for NATS including TCP transport,
-//! state machine, and event handling.
+//! Provides connection state management and events for NATS.
 
 const std = @import("std");
 
-pub const transport = @import("connection/transport.zig");
 pub const state = @import("connection/state.zig");
 pub const events = @import("connection/events.zig");
-pub const tcp = @import("connection/tcp.zig");
-pub const conn = @import("connection/conn.zig");
+pub const errors = @import("connection/errors.zig");
 
-// Re-export common types
-pub const Transport = transport.Transport;
-pub const MockTransport = transport.MockTransport;
-pub const ReadError = transport.ReadError;
-pub const WriteError = transport.WriteError;
-
+// State types
 pub const State = state.State;
 pub const StateMachine = state.StateMachine;
 
+// Event types
 pub const Event = events.Event;
 pub const EventQueue = events.EventQueue;
 pub const ConnectedInfo = events.ConnectedInfo;
 pub const DisconnectedInfo = events.DisconnectedInfo;
 pub const DisconnectReason = events.DisconnectReason;
 pub const MessageInfo = events.MessageInfo;
+pub const ReconnectingInfo = events.ReconnectingInfo;
 
-pub const TcpTransport = tcp.TcpTransport;
-pub const Connection = conn.Connection;
-pub const Options = conn.Options;
+// Connection errors
+pub const Error = errors.Error;
+pub const parseAuthError = errors.parseAuthError;
+pub const isRetryable = errors.isRetryable;
 
 test {
     std.testing.refAllDecls(@This());

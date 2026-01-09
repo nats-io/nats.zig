@@ -91,7 +91,7 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
     // star should get 1 message
     var star_count: u32 = 0;
     while (true) {
-        const msg = sub_star.nextMessage(allocator, .{ .timeout_ms = 200 }) catch {
+        const msg = sub_star.nextWithTimeout(allocator, 200) catch {
             break;
         };
         if (msg) |m| {
@@ -105,7 +105,7 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
     // gt should get 2 messages
     var gt_count: u32 = 0;
     while (true) {
-        const msg = sub_gt.nextMessage(allocator, .{ .timeout_ms = 200 }) catch {
+        const msg = sub_gt.nextWithTimeout(allocator, 200) catch {
             break;
         };
         if (msg) |m| {
@@ -164,11 +164,11 @@ pub fn testWildcardPositions(allocator: std.mem.Allocator) void {
     client.flush() catch {};
 
     var count: u32 = 0;
-    if (sub1.nextMessage(allocator, .{ .timeout_ms = 500 }) catch null) |m| {
+    if (sub1.nextWithTimeout(allocator, 500) catch null) |m| {
         m.deinit(allocator);
         count += 1;
     }
-    if (sub2.nextMessage(allocator, .{ .timeout_ms = 500 }) catch null) |m| {
+    if (sub2.nextWithTimeout(allocator, 500) catch null) |m| {
         m.deinit(allocator);
         count += 1;
     }
@@ -211,7 +211,7 @@ pub fn testMultipleWildcards(allocator: std.mem.Allocator) void {
 
     var count: u32 = 0;
     for (0..4) |_| {
-        const msg = sub.nextMessage(allocator, .{ .timeout_ms = 200 }) catch break;
+        const msg = sub.nextWithTimeout(allocator, 200) catch break;
         if (msg) |m| {
             m.deinit(allocator);
             count += 1;
@@ -261,9 +261,9 @@ pub fn testPublishSubscribe(allocator: std.mem.Allocator) void {
         return;
     };
 
-    // Receive message with Go-style API
-    const msg = sub.nextMessage(allocator, .{ .timeout_ms = 1000 }) catch {
-        reportResult("publish_subscribe", false, "nextMessage failed");
+    // Receive message
+    const msg = sub.nextWithTimeout(allocator, 1000) catch {
+        reportResult("publish_subscribe", false, "nextWithTimeout failed");
         return;
     };
 

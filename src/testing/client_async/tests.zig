@@ -17,6 +17,11 @@ pub const connection = @import("connection.zig");
 pub const request_reply = @import("request_reply.zig");
 pub const drain = @import("drain.zig");
 pub const edge_cases = @import("edge_cases.zig");
+pub const wildcard = @import("wildcard.zig");
+pub const queue = @import("queue.zig");
+pub const server = @import("server.zig");
+pub const protocol = @import("protocol.zig");
+pub const concurrency = @import("concurrency.zig");
 
 /// Runs all async client tests.
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -31,4 +36,9 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     request_reply.runAll(allocator);
     drain.runAll(allocator);
     edge_cases.runAll(allocator);
+    wildcard.runAll(allocator);
+    queue.runAll(allocator);
+    server.runAll(allocator);
+    protocol.runAll(allocator);
+    concurrency.runAll(allocator);
 }

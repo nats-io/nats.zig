@@ -62,11 +62,12 @@ pub fn main() !void {
     // Flush all messages
     try client.flush();
 
-    // Receive messages with timeout (Go-style API)
+    // Receive messages with timeout
     std.debug.print("\nReceiving messages...\n", .{});
     var count: u32 = 0;
     while (count < 3) {
-        if (try sub.nextMessage(allocator, .{ .timeout_ms = 1000 })) |msg| {
+        if (try sub.nextWithTimeout(allocator, 1000)) |msg| {
+            defer msg.deinit(allocator);
             std.debug.print("  [{s}] {s}\n", .{ msg.subject, msg.data });
             count += 1;
         } else {
@@ -74,11 +75,6 @@ pub fn main() !void {
             break;
         }
     }
-
-    // Ping server
-    try client.ping();
-    try client.flush();
-    std.debug.print("\nPING sent\n", .{});
 
     // Unsubscribe
     try sub.unsubscribe();

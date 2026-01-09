@@ -536,7 +536,6 @@ const TablePrinter = struct {
 /// Supported benchmark clients.
 pub const Client = enum {
     zig,
-    zig_async,
     zig_iou,
     c,
     rust,
@@ -545,8 +544,7 @@ pub const Client = enum {
     /// Display name for table output.
     pub fn name(self: Client) []const u8 {
         return switch (self) {
-            .zig => "Zig std",
-            .zig_async => "Zig async",
+            .zig => "Zig",
             .zig_iou => "Zig io_u",
             .c => "C",
             .rust => "Rust",
@@ -602,19 +600,19 @@ pub const BenchRun = struct {
 /// Collection of all benchmark results for markdown generation.
 pub const AllResults = struct {
     // Table 1: Self pub/sub [client_idx][run_idx]
-    table1: [6][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 6,
-    // Table 2.1: Zig std publisher, various subscribers
-    table2_1: [6][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 6,
+    table1: [5][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 5,
+    // Table 2.1: Zig publisher, various subscribers
+    table2_1: [5][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 5,
     // Table 2.2: Go publisher, various subscribers
-    table2_2: [6][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 6,
+    table2_2: [5][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 5,
     // Table 3: Fire starter
-    table3: [6][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 6,
+    table3: [5][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 5,
 
     // Track how many valid runs we got per client
-    table1_counts: [6]usize = .{0} ** 6,
-    table2_1_counts: [6]usize = .{0} ** 6,
-    table2_2_counts: [6]usize = .{0} ** 6,
-    table3_counts: [6]usize = .{0} ** 6,
+    table1_counts: [5]usize = .{0} ** 5,
+    table2_1_counts: [5]usize = .{0} ** 5,
+    table2_2_counts: [5]usize = .{0} ** 5,
+    table3_counts: [5]usize = .{0} ** 5,
 };
 
 /// Argument buffer for building command lines.
@@ -674,20 +672,6 @@ pub fn buildExeArgs(
                 "./zig-out/bin/bench-pub"
             else
                 "./zig-out/bin/bench-sub";
-            ab.add(exe);
-            ab.add(opts.subject);
-            ab.addFmt("--msgs={d}", .{opts.num_msgs});
-            if (role == .publisher) {
-                ab.addFmt("--size={d}", .{opts.size});
-            } else {
-                ab.add("--no-progress");
-            }
-        },
-        .zig_async => {
-            const exe = if (role == .publisher)
-                "./zig-out/bin/bench-pub-async"
-            else
-                "./zig-out/bin/bench-sub-async";
             ab.add(exe);
             ab.add(opts.subject);
             ab.addFmt("--msgs={d}", .{opts.num_msgs});
@@ -761,7 +745,7 @@ pub fn buildExeArgs(
 /// Which pipe to capture for output (client-specific).
 fn getOutputPipe(client: Client) enum { stdout, stderr } {
     return switch (client) {
-        .zig, .zig_async, .zig_iou => .stderr,
+        .zig, .zig_iou => .stderr,
         .c, .rust, .go => .stdout,
     };
 }
@@ -807,7 +791,7 @@ pub fn parseOutput(client: Client, output: []const u8) ?BenchStats {
     assert(output.len > 0 or true);
 
     return switch (client) {
-        .zig, .zig_async => parseZigOutput(output),
+        .zig => parseZigOutput(output),
         .zig_iou => parseZigIouOutput(output),
         .c => parseCOutput(output),
         .rust => parseRustOutput(output),
@@ -1443,11 +1427,9 @@ fn printHeader(out: *StdOut, opts: BenchOpts, ui: *TerminalUI) void {
 
     // Line 2: Client names in slate blue, "vs" in gray
     ui.printBoxLineMulti(W, &[_]Seg{
-        .{ .color = TerminalUI.ESC_HEADER, .text = "io_u" },
+        .{ .color = TerminalUI.ESC_HEADER, .text = "Zig io_u" },
         .{ .color = TerminalUI.ESC_PROGRESS, .text = " vs " },
-        .{ .color = TerminalUI.ESC_HEADER, .text = "async" },
-        .{ .color = TerminalUI.ESC_PROGRESS, .text = " vs " },
-        .{ .color = TerminalUI.ESC_HEADER, .text = "std" },
+        .{ .color = TerminalUI.ESC_HEADER, .text = "Zig" },
         .{ .color = TerminalUI.ESC_PROGRESS, .text = " vs " },
         .{ .color = TerminalUI.ESC_HEADER, .text = "C" },
         .{ .color = TerminalUI.ESC_PROGRESS, .text = " vs " },
@@ -1482,7 +1464,7 @@ fn runTable1(
     all_results: *AllResults,
     out: *StdOut,
 ) !void {
-    const clients = [_]Client{ .zig_iou, .zig_async, .zig, .c, .rust, .go };
+    const clients = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
     const num_runs = opts.num_runs;
     const total_clients = clients.len;
 
@@ -1552,11 +1534,11 @@ fn runTable1(
 fn printTable1Details(io: Io, out: *StdOut, opts: BenchOpts, all_results: *AllResults) void {
     _ = out; // Using ui for ANSI output
 
-    const clients = [_]Client{ .zig_iou, .zig_async, .zig, .c, .rust, .go };
+    const clients = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
     const num_runs = opts.num_runs;
 
     // Convert AllResults to old format for existing print functions
-    var results: [6][MAX_RUNS]?PubSubResult = .{.{null} ** MAX_RUNS} ** 6;
+    var results: [5][MAX_RUNS]?PubSubResult = .{.{null} ** MAX_RUNS} ** 5;
     for (clients, 0..) |client, ci| {
         for (0..num_runs) |run| {
             const r = all_results.table1[ci][run];
@@ -1798,7 +1780,7 @@ fn runTable2(
     all_results: *AllResults,
     out: *StdOut,
 ) !void {
-    const subscribers = [_]Client{ .zig_iou, .zig_async, .zig, .c, .rust, .go };
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
     const num_runs = opts.num_runs;
     const total = subscribers.len;
 
@@ -1868,10 +1850,10 @@ fn printTable2Details(
 ) void {
     _ = out; // Using ui for ANSI output
 
-    const subscribers = [_]Client{ .zig_iou, .zig_async, .zig, .c, .rust, .go };
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
 
     // Convert to old format
-    var old_results: [6][MAX_RUNS]?BenchStats = .{.{null} ** MAX_RUNS} ** 6;
+    var old_results: [5][MAX_RUNS]?BenchStats = .{.{null} ** MAX_RUNS} ** 5;
     for (0..6) |si| {
         for (0..num_runs) |run| {
             if (results[si][run].success) {
@@ -1966,7 +1948,7 @@ fn runTable2_2(
     all_results: *AllResults,
     out: *StdOut,
 ) !void {
-    const subscribers = [_]Client{ .zig_iou, .zig_async, .zig, .c, .rust, .go };
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
     const num_runs = opts.num_runs;
     const total = subscribers.len;
 
@@ -2092,7 +2074,7 @@ fn runTable3(
     all_results: *AllResults,
     out: *StdOut,
 ) !void {
-    const subscribers = [_]Client{ .zig_iou, .zig_async, .zig, .c, .rust, .go };
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
     const num_runs = opts.num_runs;
     const total = subscribers.len;
 
@@ -2155,11 +2137,11 @@ fn runTable3(
 fn printTable3Details(io: Io, out: *StdOut, opts: BenchOpts, all_results: *AllResults) void {
     _ = out; // Using ui for ANSI output
 
-    const subscribers = [_]Client{ .zig_iou, .zig_async, .zig, .c, .rust, .go };
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
     const num_runs = opts.num_runs;
 
     // Convert to old format
-    var results: [6][MAX_RUNS]?PubSubResult = .{.{null} ** MAX_RUNS} ** 6;
+    var results: [5][MAX_RUNS]?PubSubResult = .{.{null} ** MAX_RUNS} ** 5;
     for (0..6) |si| {
         for (0..num_runs) |run| {
             const r = all_results.table3[si][run];
@@ -2428,7 +2410,7 @@ fn writeTable1Markdown(
     opts: BenchOpts,
     all_results: *AllResults,
 ) !void {
-    const clients = [_]Client{ .zig_iou, .zig_async, .zig, .c, .rust, .go };
+    const clients = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
     const num_runs = opts.num_runs;
 
     try writer.print("## Table 1: Self Pub/Sub (Median Results)\n\n", .{});
@@ -2498,7 +2480,7 @@ fn writeTable2Markdown(
     opts: BenchOpts,
     results: []const [MAX_RUNS]BenchRun,
 ) !void {
-    const subscribers = [_]Client{ .zig_iou, .zig_async, .zig, .c, .rust, .go };
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
     const num_runs = opts.num_runs;
 
     try writer.print("## Table {s}: Subscriber Comparison ({s} publisher)\n\n", .{
@@ -2556,7 +2538,7 @@ fn writeTable3Markdown(
     opts: BenchOpts,
     all_results: *AllResults,
 ) !void {
-    const subscribers = [_]Client{ .zig_iou, .zig_async, .zig, .c, .rust, .go };
+    const subscribers = [_]Client{ .zig_iou, .zig, .c, .rust, .go };
     const num_runs = opts.num_runs;
 
     try writer.print("## Table 3: Fire Starter (io_uring direct)\n\n", .{});

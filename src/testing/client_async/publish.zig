@@ -21,7 +21,7 @@ pub fn testClientAsyncPubSub(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
         reportResult("client_async_pubsub", false, "connect failed");
         return;
     };
@@ -45,7 +45,7 @@ pub fn testClientAsyncPubSub(allocator: std.mem.Allocator) void {
 
     // True async/await - reader task routes messages automatically!
     // defer handles cleanup via cancel() - DON'T deinit in success path!
-    var future = io.io().async(nats.ClientAsync.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
     defer if (future.cancel(io.io())) |msg| msg.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |msg| {
@@ -68,7 +68,7 @@ pub fn testClientAsyncPublishReply(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
         reportResult("client_async_pub_reply", false, "connect failed");
         return;
     };
@@ -87,7 +87,7 @@ pub fn testClientAsyncPublishReply(allocator: std.mem.Allocator) void {
     client.flush() catch {};
 
     // Use async/await - reader task routes messages automatically
-    var future = io.io().async(nats.ClientAsync.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |msg| {
@@ -111,7 +111,7 @@ pub fn testAsyncPublishEmptyPayload(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
         reportResult("async_publish_empty_payload", false, "connect failed");
         return;
     };
@@ -129,7 +129,7 @@ pub fn testAsyncPublishEmptyPayload(allocator: std.mem.Allocator) void {
     };
     client.flush() catch {};
 
-    var future = io.io().async(nats.ClientAsync.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |msg| {
@@ -151,7 +151,7 @@ pub fn testAsyncPublishLargePayload(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
         reportResult("async_publish_large_payload", false, "connect failed");
         return;
     };
@@ -177,7 +177,7 @@ pub fn testAsyncPublishLargePayload(allocator: std.mem.Allocator) void {
     };
     client.flush() catch {};
 
-    var future = io.io().async(nats.ClientAsync.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |msg| {
@@ -199,7 +199,7 @@ pub fn testAsyncPublishRapidFire(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
         reportResult("async_publish_rapid_fire", false, "connect failed");
         return;
     };
@@ -231,7 +231,7 @@ pub fn testAsyncPublishNoSubscribers(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
         reportResult("async_publish_no_subscribers", false, "connect failed");
         return;
     };
@@ -247,9 +247,162 @@ pub fn testAsyncPublishNoSubscribers(allocator: std.mem.Allocator) void {
     reportResult("async_publish_no_subscribers", true, "");
 }
 
-// NEW TESTS: Subscription Patterns
+pub fn testPublishAfterDisconnect(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
 
-// Test: Wildcard matching with *
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("publish_after_disconnect", false, "connect failed");
+        return;
+    };
+
+    client.drain(allocator) catch {
+        reportResult("publish_after_disconnect", false, "drain failed");
+        client.deinit(allocator);
+        return;
+    };
+
+    const result = client.publish("test.subject", "data");
+    client.deinit(allocator);
+
+    if (result) |_| {
+        reportResult("publish_after_disconnect", false, "should have failed");
+    } else |_| {
+        reportResult("publish_after_disconnect", true, "");
+    }
+}
+
+pub fn testPublishBatching(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("publish_batching", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    const sub = client.subscribe(allocator, "batch.test") catch {
+        reportResult("publish_batching", false, "subscribe failed");
+        return;
+    };
+    defer sub.deinit(allocator);
+    client.flush() catch {};
+
+    // Publish multiple messages then flush once (batching)
+    client.publish("batch.test", "data1") catch {};
+    client.publish("batch.test", "data2") catch {};
+    client.publish("batch.test", "data3") catch {};
+    client.flush() catch {}; // Single flush for all
+
+    // Should receive all messages
+    var received: u32 = 0;
+    for (0..3) |_| {
+        if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
+            m.deinit(allocator);
+            received += 1;
+        }
+    }
+
+    if (received == 3) {
+        reportResult("publish_batching", true, "");
+    } else {
+        var buf: [32]u8 = undefined;
+        const detail = std.fmt.bufPrint(&buf, "got {d}/3", .{received}) catch "e";
+        reportResult("publish_batching", false, detail);
+    }
+}
+
+pub fn testFlushAfterEachPublish(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("flush_after_each", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    const sub = client.subscribe(allocator, "flush.each") catch {
+        reportResult("flush_after_each", false, "subscribe failed");
+        return;
+    };
+    defer sub.deinit(allocator);
+    client.flush() catch {};
+
+    for (0..50) |_| {
+        client.publish("flush.each", "msg") catch {
+            reportResult("flush_after_each", false, "publish failed");
+            return;
+        };
+        client.flush() catch {
+            reportResult("flush_after_each", false, "flush failed");
+            return;
+        };
+    }
+
+    var received: u32 = 0;
+    for (0..50) |_| {
+        const msg = sub.nextWithTimeout(allocator, 500) catch {
+            break;
+        };
+        if (msg) |m| {
+            m.deinit(allocator);
+            received += 1;
+        } else break;
+    }
+
+    if (received == 50) {
+        reportResult("flush_after_each", true, "");
+    } else {
+        var buf: [32]u8 = undefined;
+        const detail = std.fmt.bufPrint(
+            &buf,
+            "got {d}/50",
+            .{received},
+        ) catch "err";
+        reportResult("flush_after_each", false, detail);
+    }
+}
+
+pub fn testPublishToWildcardFails(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("pub_wildcard_fails", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    // Publishing to wildcard subjects should fail (wildcards are for subscribe)
+    const result1 = client.publish("foo.*", "data");
+    const result2 = client.publish("foo.>", "data");
+
+    // Both should fail - wildcards not allowed in publish subjects
+    const star_failed = if (result1) |_| false else |_| true;
+    const gt_failed = if (result2) |_| false else |_| true;
+
+    if (star_failed and gt_failed) {
+        reportResult("pub_wildcard_fails", true, "");
+    } else if (!star_failed) {
+        reportResult("pub_wildcard_fails", false, "* should fail");
+    } else {
+        reportResult("pub_wildcard_fails", false, "> should fail");
+    }
+}
 
 /// Runs all async publish tests.
 pub fn runAll(allocator: std.mem.Allocator) void {
@@ -259,4 +412,8 @@ pub fn runAll(allocator: std.mem.Allocator) void {
     testAsyncPublishLargePayload(allocator);
     testAsyncPublishRapidFire(allocator);
     testAsyncPublishNoSubscribers(allocator);
+    testPublishAfterDisconnect(allocator);
+    testPublishBatching(allocator);
+    testFlushAfterEachPublish(allocator);
+    testPublishToWildcardFails(allocator);
 }

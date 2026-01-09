@@ -21,7 +21,7 @@ pub fn testClientAsyncStats(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
         reportResult("client_async_stats", false, "connect failed");
         return;
     };
@@ -53,7 +53,7 @@ pub fn testAsyncStatsIncrement(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
         reportResult("async_stats_increment", false, "connect failed");
         return;
     };
@@ -85,7 +85,7 @@ pub fn testAsyncStatsBytesAccuracy(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    const client = nats.ClientAsync.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
         reportResult("async_stats_bytes", false, "connect failed");
         return;
     };
@@ -108,13 +108,115 @@ pub fn testAsyncStatsBytesAccuracy(allocator: std.mem.Allocator) void {
     }
 }
 
-// NEW TESTS: Stress Tests
+pub fn testStatsMsgsIn(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
 
-// Test: 500 message stress test
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("stats_msgs_in", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    const sub = client.subscribe(allocator, "msgsin.test") catch {
+        reportResult("stats_msgs_in", false, "subscribe failed");
+        return;
+    };
+    defer sub.deinit(allocator);
+    client.flush() catch {};
+
+    const before = client.getStats();
+
+    // Publish 25 messages
+    for (0..25) |_| {
+        client.publish("msgsin.test", "data") catch {};
+    }
+    client.flush() catch {};
+
+    // Receive all
+    var received: u32 = 0;
+    for (0..30) |_| {
+        const msg = sub.nextWithTimeout(allocator, 200) catch break;
+        if (msg) |m| {
+            m.deinit(allocator);
+            received += 1;
+        } else break;
+    }
+
+    const after = client.getStats();
+    const msgs_in = after.msgs_in - before.msgs_in;
+
+    if (msgs_in == 25 and received == 25) {
+        reportResult("stats_msgs_in", true, "");
+    } else {
+        var buf: [48]u8 = undefined;
+        const detail = std.fmt.bufPrint(
+            &buf,
+            "in={d} recv={d}",
+            .{ msgs_in, received },
+        ) catch "e";
+        reportResult("stats_msgs_in", false, detail);
+    }
+}
+
+pub fn testStatsBytesIn(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{});
+    defer io.deinit();
+
+    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+        reportResult("stats_bytes_in", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    const sub = client.subscribe(allocator, "bytesin.test") catch {
+        reportResult("stats_bytes_in", false, "subscribe failed");
+        return;
+    };
+    defer sub.deinit(allocator);
+    client.flush() catch {};
+
+    const before = client.getStats();
+
+    // Publish 10 messages of 50 bytes each = 500 bytes total
+    const payload = "01234567890123456789012345678901234567890123456789"; // 50 bytes
+    for (0..10) |_| {
+        client.publish("bytesin.test", payload) catch {};
+    }
+    client.flush() catch {};
+
+    // Receive all
+    for (0..15) |_| {
+        const msg = sub.nextWithTimeout(allocator, 200) catch break;
+        if (msg) |m| {
+            m.deinit(allocator);
+        } else break;
+    }
+
+    const after = client.getStats();
+    const bytes_in = after.bytes_in - before.bytes_in;
+
+    // Should have received 500 bytes of payload
+    if (bytes_in == 500) {
+        reportResult("stats_bytes_in", true, "");
+    } else {
+        var buf: [32]u8 = undefined;
+        const detail = std.fmt.bufPrint(&buf, "got {d}/500", .{bytes_in}) catch "e";
+        reportResult("stats_bytes_in", false, detail);
+    }
+}
 
 /// Runs all async stats tests.
 pub fn runAll(allocator: std.mem.Allocator) void {
     testClientAsyncStats(allocator);
     testAsyncStatsIncrement(allocator);
     testAsyncStatsBytesAccuracy(allocator);
+    testStatsMsgsIn(allocator);
+    testStatsBytesIn(allocator);
 }
