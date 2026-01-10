@@ -8,8 +8,8 @@ const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const commands = @import("commands.zig");
 const ServerCommand = commands.ServerCommand;
+const RawServerInfo = commands.RawServerInfo;
 const ServerInfo = commands.ServerInfo;
-const OwnedServerInfo = commands.OwnedServerInfo;
 const MsgArgs = commands.MsgArgs;
 const HMsgArgs = commands.HMsgArgs;
 
@@ -85,7 +85,12 @@ pub const Parser = struct {
                 if (line.len >= 4 and line[1] == 'S' and
                     line[2] == 'G' and line[3] == ' ')
                 {
-                    return parseFullMsgFast(data, line[4..], header_len, consumed);
+                    return parseFullMsgFast(
+                        data,
+                        line[4..],
+                        header_len,
+                        consumed,
+                    );
                 }
                 return Error.InvalidCommand;
             },
@@ -94,7 +99,12 @@ pub const Parser = struct {
                 if (line.len >= 5 and line[1] == 'M' and line[2] == 'S' and
                     line[3] == 'G' and line[4] == ' ')
                 {
-                    return parseFullHMsgFast(data, line[5..], header_len, consumed);
+                    return parseFullHMsgFast(
+                        data,
+                        line[5..],
+                        header_len,
+                        consumed,
+                    );
                 }
                 return Error.InvalidCommand;
             },
@@ -137,14 +147,14 @@ pub const Parser = struct {
                 {
                     const json_data = line[5..];
                     var parsed = std.json.parseFromSlice(
-                        ServerInfo,
+                        RawServerInfo,
                         allocator,
                         json_data,
                         .{ .ignore_unknown_fields = true },
                     ) catch return Error.InvalidJson;
                     defer parsed.deinit();
 
-                    const owned = OwnedServerInfo.fromParsed(
+                    const owned = ServerInfo.fromParsed(
                         allocator,
                         parsed,
                     ) catch return error.OutOfMemory;

@@ -53,7 +53,7 @@ pub const newInbox = pubsub.newInbox;
 pub const validateSubject = pubsub.validatePublish;
 
 // Protocol types
-pub const ServerInfo = protocol.OwnedServerInfo;
+pub const ServerInfo = protocol.ServerInfo;
 pub const ConnectOptions = protocol.ConnectOptions;
 
 /// Library version

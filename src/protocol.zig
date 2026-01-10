@@ -16,7 +16,7 @@ pub const errors = @import("protocol/errors.zig");
 
 // Re-export common types
 pub const ServerInfo = commands.ServerInfo;
-pub const OwnedServerInfo = commands.OwnedServerInfo;
+pub const RawServerInfo = commands.RawServerInfo;
 pub const ConnectOptions = commands.ConnectOptions;
 pub const ServerCommand = commands.ServerCommand;
 pub const ClientCommand = commands.ClientCommand;

@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 
 /// Commands sent from server to client.
 pub const ServerCommand = union(enum) {
-    info: OwnedServerInfo,
+    info: ServerInfo,
     msg: MsgArgs,
     hmsg: HMsgArgs,
     ping,
@@ -31,7 +31,7 @@ pub const ClientCommand = union(enum) {
 
 /// Server info with owned string copies.
 /// All strings are allocated and owned by this struct.
-pub const OwnedServerInfo = struct {
+pub const ServerInfo = struct {
     server_id: []const u8,
     server_name: []const u8,
     version: []const u8,
@@ -49,16 +49,16 @@ pub const OwnedServerInfo = struct {
     client_ip: ?[]const u8,
     cluster: ?[]const u8,
 
-    /// Creates an owned copy from parsed JSON ServerInfo.
-    /// Copies all strings and frees the JSON arena immediately.
+    /// Creates an owned copy from parsed JSON RawServerInfo.
+    /// Copies all strings so they outlive the JSON arena.
     pub fn fromParsed(
         allocator: Allocator,
-        parsed: std.json.Parsed(ServerInfo),
-    ) Allocator.Error!OwnedServerInfo {
+        parsed: std.json.Parsed(RawServerInfo),
+    ) Allocator.Error!ServerInfo {
         const info = parsed.value;
         assert(info.server_id.len > 0 or info.version.len > 0);
 
-        const owned = OwnedServerInfo{
+        const owned = ServerInfo{
             .server_id = try allocator.dupe(u8, info.server_id),
             .server_name = try allocator.dupe(u8, info.server_name),
             .version = try allocator.dupe(u8, info.version),
@@ -87,7 +87,7 @@ pub const OwnedServerInfo = struct {
     }
 
     /// Frees all owned strings.
-    pub fn deinit(self: *OwnedServerInfo, allocator: Allocator) void {
+    pub fn deinit(self: *ServerInfo, allocator: Allocator) void {
         assert(self.port > 0);
         allocator.free(self.server_id);
         allocator.free(self.server_name);
@@ -100,8 +100,9 @@ pub const OwnedServerInfo = struct {
     }
 };
 
-/// Server INFO payload parsed from JSON.
-pub const ServerInfo = struct {
+/// Raw server INFO payload parsed from JSON.
+/// Internal use only - strings borrow from JSON arena.
+pub const RawServerInfo = struct {
     server_id: []const u8 = "",
     server_name: []const u8 = "",
     version: []const u8 = "",
@@ -120,21 +121,21 @@ pub const ServerInfo = struct {
     client_ip: ?[]const u8 = null,
     cluster: ?[]const u8 = null,
 
-    /// Parses ServerInfo from JSON data.
+    /// Parses RawServerInfo from JSON data.
     pub fn parse(
         allocator: Allocator,
         json_data: []const u8,
-    ) std.json.ParseError(std.json.Scanner)!std.json.Parsed(ServerInfo) {
+    ) std.json.ParseError(std.json.Scanner)!std.json.Parsed(RawServerInfo) {
         return std.json.parseFromSlice(
-            ServerInfo,
+            RawServerInfo,
             allocator,
             json_data,
             .{ .ignore_unknown_fields = true },
         );
     }
 
-    /// Frees a parsed ServerInfo.
-    pub fn deinit(parsed: *std.json.Parsed(ServerInfo)) void {
+    /// Frees a parsed RawServerInfo.
+    pub fn deinit(parsed: *std.json.Parsed(RawServerInfo)) void {
         parsed.deinit();
     }
 };
@@ -216,7 +217,7 @@ test "server info parse" {
     const json = "{\"server_id\":\"test\",\"version\":\"2.10.0\"," ++
         "\"proto\":1,\"max_payload\":1048576}";
 
-    var parsed = try ServerInfo.parse(allocator, json);
+    var parsed = try RawServerInfo.parse(allocator, json);
     defer parsed.deinit();
 
     try std.testing.expectEqualSlices(u8, "test", parsed.value.server_id);
@@ -231,7 +232,7 @@ test "server info parse with unknown fields" {
         \\{"server_id":"x","unknown_field":"ignored","version":"1.0"}
     ;
 
-    var parsed = try ServerInfo.parse(allocator, json);
+    var parsed = try RawServerInfo.parse(allocator, json);
     defer parsed.deinit();
 
     try std.testing.expectEqualSlices(u8, "x", parsed.value.server_id);

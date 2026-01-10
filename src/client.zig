@@ -19,7 +19,7 @@ const net = Io.net;
 
 const protocol = @import("protocol.zig");
 const Parser = protocol.Parser;
-const OwnedServerInfo = protocol.OwnedServerInfo;
+const ServerInfo = protocol.ServerInfo;
 
 const connection = @import("connection.zig");
 const State = connection.State;
@@ -247,7 +247,7 @@ pub const Client = struct {
     reader: net.Stream.Reader,
     writer: net.Stream.Writer,
     parser: Parser,
-    server_info: ?OwnedServerInfo,
+    server_info: ?ServerInfo,
     state: State,
     options: Options,
 
@@ -764,7 +764,7 @@ pub const Client = struct {
     }
 
     /// Returns server info.
-    pub fn getServerInfo(self: *const Client) ?*const OwnedServerInfo {
+    pub fn getServerInfo(self: *const Client) ?*const ServerInfo {
         assert(self.next_sid >= 1);
         if (self.server_info) |*info| {
             return info;
