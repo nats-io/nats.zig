@@ -8,7 +8,7 @@ const nats = @import("nats");
 
 // Import shared test utilities
 const utils = @import("test_utils.zig");
-const client_tests = @import("client_async/tests.zig");
+const client_tests = @import("client/tests.zig");
 
 const ServerManager = utils.ServerManager;
 
@@ -52,6 +52,9 @@ pub fn main() !void {
         std.debug.print("Failed to start auth server: {}\n", .{err});
         std.process.exit(1);
     };
+
+    // Extra settle time for servers to fully initialize
+    std.posix.nanosleep(0, 200_000_000); // 200ms
 
     std.debug.print("\nRunning tests...\n\n", .{});
 

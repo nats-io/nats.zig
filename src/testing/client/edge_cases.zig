@@ -79,7 +79,7 @@ pub fn testAsyncMessageOrdering(allocator: std.mem.Allocator) void {
     // Receive and verify order
     var in_order = true;
     for (0..5) |expected| {
-        var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+        var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
         defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
         if (future.await(io.io())) |msg| {
@@ -133,7 +133,7 @@ pub fn testAsyncBinaryPayload(allocator: std.mem.Allocator) void {
     };
     client.flush() catch {};
 
-    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |msg| {
@@ -686,7 +686,11 @@ pub fn testQueueExactCapacity(allocator: std.mem.Allocator) void {
     }
 }
 
-// Boundary Test: Queue overflow behavior
+// Boundary Test: Queue overflow behavior with inline routing
+// With inline routing, queue overflow only occurs during cross-subscription
+// routing. The reading subscription bypasses its own queue (zero-copy).
+// This test uses two subscriptions: sub_reader reads and routes messages
+// to sub_target's queue, which overflows.
 pub fn testQueueOverflow(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -694,9 +698,9 @@ pub fn testQueueOverflow(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{});
     defer io.deinit();
 
-    // Small queue, publish more than capacity
     const QUEUE_SIZE = 32;
     const PUBLISH_COUNT = 64;
+
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .async_queue_size = QUEUE_SIZE,
     }) catch {
@@ -705,42 +709,61 @@ pub fn testQueueOverflow(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    const sub = client.subscribe(allocator, "boundary.overflow") catch {
-        reportResult("queue_overflow", false, "subscribe failed");
+    // Sub A: Will be the reader (its queue won't be used - zero-copy path)
+    const sub_reader = client.subscribe(allocator, "overflow.reader") catch {
+        reportResult("queue_overflow", false, "sub_reader failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub_reader.deinit(allocator);
+
+    // Sub B: Target for overflow (its queue will fill up via routing)
+    const sub_target = client.subscribe(allocator, "overflow.target") catch {
+        reportResult("queue_overflow", false, "sub_target failed");
+        return;
+    };
+    defer sub_target.deinit(allocator);
+
     client.flush() catch {
         reportResult("queue_overflow", false, "flush failed");
         return;
     };
-
-    // Small delay for subscription to register
     std.posix.nanosleep(0, 50_000_000);
 
-    // Publish more than queue can hold (without consuming)
+    // Publish PUBLISH_COUNT messages to sub_target's subject
     for (0..PUBLISH_COUNT) |_| {
-        client.publish("boundary.overflow", "x") catch {
-            reportResult("queue_overflow", false, "publish failed");
+        client.publish("overflow.target", "x") catch {
+            reportResult("queue_overflow", false, "publish target failed");
             return;
         };
     }
+    // Publish 1 message to sub_reader's subject (so next() returns)
+    client.publish("overflow.reader", "trigger") catch {
+        reportResult("queue_overflow", false, "publish reader failed");
+        return;
+    };
     client.flush() catch {
         reportResult("queue_overflow", false, "pub flush failed");
         return;
     };
 
-    // Now consume what we can
-    var received: u32 = 0;
-    for (0..PUBLISH_COUNT) |_| {
-        if (sub.nextWithTimeout(allocator, 100) catch null) |m| {
-            m.deinit(allocator);
-            received += 1;
-        } else break;
+    // sub_reader.next() reads all messages:
+    // - 64 messages for "overflow.target" → routes to sub_target.queue
+    // - After 32, queue is full → remaining 32 dropped
+    // - 1 message for "overflow.reader" → returns
+    if (sub_reader.nextWithTimeout(allocator, 2000) catch null) |m| {
+        m.deinit(allocator);
+    } else {
+        reportResult("queue_overflow", false, "reader timeout");
+        return;
     }
 
-    // With overflow, we should get at most QUEUE_SIZE messages
-    // Some may be dropped due to overflow - this tests overflow handling
+    // Count what sub_target received (should be <= QUEUE_SIZE due to overflow)
+    var received: u32 = 0;
+    while (sub_target.tryNext()) |m| {
+        m.deinit(allocator);
+        received += 1;
+    }
+
     if (received <= QUEUE_SIZE and received > 0) {
         reportResult("queue_overflow", true, "");
     } else {
@@ -882,7 +905,8 @@ pub fn testSubjectLengthBoundary(allocator: std.mem.Allocator) void {
     var long_subject_buf: [200]u8 = undefined;
     for (&long_subject_buf, 0..) |*c, i| {
         // Alternate between 'a'-'z' and '.' for valid subject
-        if (i % 10 == 9) {
+        // Avoid trailing dot (i=199 would be dot, which is invalid)
+        if (i % 10 == 9 and i < 199) {
             c.* = '.';
         } else {
             c.* = 'a' + @as(u8, @intCast(i % 26));

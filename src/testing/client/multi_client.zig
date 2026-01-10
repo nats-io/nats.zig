@@ -58,7 +58,7 @@ pub fn testAsyncCrossClientRouting(allocator: std.mem.Allocator) void {
     };
 
     // Receive on async client
-    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |msg| {
@@ -158,7 +158,7 @@ pub fn testClientAsyncHighRate(allocator: std.mem.Allocator) void {
     // Use async/await - reader task routes messages automatically
     var received: usize = 0;
     for (0..NUM_MSGS) |_| {
-        var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+        var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
         defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
         if (future.await(io.io())) |_| {

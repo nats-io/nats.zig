@@ -29,10 +29,6 @@ const subscription_mod = @import("pubsub/subscription.zig");
 const memory = @import("memory.zig");
 const SidMap = memory.SidMap;
 
-// ============================================================================
-// Types
-// ============================================================================
-
 /// Message received on a subscription.
 /// All messages are owned and must be freed via deinit().
 pub const Message = struct {
@@ -147,12 +143,14 @@ pub const Options = struct {
     nkey_seed: ?[]const u8 = null,
     /// JWT for authentication.
     jwt: ?[]const u8 = null,
-    /// Sync mode - disables background reader task.
-    /// Required for zero-copy nextRef()/nextRefBlock() API.
-    sync_mode: bool = false,
-    /// Read/write buffer size. Must be >= max message size.
-    /// Default 2MB provides headroom for 1MB max_payload.
-    buffer_size: usize = 2 * 1024 * 1024,
+    /// Read/write buffer size. Must be >= max message size you expect.
+    /// Default 256KB is suitable for most workloads. Increase if sending
+    /// large messages (NATS max_payload default is 1MB).
+    buffer_size: usize = 256 * 1024,
+    /// TCP receive buffer size hint. Larger values allow more messages to
+    /// queue in the kernel before backpressure kicks in. Default 256KB.
+    /// Set to 0 to use system default.
+    tcp_rcvbuf: u32 = 256 * 1024,
 };
 
 /// Connection statistics (Go client parity).
@@ -183,10 +181,6 @@ pub const SIDMAP_CAPACITY: u32 = 512;
 
 /// Default queue size per subscription.
 pub const DEFAULT_QUEUE_SIZE: u16 = 256;
-
-// ============================================================================
-// URL Parsing
-// ============================================================================
 
 /// Parses a NATS URL like nats://user:pass@host:port
 pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
@@ -239,14 +233,10 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     };
 }
 
-// ============================================================================
-// NATS Client
-// ============================================================================
-
 /// NATS Client for pub/sub messaging.
 ///
-/// Uses a dedicated reader task to route incoming messages to per-subscription
-/// queues, enabling multiple subscriptions to receive concurrently.
+/// Uses inline routing: the subscription calling next() becomes the reader
+/// and routes messages to other subscriptions. Zero-copy for active sub.
 pub const Client = struct {
     /// Subscription type.
     pub const Sub = Subscription;
@@ -275,21 +265,13 @@ pub const Client = struct {
     free_count: u16,
     next_sid: u64,
 
-    // Reader task state
-    reader_running: bool,
-    shutdown_requested: bool,
-    reader_future: ?ReaderFuture,
-    reader_allocator: Allocator,
+    // Synchronization for inline routing
+    read_mutex: Io.Mutex,
 
     // Statistics
     stats: Stats,
 
-    /// Reader future type (derived from readerTaskFn return type).
-    const ReaderFuture = Io.Future(
-        @typeInfo(@TypeOf(readerTaskFn)).@"fn".return_type.?,
-    );
-
-    /// Connects to a NATS server and starts the reader task.
+    /// Connects to a NATS server.
     pub fn connect(
         allocator: Allocator,
         io: Io,
@@ -334,6 +316,16 @@ pub const Client = struct {
             std.mem.asBytes(&enable),
         ) catch {};
 
+        // Set TCP receive buffer size for better backpressure handling
+        if (opts.tcp_rcvbuf > 0) {
+            std.posix.setsockopt(
+                client.stream.socket.handle,
+                std.posix.SOL.SOCKET,
+                std.posix.SO.RCVBUF,
+                std.mem.asBytes(&opts.tcp_rcvbuf),
+            ) catch {};
+        }
+
         // Allocate buffers based on options
         client.read_buffer = allocator.alloc(u8, opts.buffer_size) catch {
             client.stream.close(io);
@@ -360,10 +352,7 @@ pub const Client = struct {
         client.options = opts;
         client.next_sid = 1;
         client.stats = .{};
-        client.reader_running = false;
-        client.shutdown_requested = false;
-        client.reader_future = null;
-        client.reader_allocator = allocator;
+        client.read_mutex = Io.Mutex.init;
 
         // Initialize SidMap and free slot stack
         client.sidmap_keys = undefined;
@@ -378,37 +367,9 @@ pub const Client = struct {
         // Perform handshake
         try client.handshake(allocator, opts, parsed);
 
-        // Start reader task only in async mode (not sync_mode)
-        if (!opts.sync_mode) {
-            client.reader_future = io.concurrent(
-                readerTaskFn,
-                .{ client, allocator },
-            ) catch {
-                client.stream.close(io);
-                return error.ConcurrencyUnavailable;
-            };
-            client.reader_running = true;
-        }
-
         assert(client.next_sid >= 1);
         assert(client.state == .connected);
         return client;
-    }
-
-    /// Background reader task - runs via io.concurrent().
-    /// Reads from socket and routes messages to subscription queues.
-    fn readerTaskFn(client: *Client, allocator: Allocator) !void {
-        defer client.reader_running = false;
-
-        while (!client.shutdown_requested) {
-            _ = client.routeNextMessage(allocator) catch |err| {
-                if (client.shutdown_requested) return;
-
-                // Connection error - close all queues to wake waiters
-                client.closeAllQueues();
-                return err;
-            };
-        }
     }
 
     /// Performs NATS handshake (INFO/CONNECT exchange).
@@ -699,7 +660,7 @@ pub const Client = struct {
         // Wait for reply using io.select()
         var response_future = self.io.async(
             Subscription.next,
-            .{ sub, self.io },
+            .{ sub, allocator, self.io },
         );
 
         var timeout_future = self.io.async(
@@ -744,14 +705,11 @@ pub const Client = struct {
     }
 
     /// Gracefully drains subscriptions and closes the connection.
-    pub fn drain(self: *Client, allocator: Allocator) !void {
+    pub fn drain(self: *Client, alloc: Allocator) !void {
         if (self.state != .connected) {
             return error.NotConnected;
         }
         assert(self.next_sid >= 1);
-
-        // Signal shutdown to reader task
-        self.shutdown_requested = true;
 
         // Unsubscribe all active subscriptions
         for (self.sub_ptrs, 0..) |maybe_sub, slot_idx| {
@@ -773,7 +731,7 @@ pub const Client = struct {
                 while (true) {
                     const n = sub.queue.get(self.io, &drain_buf, 0) catch break;
                     if (n == 0) break;
-                    drain_buf[0].deinit(allocator);
+                    drain_buf[0].deinit(alloc);
                 }
 
                 // Mark as drained - sub.deinit() frees resources
@@ -784,16 +742,11 @@ pub const Client = struct {
         self.writer.interface.flush() catch {};
         self.state = .draining;
 
-        if (self.reader_future) |*future| {
-            _ = future.cancel(self.io) catch {};
-            self.reader_future = null;
-        }
-
         self.stream.close(self.io);
         self.state = .closed;
 
         if (self.server_info) |*info| {
-            info.deinit(allocator);
+            info.deinit(alloc);
             self.server_info = null;
         }
     }
@@ -908,7 +861,7 @@ pub const Client = struct {
                     .info => |new_info| {
                         self.reader.interface.toss(consumed);
                         if (self.server_info) |*info| {
-                            info.deinit(std.heap.page_allocator);
+                            info.deinit(allocator);
                         }
                         self.server_info = new_info;
                     },
@@ -1055,7 +1008,7 @@ pub const Client = struct {
     /// Routes next message as zero-copy MessageRef (no allocation).
     /// Returns null if no message available or connection closed.
     /// Caller must consume MessageRef before next call (slices borrow buffer).
-    pub fn routeNextMessageRef(self: *Client) !?MessageRef {
+    pub fn routeNextMessageRef(self: *Client, allocator: Allocator) !?MessageRef {
         if (!self.state.canReceive()) {
             return error.NotConnected;
         }
@@ -1081,7 +1034,7 @@ pub const Client = struct {
 
             var consumed: usize = 0;
             const cmd = self.parser.parse(
-                std.heap.page_allocator,
+                allocator,
                 data,
                 &consumed,
             ) catch {
@@ -1106,7 +1059,7 @@ pub const Client = struct {
                     .info => |new_info| {
                         self.pending_toss = consumed;
                         if (self.server_info) |*info| {
-                            info.deinit(std.heap.page_allocator);
+                            info.deinit(allocator);
                         }
                         self.server_info = new_info;
                         self.tossPending();
@@ -1183,26 +1136,20 @@ pub const Client = struct {
     }
 
     /// Closes the connection and frees resources.
-    pub fn deinit(self: *Client, allocator: Allocator) void {
+    pub fn deinit(self: *Client, alloc: Allocator) void {
         assert(self.next_sid >= 1);
 
         // Drain if connected (graceful shutdown with message cleanup)
         if (self.state == .connected) {
-            self.drain(allocator) catch {};
+            self.drain(alloc) catch {};
         } else {
             // Not connected - close queues and mark subs destroyed
-            self.shutdown_requested = true;
             self.closeAllQueues();
             for (self.sub_ptrs) |maybe_sub| {
                 if (maybe_sub) |sub| {
                     sub.client_destroyed = true;
                 }
             }
-        }
-
-        // Cancel reader task if not already cancelled by drain
-        if (self.reader_future) |*future| {
-            _ = future.cancel(self.io) catch {};
         }
 
         // Close connection if not already closed by drain
@@ -1213,17 +1160,13 @@ pub const Client = struct {
 
         // Free client resources
         if (self.server_info) |*info| {
-            info.deinit(allocator);
+            info.deinit(alloc);
         }
-        allocator.free(self.read_buffer);
-        allocator.free(self.write_buffer);
-        allocator.destroy(self);
+        alloc.free(self.read_buffer);
+        alloc.free(self.write_buffer);
+        alloc.destroy(self);
     }
 };
-
-// ============================================================================
-// Subscription
-// ============================================================================
 
 /// Subscription state.
 pub const SubscriptionState = enum {
@@ -1242,13 +1185,59 @@ pub const Subscription = struct {
     queue: Io.Queue(Message),
     state: SubscriptionState,
     received_msgs: u64,
+    dropped_msgs: u64 = 0,
     client_destroyed: bool = false,
 
-    /// Blocks until a message is available or queue is closed.
+    /// Blocks until a message is available or connection is closed.
+    /// Uses inline routing: acquires read mutex, reads from socket,
+    /// routes other subscriptions' messages to their queues.
     /// Colorblind: works blocking or async based on Io implementation.
-    pub fn next(self: *Subscription, io: Io) !Message {
+    pub fn next(self: *Subscription, allocator: Allocator, io: Io) !Message {
         assert(self.state == .active or self.state == .draining);
-        return self.queue.getOne(io);
+
+        // 1. Check our queue first (routed by other subscriptions)
+        if (self.tryNext()) |msg| {
+            return msg;
+        }
+
+        // 2. Acquire read mutex (only one reader at a time)
+        try self.client.read_mutex.lock(io);
+        defer self.client.read_mutex.unlock(io);
+
+        // 3. Double-check queue (might have been filled while waiting)
+        if (self.tryNext()) |msg| {
+            return msg;
+        }
+
+        // 4. Read and route until we get our message
+        while (true) {
+            const ref = try self.client.routeNextMessageRef(allocator) orelse {
+                return error.Closed;
+            };
+
+            if (ref.sid == self.sid) {
+                // Convert to owned and return
+                const owned = try ref.toOwned(allocator);
+                self.client.tossPending();
+                self.received_msgs += 1;
+                return owned;
+            }
+
+            // Route to other subscription's queue
+            if (self.client.getSubscriptionBySid(ref.sid)) |other_sub| {
+                const owned = ref.toOwned(allocator) catch {
+                    self.client.tossPending();
+                    continue;
+                };
+                other_sub.pushMessage(owned) catch {
+                    // Queue full - message dropped
+                    other_sub.dropped_msgs += 1;
+                    owned.deinit(allocator);
+                };
+                other_sub.received_msgs += 1;
+            }
+            self.client.tossPending();
+        }
     }
 
     /// Try receive without blocking. Returns null if no message available.
@@ -1261,20 +1250,34 @@ pub const Subscription = struct {
 
     /// Returns next message as zero-copy MessageRef.
     /// Slices borrow from read buffer - valid until next nextRef() call.
-    /// Use with: while (try sub.nextRef()) |msg| { ... }
-    pub fn nextRef(self: *Subscription) !?MessageRef {
+    /// Uses inline routing with mutex protection.
+    /// Use with: while (try sub.nextRef(allocator, io)) |msg| { ... }
+    pub fn nextRef(self: *Subscription, allocator: Allocator, io: Io) !?MessageRef {
         assert(self.state == .active or self.state == .draining);
 
+        // Acquire read mutex (only one reader at a time)
+        try self.client.read_mutex.lock(io);
+        defer self.client.read_mutex.unlock(io);
+
         while (true) {
-            const ref = try self.client.routeNextMessageRef() orelse return null;
-            if (ref.sid == self.sid) return ref;
+            const ref = try self.client.routeNextMessageRef(allocator) orelse {
+                return null;
+            };
+
+            if (ref.sid == self.sid) {
+                // Zero-copy return! Slices borrow from read buffer.
+                self.received_msgs += 1;
+                return ref;
+            }
+
             // Message for different subscription - route to its queue
             if (self.client.getSubscriptionBySid(ref.sid)) |other_sub| {
-                const owned = ref.toOwned(self.client.reader_allocator) catch {
+                const owned = ref.toOwned(allocator) catch {
+                    self.client.tossPending();
                     continue;
                 };
                 other_sub.pushMessage(owned) catch {
-                    owned.deinit(self.client.reader_allocator);
+                    owned.deinit(allocator);
                 };
                 other_sub.received_msgs += 1;
             }
@@ -1284,12 +1287,18 @@ pub const Subscription = struct {
 
     /// Returns next message as zero-copy MessageRef, blocking up to timeout_ms.
     /// Returns null on timeout or connection close.
-    /// Requires sync_mode=true in Client options.
-    pub fn nextRefBlock(self: *Subscription, timeout_ms: u32) !?MessageRef {
+    pub fn nextRefBlock(
+        self: *Subscription,
+        allocator: Allocator,
+        io: Io,
+        timeout_ms: u32,
+    ) !?MessageRef {
         assert(self.state == .active or self.state == .draining);
         assert(timeout_ms > 0);
 
-        const start = std.time.Instant.now() catch return try self.nextRef();
+        const start = std.time.Instant.now() catch {
+            return try self.nextRef(allocator, io);
+        };
         const timeout_ns = @as(u64, timeout_ms) * 1_000_000;
 
         while (true) {
@@ -1298,9 +1307,7 @@ pub const Subscription = struct {
                 return null;
             }
 
-            // routeNextMessageRef() handles all buffer management and blocks
-            // on fillMore() internally. It also handles PING/PONG.
-            if (try self.nextRef()) |ref| {
+            if (try self.nextRef(allocator, io)) |ref| {
                 return ref;
             }
         }
@@ -1329,7 +1336,7 @@ pub const Subscription = struct {
 
         const io = self.client.io;
 
-        var response_future = io.async(next, .{ self, io });
+        var response_future = io.async(next, .{ self, allocator, io });
         var timeout_future = io.async(
             Client.sleepForRequest,
             .{ io, timeout_ms },
@@ -1369,6 +1376,13 @@ pub const Subscription = struct {
     /// Returns queue capacity.
     pub fn capacity(self: *Subscription) usize {
         return self.queue.capacity();
+    }
+
+    /// Returns count of messages dropped due to queue overflow.
+    /// Only incremented when other subscriptions route messages to this one
+    /// and the queue is full. The reading subscription bypasses its queue.
+    pub fn getDroppedCount(self: *Subscription) u64 {
+        return self.dropped_msgs;
     }
 
     /// Push message to queue (called by reader task).
@@ -1428,10 +1442,6 @@ pub const Subscription = struct {
         allocator.destroy(self);
     }
 };
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 test "parse url" {
     {

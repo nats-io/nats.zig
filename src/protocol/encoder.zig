@@ -12,6 +12,23 @@ const HPubArgs = commands.HPubArgs;
 const SubArgs = commands.SubArgs;
 const UnsubArgs = commands.UnsubArgs;
 
+/// Fast integer-to-string conversion (avoids std.fmt overhead).
+/// Writes digits directly to buffer, returns slice of written digits.
+fn writeUsizeToBuffer(buf: *[20]u8, value: usize) []const u8 {
+    if (value == 0) {
+        buf[19] = '0';
+        return buf[19..20];
+    }
+
+    var v = value;
+    var i: usize = 20;
+    while (v > 0) : (v /= 10) {
+        i -= 1;
+        buf[i] = @intCast((v % 10) + '0');
+    }
+    return buf[i..20];
+}
+
 /// Protocol encoder for client commands.
 pub const Encoder = struct {
     /// Encodes CONNECT command with JSON options.
@@ -38,7 +55,10 @@ pub const Encoder = struct {
             try writer.writeAll(reply);
         }
 
-        try writer.print(" {d}\r\n", .{args.payload.len});
+        var num_buf: [20]u8 = undefined;
+        try writer.writeByte(' ');
+        try writer.writeAll(writeUsizeToBuffer(&num_buf, args.payload.len));
+        try writer.writeAll("\r\n");
         try writer.writeAll(args.payload);
         try writer.writeAll("\r\n");
     }
@@ -59,7 +79,12 @@ pub const Encoder = struct {
         }
 
         const total_len = args.headers.len + args.payload.len;
-        try writer.print(" {d} {d}\r\n", .{ args.headers.len, total_len });
+        var num_buf: [20]u8 = undefined;
+        try writer.writeByte(' ');
+        try writer.writeAll(writeUsizeToBuffer(&num_buf, args.headers.len));
+        try writer.writeByte(' ');
+        try writer.writeAll(writeUsizeToBuffer(&num_buf, total_len));
+        try writer.writeAll("\r\n");
         try writer.writeAll(args.headers);
         try writer.writeAll(args.payload);
         try writer.writeAll("\r\n");
@@ -80,7 +105,10 @@ pub const Encoder = struct {
             try writer.writeAll(queue);
         }
 
-        try writer.print(" {d}\r\n", .{args.sid});
+        var num_buf: [20]u8 = undefined;
+        try writer.writeByte(' ');
+        try writer.writeAll(writeUsizeToBuffer(&num_buf, args.sid));
+        try writer.writeAll("\r\n");
     }
 
     /// Encodes UNSUB command.
@@ -89,10 +117,13 @@ pub const Encoder = struct {
         args: UnsubArgs,
     ) Io.Writer.Error!void {
         assert(args.sid > 0);
-        try writer.print("UNSUB {d}", .{args.sid});
+        var num_buf: [20]u8 = undefined;
+        try writer.writeAll("UNSUB ");
+        try writer.writeAll(writeUsizeToBuffer(&num_buf, args.sid));
 
         if (args.max_msgs) |max| {
-            try writer.print(" {d}", .{max});
+            try writer.writeByte(' ');
+            try writer.writeAll(writeUsizeToBuffer(&num_buf, max));
         }
 
         try writer.writeAll("\r\n");

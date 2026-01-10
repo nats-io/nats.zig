@@ -87,10 +87,9 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     defer threaded.deinit();
     const io = threaded.io();
 
-    // Connect using Client in sync mode for zero-copy nextRefBlock()
+    // Connect using Client (inline routing for zero-copy)
     const client = nats.Client.connect(allocator, io, config.url, .{
         .name = "bench-sub",
-        .sync_mode = true,
     }) catch |err| {
         std.debug.print("Failed to connect: {}\n", .{err});
         return err;
@@ -124,10 +123,11 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     var last_progress: u64 = 0;
 
     // Zero-copy receive loop using nextRefBlock()
-    // No allocations - slices point directly to read buffer
+    // No allocations for our messages - slices point directly to read buffer
+    // Allocator needed for routing to other subscriptions (if any)
     // 5 second timeout to wait for publisher to start
     while (msg_count < config.msgs) {
-        const ref = sub.nextRefBlock(5000) catch |err| {
+        const ref = sub.nextRefBlock(allocator, io, 5000) catch |err| {
             std.debug.print("Receive error: {}\n", .{err});
             return err;
         } orelse {

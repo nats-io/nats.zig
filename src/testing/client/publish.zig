@@ -45,7 +45,7 @@ pub fn testClientAsyncPubSub(allocator: std.mem.Allocator) void {
 
     // True async/await - reader task routes messages automatically!
     // defer handles cleanup via cancel() - DON'T deinit in success path!
-    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |msg| msg.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |msg| {
@@ -87,7 +87,7 @@ pub fn testClientAsyncPublishReply(allocator: std.mem.Allocator) void {
     client.flush() catch {};
 
     // Use async/await - reader task routes messages automatically
-    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |msg| {
@@ -129,7 +129,7 @@ pub fn testAsyncPublishEmptyPayload(allocator: std.mem.Allocator) void {
     };
     client.flush() catch {};
 
-    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |msg| {
@@ -177,7 +177,7 @@ pub fn testAsyncPublishLargePayload(allocator: std.mem.Allocator) void {
     };
     client.flush() catch {};
 
-    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |msg| {

@@ -73,7 +73,7 @@ pub fn testClientAsyncManySubs(allocator: std.mem.Allocator) void {
     // Use async/await - reader task routes messages automatically
     var received: usize = 0;
     for (subs) |s| {
-        var future = io.io().async(nats.Client.Sub.next, .{ s, io.io() });
+        var future = io.io().async(nats.Client.Sub.next, .{ s, allocator, io.io() });
         defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
         if (future.await(io.io())) |_| {
@@ -126,6 +126,9 @@ pub fn testClientAsyncWildcard(allocator: std.mem.Allocator) void {
         return;
     };
 
+    // Wait for subscription to register server-side
+    std.posix.nanosleep(0, 50_000_000);
+
     // Publish to matching subjects
     publisher.publish("async.wild.a", "msg-a") catch {
         reportResult("client_async_wildcard", false, "pub a failed");
@@ -148,7 +151,7 @@ pub fn testClientAsyncWildcard(allocator: std.mem.Allocator) void {
     const NUM_MSGS = 3;
     var received: usize = 0;
     for (0..NUM_MSGS) |_| {
-        var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+        var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
         defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
         if (future.await(io.io())) |_| {
@@ -210,10 +213,10 @@ pub fn testClientAsyncDuplicateSubs(allocator: std.mem.Allocator) void {
 
     // Use async/await - reader task routes messages automatically
     // Both subscriptions should receive the same message
-    var future1 = io.io().async(nats.Client.Sub.next, .{ sub1, io.io() });
+    var future1 = io.io().async(nats.Client.Sub.next, .{ sub1, allocator, io.io() });
     defer if (future1.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
-    var future2 = io.io().async(nats.Client.Sub.next, .{ sub2, io.io() });
+    var future2 = io.io().async(nats.Client.Sub.next, .{ sub2, allocator, io.io() });
     defer if (future2.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     const got1 = if (future1.await(io.io())) |_| true else |_| false;
@@ -263,7 +266,7 @@ pub fn testClientAsyncQueueGroup(allocator: std.mem.Allocator) void {
     publisher.flush() catch {};
 
     // Use async/await - reader task routes messages automatically
-    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |_| {
@@ -303,7 +306,7 @@ pub fn testAsyncWildcardMatching(allocator: std.mem.Allocator) void {
     client.publish("async.wc.test", "msg") catch {};
     client.flush() catch {};
 
-    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |_| {
@@ -341,7 +344,7 @@ pub fn testAsyncWildcardGreater(allocator: std.mem.Allocator) void {
     client.publish("async.gt.a.b.c", "msg") catch {};
     client.flush() catch {};
 
-    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |_| {
@@ -380,7 +383,7 @@ pub fn testAsyncSubjectCaseSensitivity(allocator: std.mem.Allocator) void {
     client.publish("async.case.test", "msg") catch {};
     client.flush() catch {};
 
-    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |_| {
@@ -463,7 +466,7 @@ pub fn testAsyncHierarchicalSubject(allocator: std.mem.Allocator) void {
     };
     client.flush() catch {};
 
-    var future = io.io().async(nats.Client.Sub.next, .{ sub, io.io() });
+    var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
     if (future.await(io.io())) |_| {
