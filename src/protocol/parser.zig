@@ -6,6 +6,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
+
 const commands = @import("commands.zig");
 const ServerCommand = commands.ServerCommand;
 const RawServerInfo = commands.RawServerInfo;
@@ -402,7 +403,7 @@ inline fn parseFullHMsg(
 }
 
 test "parse PING" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     const result = try parser.parse(
@@ -416,7 +417,7 @@ test "parse PING" {
 }
 
 test "parse PONG" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     const result = try parser.parse(
@@ -430,7 +431,7 @@ test "parse PONG" {
 }
 
 test "parse +OK" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     const result = try parser.parse(
@@ -443,7 +444,7 @@ test "parse +OK" {
 }
 
 test "parse -ERR" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     const result = try parser.parse(
@@ -460,7 +461,7 @@ test "parse -ERR" {
 }
 
 test "parse MSG without payload" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     const result = try parser.parse(
@@ -476,7 +477,7 @@ test "parse MSG without payload" {
 }
 
 test "parse MSG with payload" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     const data = "MSG test.subject 42 5\r\nhello\r\n";
@@ -493,7 +494,7 @@ test "parse MSG with payload" {
 }
 
 test "parse MSG with payload - partial data" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     // Only header, no payload yet
@@ -510,7 +511,7 @@ test "parse MSG with payload - partial data" {
 }
 
 test "parse MSG with reply-to" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     const data = "MSG test.subject 1 _INBOX.123 5\r\nworld\r\n";
@@ -522,7 +523,7 @@ test "parse MSG with reply-to" {
 }
 
 test "parse incomplete data returns null" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     const result = try parser.parse(std.testing.allocator, "PIN", &consumed);
@@ -554,7 +555,7 @@ test "parseMsgLine with reply" {
 }
 
 test "parse INFO" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     const info_json = "INFO {\"server_id\":\"test\"," ++
@@ -582,7 +583,7 @@ test "parse INFO" {
 }
 
 test "parse HMSG without payload" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     const data = "HMSG test.subject 1 12 12\r\nNATS/1.0\r\n\r\n\r\n";
@@ -599,7 +600,7 @@ test "parse HMSG without payload" {
 }
 
 test "parse HMSG with payload" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     const data = "HMSG test.subject 42 12 17\r\nNATS/1.0\r\n\r\nhello\r\n";
@@ -650,7 +651,7 @@ test "parseHMsgLine with reply" {
 }
 
 test "parse invalid command" {
-    var parser = Parser.init();
+    var parser: Parser = .{};
     var consumed: usize = 0;
 
     const alloc = std.testing.allocator;

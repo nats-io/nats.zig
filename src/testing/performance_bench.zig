@@ -1266,7 +1266,7 @@ pub fn main() !void {
     };
 
     // Initialize terminal UI, stdout, and results storage
-    var ui = TerminalUI.init(io);
+    var ui: TerminalUI = .init(io);
     var stdout: StdOut = .{};
     stdout.init(io);
     var all_results = AllResults{};
@@ -1559,7 +1559,7 @@ fn printTable1Details(io: Io, out: *StdOut, opts: BenchOpts, all_results: *AllRe
     }
 
     // Use stderr for ANSI table output
-    var ui = TerminalUI.init(io);
+    var ui: TerminalUI = .init(io);
 
     // Print section title
     var title_buf: [64]u8 = undefined;
@@ -1868,7 +1868,7 @@ fn printTable2Details(
         }
     }
 
-    var ui = TerminalUI.init(io);
+    var ui: TerminalUI = .init(io);
 
     // Print all runs table
     var title_buf: [64]u8 = undefined;
@@ -2161,7 +2161,7 @@ fn printTable3Details(io: Io, out: *StdOut, opts: BenchOpts, all_results: *AllRe
         }
     }
 
-    var ui = TerminalUI.init(io);
+    var ui: TerminalUI = .init(io);
 
     // Print all runs table
     var title_buf: [64]u8 = undefined;

@@ -21,7 +21,7 @@ const formatUrl = utils.formatUrl;
 const formatAuthUrl = utils.formatAuthUrl;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -33,7 +33,7 @@ pub fn main() !void {
     std.debug.print("\n=== NATS Integration Tests ===\n\n", .{});
 
     // Start server manager
-    var manager = ServerManager.init(allocator);
+    var manager: ServerManager = .init(allocator);
     defer manager.deinit(allocator, io);
 
     // Start primary test server

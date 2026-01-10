@@ -7,6 +7,7 @@
 //!   nats-server -DV
 
 const std = @import("std");
+
 const nats = @import("nats");
 
 pub fn main() !void {

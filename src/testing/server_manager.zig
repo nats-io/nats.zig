@@ -144,7 +144,7 @@ pub const ServerManager = struct {
         io: Io,
         config: ServerConfig,
     ) !*ServerInstance {
-        var instance = ServerInstance.init(config);
+        var instance: ServerInstance = .init(config);
         try instance.start(allocator, io);
         try instance.waitReady(5000);
 
@@ -180,7 +180,7 @@ test "server config defaults" {
 }
 
 test "server instance init" {
-    var instance = ServerInstance.init(.{ .port = 14222 });
+    var instance: ServerInstance = .init(.{ .port = 14222 });
     try std.testing.expectEqual(@as(u16, 14222), instance.config.port);
     try std.testing.expect(!instance.isRunning());
 }

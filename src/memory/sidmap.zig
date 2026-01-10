@@ -181,7 +181,7 @@ test "SidMap basic operations" {
     var keys: [8]u64 = undefined;
     var vals: [8]u16 = undefined;
 
-    var map = SidMap.init(&keys, &vals);
+    var map: SidMap = .init(&keys, &vals);
 
     try std.testing.expect(map.isEmpty());
     try std.testing.expectEqual(@as(u32, 0), map.count());
@@ -217,7 +217,7 @@ test "SidMap tombstone reuse" {
     var keys: [8]u64 = undefined;
     var vals: [8]u16 = undefined;
 
-    var map = SidMap.init(&keys, &vals);
+    var map: SidMap = .init(&keys, &vals);
 
     // Fill slots
     try map.put(1, 0);
@@ -242,7 +242,7 @@ test "SidMap load factor limit" {
     var keys: [8]u64 = undefined;
     var vals: [8]u16 = undefined;
 
-    var map = SidMap.init(&keys, &vals);
+    var map: SidMap = .init(&keys, &vals);
 
     // 70% of 8 = 5 entries max
     try map.put(1, 0);
@@ -259,7 +259,7 @@ test "SidMap clear" {
     var keys: [8]u64 = undefined;
     var vals: [8]u16 = undefined;
 
-    var map = SidMap.init(&keys, &vals);
+    var map: SidMap = .init(&keys, &vals);
 
     try map.put(1, 0);
     try map.put(2, 1);
@@ -275,7 +275,7 @@ test "SidMap large capacity" {
     var keys: [512]u64 = undefined;
     var vals: [512]u16 = undefined;
 
-    var map = SidMap.init(&keys, &vals);
+    var map: SidMap = .init(&keys, &vals);
 
     // Insert many entries
     var i: u64 = 0;
