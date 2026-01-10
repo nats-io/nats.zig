@@ -41,6 +41,7 @@ pub const client = @import("client.zig");
 pub const Client = client.Client;
 pub const Subscription = client.Subscription;
 pub const Message = client.Message;
+pub const MessageRef = client.MessageRef;
 pub const Options = client.Options;
 pub const Stats = client.Stats;
 

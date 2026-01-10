@@ -60,6 +60,63 @@ pub const Message = struct {
     }
 };
 
+/// Zero-copy message reference (slices borrow from read buffer).
+/// MUST be consumed before next read operation or converted via toOwned().
+/// Use for high-throughput scenarios where allocation overhead matters.
+pub const MessageRef = struct {
+    subject: []const u8,
+    sid: u64,
+    reply_to: ?[]const u8,
+    data: []const u8,
+    headers: ?[]const u8,
+
+    /// Converts borrowed MessageRef to owned Message by copying all data.
+    /// Use when you need to keep the message beyond the current iteration.
+    pub fn toOwned(self: MessageRef, allocator: Allocator) !Message {
+        const reply_len = if (self.reply_to) |rt| rt.len else 0;
+        const hdr_len = if (self.headers) |h| h.len else 0;
+        const total = self.subject.len + self.data.len + reply_len + hdr_len;
+
+        assert(self.subject.len > 0);
+        assert(self.sid > 0);
+
+        const buf = try allocator.alloc(u8, total);
+        errdefer allocator.free(buf);
+
+        var offset: usize = 0;
+
+        @memcpy(buf[offset..][0..self.subject.len], self.subject);
+        const subj = buf[offset..][0..self.subject.len];
+        offset += self.subject.len;
+
+        @memcpy(buf[offset..][0..self.data.len], self.data);
+        const payload = buf[offset..][0..self.data.len];
+        offset += self.data.len;
+
+        const reply = if (self.reply_to) |rt| blk: {
+            @memcpy(buf[offset..][0..rt.len], rt);
+            const slice = buf[offset..][0..rt.len];
+            offset += rt.len;
+            break :blk slice;
+        } else null;
+
+        const hdrs = if (self.headers) |h| blk: {
+            @memcpy(buf[offset..][0..h.len], h);
+            break :blk buf[offset..][0..h.len];
+        } else null;
+
+        return Message{
+            .subject = subj,
+            .sid = self.sid,
+            .reply_to = reply,
+            .data = payload,
+            .headers = hdrs,
+            .owned = true,
+            .backing_buf = buf,
+        };
+    }
+};
+
 /// Client connection options.
 pub const Options = struct {
     /// Client name for identification.
@@ -90,6 +147,12 @@ pub const Options = struct {
     nkey_seed: ?[]const u8 = null,
     /// JWT for authentication.
     jwt: ?[]const u8 = null,
+    /// Sync mode - disables background reader task.
+    /// Required for zero-copy nextRef()/nextRefBlock() API.
+    sync_mode: bool = false,
+    /// Read/write buffer size. Must be >= max message size.
+    /// Default 2MB provides headroom for 1MB max_payload.
+    buffer_size: usize = 2 * 1024 * 1024,
 };
 
 /// Connection statistics (Go client parity).
@@ -198,9 +261,9 @@ pub const Client = struct {
     state: State,
     options: Options,
 
-    // Buffers
-    read_buffer: [32768]u8,
-    write_buffer: [32768]u8,
+    // Buffers (allocated based on options.buffer_size)
+    read_buffer: []u8,
+    write_buffer: []u8,
     pending_toss: usize,
 
     // Subscription routing (O(1) via SidMap)
@@ -271,12 +334,26 @@ pub const Client = struct {
             std.mem.asBytes(&enable),
         ) catch {};
 
-        // Initialize buffers and state
-        client.read_buffer = undefined;
-        client.write_buffer = undefined;
+        // Allocate buffers based on options
+        client.read_buffer = allocator.alloc(u8, opts.buffer_size) catch {
+            client.stream.close(io);
+            allocator.destroy(client);
+            return error.OutOfMemory;
+        };
+        errdefer allocator.free(client.read_buffer);
+
+        client.write_buffer = allocator.alloc(u8, opts.buffer_size) catch {
+            allocator.free(client.read_buffer);
+            client.stream.close(io);
+            allocator.destroy(client);
+            return error.OutOfMemory;
+        };
+        errdefer allocator.free(client.write_buffer);
+
+        // Initialize I/O and state
         client.io = io;
-        client.reader = client.stream.reader(io, &client.read_buffer);
-        client.writer = client.stream.writer(io, &client.write_buffer);
+        client.reader = client.stream.reader(io, client.read_buffer);
+        client.writer = client.stream.writer(io, client.write_buffer);
         client.parser = .{};
         client.state = .connecting;
         client.pending_toss = 0;
@@ -301,15 +378,17 @@ pub const Client = struct {
         // Perform handshake
         try client.handshake(allocator, opts, parsed);
 
-        // Start reader task (producer for subscription queues)
-        client.reader_future = io.concurrent(
-            readerTaskFn,
-            .{ client, allocator },
-        ) catch {
-            client.stream.close(io);
-            return error.ConcurrencyUnavailable;
-        };
-        client.reader_running = true;
+        // Start reader task only in async mode (not sync_mode)
+        if (!opts.sync_mode) {
+            client.reader_future = io.concurrent(
+                readerTaskFn,
+                .{ client, allocator },
+            ) catch {
+                client.stream.close(io);
+                return error.ConcurrencyUnavailable;
+            };
+            client.reader_running = true;
+        }
 
         assert(client.next_sid >= 1);
         assert(client.state == .connected);
@@ -838,6 +917,7 @@ pub const Client = struct {
                         self.stats.bytes_in += args.payload.len;
 
                         if (self.getSubscriptionBySid(args.sid)) |sub| {
+                            // Allocate-and-queue delivery
                             const reply_len = if (args.reply_to) |rt|
                                 rt.len
                             else
@@ -888,6 +968,7 @@ pub const Client = struct {
                             args.payload.len + args.headers.len;
 
                         if (self.getSubscriptionBySid(args.sid)) |sub| {
+                            // Allocate-and-queue delivery
                             const reply_len = if (args.reply_to) |rt|
                                 rt.len
                             else
@@ -971,6 +1052,116 @@ pub const Client = struct {
         }
     }
 
+    /// Routes next message as zero-copy MessageRef (no allocation).
+    /// Returns null if no message available or connection closed.
+    /// Caller must consume MessageRef before next call (slices borrow buffer).
+    pub fn routeNextMessageRef(self: *Client) !?MessageRef {
+        if (!self.state.canReceive()) {
+            return error.NotConnected;
+        }
+
+        self.tossPending();
+
+        while (true) {
+            var data = self.reader.interface.buffered();
+
+            if (data.len == 0) {
+                self.reader.interface.fillMore() catch |err| {
+                    switch (err) {
+                        error.EndOfStream, error.ReadFailed => {
+                            self.state = .disconnected;
+                            return null;
+                        },
+                    }
+                };
+
+                data = self.reader.interface.buffered();
+                if (data.len == 0) return null;
+            }
+
+            var consumed: usize = 0;
+            const cmd = self.parser.parse(
+                std.heap.page_allocator,
+                data,
+                &consumed,
+            ) catch {
+                return error.ProtocolError;
+            };
+
+            if (cmd) |c| {
+                switch (c) {
+                    .ping => {
+                        self.pending_toss = consumed;
+                        try self.sendPong();
+                        self.tossPending();
+                    },
+                    .pong, .ok => {
+                        self.pending_toss = consumed;
+                        self.tossPending();
+                    },
+                    .err => |_| {
+                        self.pending_toss = consumed;
+                        self.tossPending();
+                    },
+                    .info => |new_info| {
+                        self.pending_toss = consumed;
+                        if (self.server_info) |*info| {
+                            info.deinit(std.heap.page_allocator);
+                        }
+                        self.server_info = new_info;
+                        self.tossPending();
+                    },
+                    .msg => |args| {
+                        self.stats.msgs_in += 1;
+                        self.stats.bytes_in += args.payload.len;
+                        self.pending_toss = consumed;
+
+                        assert(args.subject.len > 0);
+                        assert(args.sid > 0);
+
+                        return MessageRef{
+                            .subject = args.subject,
+                            .sid = args.sid,
+                            .reply_to = args.reply_to,
+                            .data = args.payload,
+                            .headers = null,
+                        };
+                    },
+                    .hmsg => |args| {
+                        self.stats.msgs_in += 1;
+                        self.stats.bytes_in +=
+                            args.payload.len + args.headers.len;
+                        self.pending_toss = consumed;
+
+                        assert(args.subject.len > 0);
+                        assert(args.sid > 0);
+
+                        return MessageRef{
+                            .subject = args.subject,
+                            .sid = args.sid,
+                            .reply_to = args.reply_to,
+                            .data = args.payload,
+                            .headers = args.headers,
+                        };
+                    },
+                }
+            } else {
+                const buffered_len = self.reader.interface.buffered().len;
+                if (buffered_len >= self.read_buffer.len) {
+                    return error.ProtocolError;
+                }
+                self.reader.interface.fillMore() catch |err| {
+                    switch (err) {
+                        error.EndOfStream, error.ReadFailed => {
+                            self.state = .disconnected;
+                            return null;
+                        },
+                    }
+                };
+            }
+        }
+    }
+
     /// Sends PONG response.
     fn sendPong(self: *Client) !void {
         assert(self.state.canSend());
@@ -1024,6 +1215,8 @@ pub const Client = struct {
         if (self.server_info) |*info| {
             info.deinit(allocator);
         }
+        allocator.free(self.read_buffer);
+        allocator.free(self.write_buffer);
         allocator.destroy(self);
     }
 };
@@ -1064,6 +1257,53 @@ pub const Subscription = struct {
         const n = self.queue.get(self.client.io, &buf, 0) catch return null;
         if (n == 0) return null;
         return buf[0];
+    }
+
+    /// Returns next message as zero-copy MessageRef.
+    /// Slices borrow from read buffer - valid until next nextRef() call.
+    /// Use with: while (try sub.nextRef()) |msg| { ... }
+    pub fn nextRef(self: *Subscription) !?MessageRef {
+        assert(self.state == .active or self.state == .draining);
+
+        while (true) {
+            const ref = try self.client.routeNextMessageRef() orelse return null;
+            if (ref.sid == self.sid) return ref;
+            // Message for different subscription - route to its queue
+            if (self.client.getSubscriptionBySid(ref.sid)) |other_sub| {
+                const owned = ref.toOwned(self.client.reader_allocator) catch {
+                    continue;
+                };
+                other_sub.pushMessage(owned) catch {
+                    owned.deinit(self.client.reader_allocator);
+                };
+                other_sub.received_msgs += 1;
+            }
+            self.client.tossPending();
+        }
+    }
+
+    /// Returns next message as zero-copy MessageRef, blocking up to timeout_ms.
+    /// Returns null on timeout or connection close.
+    /// Requires sync_mode=true in Client options.
+    pub fn nextRefBlock(self: *Subscription, timeout_ms: u32) !?MessageRef {
+        assert(self.state == .active or self.state == .draining);
+        assert(timeout_ms > 0);
+
+        const start = std.time.Instant.now() catch return try self.nextRef();
+        const timeout_ns = @as(u64, timeout_ms) * 1_000_000;
+
+        while (true) {
+            const now = std.time.Instant.now() catch return null;
+            if (now.since(start) >= timeout_ns) {
+                return null;
+            }
+
+            // routeNextMessageRef() handles all buffer management and blocks
+            // on fillMore() internally. It also handles PING/PONG.
+            if (try self.nextRef()) |ref| {
+                return ref;
+            }
+        }
     }
 
     /// Batch receive - waits for at least 1, returns up to buf.len.

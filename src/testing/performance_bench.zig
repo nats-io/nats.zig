@@ -98,14 +98,20 @@ const TerminalUI = struct {
     /// Clear current line and move cursor to column 1.
     pub fn clearLine(self: *TerminalUI) void {
         if (!self.is_tty) return;
-        self.stderr.writeStreamingAll(self.io, ESC_CLEAR_LINE ++ ESC_CURSOR_COL1) catch {};
+        self.stderr.writeStreamingAll(
+            self.io,
+            ESC_CLEAR_LINE ++ ESC_CURSOR_COL1,
+        ) catch {};
     }
 
     /// Write text with specified color (no-op if not TTY).
     fn writeColor(self: *TerminalUI, color: []const u8, text: []const u8) void {
         if (self.is_tty) self.stderr.writeStreamingAll(self.io, color) catch {};
         self.stderr.writeStreamingAll(self.io, text) catch {};
-        if (self.is_tty) self.stderr.writeStreamingAll(self.io, ESC_RESET) catch {};
+        if (self.is_tty) self.stderr.writeStreamingAll(
+            self.io,
+            ESC_RESET,
+        ) catch {};
     }
 
     /// Write colored text (green for success).
