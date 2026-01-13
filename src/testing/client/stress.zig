@@ -18,7 +18,7 @@ pub fn testAsyncStress500Messages(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const publisher = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -45,7 +45,7 @@ pub fn testAsyncStress500Messages(allocator: std.mem.Allocator) void {
         reportResult("async_stress_500", false, "flush failed");
         return;
     };
-    std.posix.nanosleep(0, 50_000_000);
+    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Publish 500 messages
     const NUM_MSGS = 500;
@@ -87,7 +87,7 @@ pub fn testAsyncStress1000Messages(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
@@ -144,7 +144,7 @@ pub fn testAsyncStress2000Messages(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
@@ -203,7 +203,7 @@ pub fn testPayload30KB(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -249,7 +249,7 @@ pub fn testManySubscriptions(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -292,7 +292,7 @@ pub fn testPayloadBoundary(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -366,7 +366,7 @@ pub fn testFiveConcurrentClients(allocator: std.mem.Allocator) void {
     }
 
     for (0..5) |i| {
-        ios[i] = .init(allocator, .{});
+        ios[i] = .init(allocator, .{ .environ = .empty });
         clients[i] = nats.Client.connect(allocator, ios[i].io(), url, .{}) catch {
             reportResult("five_concurrent", false, "connect failed");
             return;

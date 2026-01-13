@@ -20,6 +20,11 @@ pub const ValidationError = error{
 pub fn validatePublish(subject: []const u8) ValidationError!void {
     if (subject.len == 0) return error.EmptySubject;
 
+    // Reject CR/LF to prevent protocol injection
+    if (std.mem.indexOfAny(u8, subject, "\r\n") != null) {
+        return error.InvalidCharacter;
+    }
+
     var token_start: usize = 0;
     for (subject, 0..) |c, i| {
         if (c == '.') {
@@ -39,6 +44,11 @@ pub fn validatePublish(subject: []const u8) ValidationError!void {
 /// Validates a subject for subscribing (wildcards allowed).
 pub fn validateSubscribe(subject: []const u8) ValidationError!void {
     if (subject.len == 0) return error.EmptySubject;
+
+    // Reject CR/LF to prevent protocol injection
+    if (std.mem.indexOfAny(u8, subject, "\r\n") != null) {
+        return error.InvalidCharacter;
+    }
 
     var token_start: usize = 0;
     var has_full_wildcard = false;
@@ -62,6 +72,22 @@ pub fn validateSubscribe(subject: []const u8) ValidationError!void {
 
     // Check last token isn't empty
     if (token_start >= subject.len) return error.EmptyToken;
+}
+
+/// Validates a reply-to address for protocol safety.
+pub fn validateReplyTo(reply_to: []const u8) ValidationError!void {
+    assert(reply_to.len > 0);
+    if (std.mem.indexOfAny(u8, reply_to, "\r\n \t") != null) {
+        return error.InvalidCharacter;
+    }
+}
+
+/// Validates a queue group name for protocol safety.
+pub fn validateQueueGroup(queue: []const u8) ValidationError!void {
+    assert(queue.len > 0);
+    if (std.mem.indexOfAny(u8, queue, "\r\n \t") != null) {
+        return error.InvalidCharacter;
+    }
 }
 
 /// Checks if a subject matches a pattern (with wildcards).
@@ -130,6 +156,11 @@ test "validate publish subject" {
     try std.testing.expectError(inv_char, validatePublish("foo.>"));
     const space_err = error.SpaceInSubject;
     try std.testing.expectError(space_err, validatePublish("foo bar"));
+
+    // CR/LF injection protection
+    try std.testing.expectError(inv_char, validatePublish("test\r\nINFO"));
+    try std.testing.expectError(inv_char, validatePublish("test\nfoo"));
+    try std.testing.expectError(inv_char, validatePublish("test\rfoo"));
 }
 
 test "validate subscribe subject" {
@@ -147,6 +178,10 @@ test "validate subscribe subject" {
     const inv_char = error.InvalidCharacter;
     try std.testing.expectError(inv_char, validateSubscribe("foo.bar>"));
     try std.testing.expectError(inv_char, validateSubscribe("foo.bar*"));
+
+    // CR/LF injection protection
+    try std.testing.expectError(inv_char, validateSubscribe("test\r\nUNSUB"));
+    try std.testing.expectError(inv_char, validateSubscribe("test\nfoo"));
 }
 
 test "subject matching" {
@@ -180,4 +215,36 @@ test "get token" {
     try std.testing.expectEqualSlices(u8, "bar", getToken("foo.bar.baz", 1).?);
     try std.testing.expectEqualSlices(u8, "baz", getToken("foo.bar.baz", 2).?);
     try std.testing.expect(getToken("foo.bar.baz", 3) == null);
+}
+
+test "validateReplyTo rejects injection" {
+    // Valid reply-to addresses
+    try validateReplyTo("_INBOX.abc123");
+    try validateReplyTo("reply.to.subject");
+
+    // CR/LF injection
+    const inv_char = error.InvalidCharacter;
+    try std.testing.expectError(inv_char, validateReplyTo("inbox\r\nUNSUB"));
+    try std.testing.expectError(inv_char, validateReplyTo("inbox\nfoo"));
+    try std.testing.expectError(inv_char, validateReplyTo("inbox\rfoo"));
+
+    // Spaces and tabs
+    try std.testing.expectError(inv_char, validateReplyTo("inbox foo"));
+    try std.testing.expectError(inv_char, validateReplyTo("inbox\tfoo"));
+}
+
+test "validateQueueGroup rejects injection" {
+    // Valid queue groups
+    try validateQueueGroup("workers");
+    try validateQueueGroup("queue-1");
+
+    // CR/LF injection
+    const inv_char = error.InvalidCharacter;
+    try std.testing.expectError(inv_char, validateQueueGroup("workers\r\n"));
+    try std.testing.expectError(inv_char, validateQueueGroup("workers\nfoo"));
+    try std.testing.expectError(inv_char, validateQueueGroup("workers\rfoo"));
+
+    // Spaces and tabs
+    try std.testing.expectError(inv_char, validateQueueGroup("workers foo"));
+    try std.testing.expectError(inv_char, validateQueueGroup("workers\tfoo"));
 }

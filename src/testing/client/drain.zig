@@ -18,7 +18,7 @@ pub fn testAsyncDrainOperation(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -61,7 +61,7 @@ pub fn testAsyncDrainCleansUp(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -88,7 +88,7 @@ pub fn testAsyncDrainCleansUp(allocator: std.mem.Allocator) void {
     client.flush() catch {};
 
     // Small delay for messages to arrive
-    std.posix.nanosleep(0, 50_000_000);
+    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Drain - should clean up all subscriptions and close connection
     client.drain(allocator) catch {
@@ -108,7 +108,7 @@ pub fn testDrainTwice(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -133,7 +133,7 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {

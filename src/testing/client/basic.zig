@@ -18,7 +18,7 @@ pub fn testClientAsyncBasic(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
@@ -56,7 +56,7 @@ pub fn testClientAsyncTryNext(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -86,7 +86,7 @@ pub fn testClientAsyncServerInfo(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -110,7 +110,7 @@ pub fn testClientAsyncRapidSubUnsub(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -148,7 +148,7 @@ pub fn testClientName(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
@@ -170,7 +170,7 @@ pub fn testClientVerbose(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
@@ -200,7 +200,7 @@ pub fn testMultipleConnectDisconnect(allocator: std.mem.Allocator) void {
 
     // Connect and disconnect 5 times in a row
     for (0..5) |_| {
-        var io: std.Io.Threaded = .init(allocator, .{});
+        var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
         const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
             io.deinit();
             reportResult("multi_connect_disconnect", false, "connect failed");

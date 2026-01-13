@@ -21,7 +21,7 @@ pub fn testServerInfoParsing(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -71,7 +71,7 @@ pub fn testPingPongKeepAlive(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -99,7 +99,7 @@ pub fn testPingPongKeepAlive(allocator: std.mem.Allocator) void {
             return;
         };
         // Small delay between operations
-        std.posix.nanosleep(0, 100_000_000); // 100ms
+        io.io().sleep(.fromMilliseconds(100), .awake) catch {};
     }
 
     // Connection should still be alive after all operations
@@ -133,7 +133,7 @@ pub fn testProtocolAuthError(allocator: std.mem.Allocator) void {
     // Connect to auth server with WRONG token
     const url = formatAuthUrl(&url_buf, auth_port, "wrong-token");
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const result = nats.Client.connect(allocator, io.io(), url, .{});
@@ -158,7 +158,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -398,7 +398,7 @@ pub fn testMaxPayloadLimit(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -466,7 +466,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {

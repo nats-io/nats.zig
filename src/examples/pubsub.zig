@@ -16,7 +16,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Create I/O system
-    var threaded: std.Io.Threaded = .init(allocator, .{});
+    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer threaded.deinit();
     const io = threaded.io();
 

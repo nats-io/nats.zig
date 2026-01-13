@@ -5,7 +5,6 @@
 
 const std = @import("std");
 const assert = std.debug.assert;
-const posix = std.posix;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
@@ -57,50 +56,40 @@ pub const ServerInstance = struct {
             try args.append(allocator, "-DV");
         }
 
-        self.process = std.process.Child.init(args.items, allocator);
-        self.process.?.stdout_behavior = .Ignore;
-        self.process.?.stderr_behavior = .Ignore;
-
-        try self.process.?.spawn(io);
+        self.process = try std.process.spawn(io, .{
+            .argv = args.items,
+            .stdout = .ignore,
+            .stderr = .ignore,
+        });
         assert(self.process != null);
     }
 
     /// Waits for the server to become ready by probing the TCP port.
-    pub fn waitReady(self: *ServerInstance, timeout_ms: u32) !void {
+    pub fn waitReady(self: *ServerInstance, io: Io, timeout_ms: u32) !void {
         assert(self.process != null);
         const max_attempts = timeout_ms / 50;
         var attempts: u32 = 0;
 
         while (attempts < max_attempts) : (attempts += 1) {
-            if (self.probePort()) {
+            if (self.probePort(io)) {
                 return;
             }
-            posix.nanosleep(0, 50_000_000); // 50ms
+            io.sleep(.fromMilliseconds(50), .awake) catch {};
         }
 
         return error.ServerStartTimeout;
     }
 
     /// Probes if the server port is accepting connections.
-    fn probePort(self: *ServerInstance) bool {
-        const sock = posix.socket(
-            posix.AF.INET,
-            posix.SOCK.STREAM,
-            0,
-        ) catch return false;
-        defer posix.close(sock);
+    fn probePort(self: *ServerInstance, io: Io) bool {
+        const address = Io.net.IpAddress.parse("127.0.0.1", self.config.port) catch
+            return false;
 
-        var addr: posix.sockaddr.in = .{
-            .family = posix.AF.INET,
-            .port = @byteSwap(self.config.port),
-            .addr = @byteSwap(@as(u32, 0x7f000001)), // 127.0.0.1
-        };
-
-        posix.connect(
-            sock,
-            @ptrCast(&addr),
-            @sizeOf(posix.sockaddr.in),
-        ) catch return false;
+        const stream = Io.net.IpAddress.connect(address, io, .{
+            .mode = .stream,
+            .protocol = .tcp,
+        }) catch return false;
+        stream.close(io);
 
         return true;
     }
@@ -108,7 +97,7 @@ pub const ServerInstance = struct {
     /// Stops the server process.
     pub fn stop(self: *ServerInstance, io: Io) void {
         if (self.process) |*proc| {
-            _ = proc.kill(io) catch {};
+            proc.kill(io);
             _ = proc.wait(io) catch {};
             self.process = null;
         }
@@ -146,7 +135,7 @@ pub const ServerManager = struct {
     ) !*ServerInstance {
         var instance: ServerInstance = .init(config);
         try instance.start(allocator, io);
-        try instance.waitReady(5000);
+        try instance.waitReady(io, 5000);
 
         try self.servers.append(allocator, instance);
         return &self.servers.items[self.servers.items.len - 1];

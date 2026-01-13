@@ -578,7 +578,8 @@ pub const BenchOpts = struct {
     size: usize = 16,
     port: u16 = 4222,
     num_runs: u32 = 1,
-    output_file: ?[]const u8 = null, // Markdown report file (optional)
+    output_file: ?[]const u8 = null,
+    server_path: ?[]const u8 = null,
 };
 
 /// Parsed benchmark statistics.
@@ -763,7 +764,7 @@ fn suppressOtherPipe(client: Client) bool {
 
 /// Spawn a benchmark process.
 pub fn runExe(
-    allocator: Allocator,
+    _: Allocator,
     io: Io,
     client: Client,
     role: Role,
@@ -776,20 +777,24 @@ pub fn runExe(
     buildExeArgs(&ab, client, role, opts, payload_buf);
     assert(ab.count > 0);
 
-    var child = std.process.Child.init(ab.slice(), allocator);
-
     const pipe = getOutputPipe(client);
     const suppress = suppressOtherPipe(client);
-    if (pipe == .stderr) {
-        child.stderr_behavior = .Pipe;
-        child.stdout_behavior = if (suppress) .Ignore else .Inherit;
-    } else {
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = if (suppress) .Ignore else .Inherit;
-    }
 
-    try child.spawn(io);
-    return child;
+    const stdout_opt: std.process.SpawnOptions.StdIo = if (pipe == .stderr)
+        (if (suppress) .ignore else .inherit)
+    else
+        .pipe;
+
+    const stderr_opt: std.process.SpawnOptions.StdIo = if (pipe == .stderr)
+        .pipe
+    else
+        (if (suppress) .ignore else .inherit);
+
+    return try std.process.spawn(io, .{
+        .argv = ab.slice(),
+        .stdout = stdout_opt,
+        .stderr = stderr_opt,
+    });
 }
 
 /// Parse benchmark output for a specific client.
@@ -1004,6 +1009,7 @@ fn parseGoStatsLine(data: []const u8) ?BenchStats {
 
 /// Read from pipe with timeout.
 fn readPipeWithTimeout(
+    io: Io,
     pipe: ?File,
     buf: []u8,
     timeout_ns: u64,
@@ -1017,7 +1023,7 @@ fn readPipeWithTimeout(
         if (n == 0) {
             const now = std.time.Instant.now() catch break;
             if (now.since(start) > timeout_ns) break;
-            std.posix.nanosleep(0, 10_000_000);
+            io.sleep(.fromMilliseconds(10), .awake) catch {};
             continue;
         }
         total += n;
@@ -1061,7 +1067,7 @@ fn readUntilDone(io: Io, pipe: ?File, buf: []u8, timeout_ns: u64) []const u8 {
         if (n == 0) {
             const now = std.time.Instant.now() catch break;
             if (now.since(start) > timeout_ns) break;
-            std.posix.nanosleep(0, 10_000_000);
+            io.sleep(.fromMilliseconds(10), .awake) catch {};
             continue;
         }
         total += n;
@@ -1075,7 +1081,7 @@ fn readUntilDone(io: Io, pipe: ?File, buf: []u8, timeout_ns: u64) []const u8 {
 
         if (has_marker) {
             // Wait for trailing lines, then do one more read
-            std.posix.nanosleep(0, 50_000_000); // 50ms
+            io.sleep(.fromMilliseconds(50), .awake) catch {};
             var extra_slice = [_][]u8{buf[total..]};
             const extra = file.readStreaming(io, &extra_slice) catch 0;
             total += extra;
@@ -1100,7 +1106,7 @@ pub fn runPublisher(
         child.stderr
     else
         child.stdout;
-    const output = readPipeWithTimeout(pipe, &buf, TMOUT);
+    const output = readPipeWithTimeout(io, pipe, &buf, TMOUT);
     _ = child.wait(io) catch {};
 
     return parseOutput(client, output);
@@ -1123,7 +1129,7 @@ pub fn runSubscriber(
         child.stderr
     else
         child.stdout;
-    const output = readPipeWithTimeout(pipe, &buf, TMOUT);
+    const output = readPipeWithTimeout(io, pipe, &buf, TMOUT);
     _ = child.wait(io) catch {};
 
     return parseOutput(client, output);
@@ -1146,7 +1152,7 @@ pub fn runPubSub(
     var sub = try runExe(allocator, io, sub_client, .subscriber, opts, &sub_payload);
 
     // Wait for subscriber to connect
-    std.posix.nanosleep(0, 750_000_000);
+    io.sleep(.fromMilliseconds(750), .awake) catch {};
 
     // Start publisher
     var publ = try runExe(allocator, io, pub_client, .publisher, opts, &pub_payload);
@@ -1163,7 +1169,7 @@ pub fn runPubSub(
     _ = publ.wait(io) catch {};
 
     // Give subscriber time to receive all messages
-    std.posix.nanosleep(2, 0);
+    io.sleep(.fromSeconds(2), .awake) catch {};
 
     // Read subscriber output
     var sub_buf: [16384]u8 = undefined;
@@ -1184,7 +1190,7 @@ pub fn runPubSub(
 /// Spawn fire_starter (io_uring server + publisher).
 /// Usage: fire_starter <msg_count> <msg_size>
 /// Fixed subject: stress.test
-pub fn runFireStarter(allocator: Allocator, io: Io, opts: BenchOpts) !std.process.Child {
+pub fn runFireStarter(_: Allocator, io: Io, opts: BenchOpts) !std.process.Child {
     assert(opts.num_msgs > 0);
     assert(opts.size > 0);
 
@@ -1193,13 +1199,12 @@ pub fn runFireStarter(allocator: Allocator, io: Io, opts: BenchOpts) !std.proces
     ab.addFmt("{d}", .{opts.num_msgs});
     ab.addFmt("{d}", .{opts.size});
 
-    var child = std.process.Child.init(ab.slice(), allocator);
     // fire_starter outputs stats to stderr
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Pipe;
-
-    try child.spawn(io);
-    return child;
+    return try std.process.spawn(io, .{
+        .argv = ab.slice(),
+        .stdout = .ignore,
+        .stderr = .pipe,
+    });
 }
 
 /// Run fire_starter with a subscriber (max throughput test).
@@ -1217,7 +1222,7 @@ pub fn runFireStarterTest(
     var fire = try runFireStarter(allocator, io, opts);
 
     // Wait for fire_starter to be ready
-    std.posix.nanosleep(0, 500_000_000);
+    io.sleep(.fromMilliseconds(500), .awake) catch {};
 
     // Start subscriber with stress.test subject
     var sub_opts = opts;
@@ -1247,17 +1252,11 @@ pub fn runFireStarterTest(
     };
 }
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
-    // Create I/O system for process management
-    var threaded: Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
-
-    const opts = parseArgs(allocator) catch |err| {
+    const opts = parseArgs(init) catch |err| {
         if (err == error.ShowHelp) {
             printHelp();
             return;
@@ -1272,7 +1271,7 @@ pub fn main() !void {
     var all_results = AllResults{};
 
     // Ensure nats-server is running
-    ensureNatsServer(io);
+    ensureNatsServer(io, opts.server_path);
 
     printHeader(&stdout, opts, &ui);
     stdout.flush();
@@ -1287,7 +1286,7 @@ pub fn main() !void {
     try runTable2_2(allocator, io, opts, &ui, &all_results, &stdout);
 
     // Table 3: Fire starter test (needs nats-server stopped)
-    stopNatsServer(io);
+    stopNatsServer(io, opts.server_path);
     try runTable3(allocator, io, opts, &ui, &all_results, &stdout);
 
     stdout.flush();
@@ -1302,17 +1301,22 @@ pub fn main() !void {
     }
 }
 
-fn parseArgs(allocator: Allocator) !BenchOpts {
-    var args = try std.process.argsWithAllocator(allocator);
-    defer args.deinit();
-    _ = args.next();
+fn parseArgs(init: std.process.Init) !BenchOpts {
+    var args_iter = std.process.Args.Iterator.initAllocator(
+        init.minimal.args,
+        init.gpa,
+    ) catch |err| {
+        std.process.fatal("failed to init args: {}", .{err});
+    };
+    defer args_iter.deinit();
+    _ = args_iter.skip();
 
     var opts = BenchOpts{};
     var has_msgs = false;
     var has_size = false;
     var has_runs = false;
 
-    while (args.next()) |arg| {
+    while (args_iter.next()) |arg| {
         if (std.mem.startsWith(u8, arg, "--msgs=")) {
             opts.num_msgs = std.fmt.parseInt(u64, arg[7..], 10) catch
                 return error.InvalidArgument;
@@ -1329,6 +1333,8 @@ fn parseArgs(allocator: Allocator) !BenchOpts {
             has_runs = true;
         } else if (std.mem.startsWith(u8, arg, "--output=")) {
             opts.output_file = arg[9..];
+        } else if (std.mem.startsWith(u8, arg, "--server=")) {
+            opts.server_path = arg[9..];
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return error.ShowHelp;
         }
@@ -1341,18 +1347,20 @@ fn parseArgs(allocator: Allocator) !BenchOpts {
 fn printHelp() void {
     std.debug.print(
         \\
-        \\Usage: zig build run-perf-bench -- --msgs=N --size=N --runs=N [--output=FILE]
+        \\Usage: zig build run-perf-bench -- --msgs=N --size=N --runs=N [OPTIONS]
         \\
         \\Options:
-        \\  --msgs=N      Number of messages (required)
-        \\  --size=N      Payload size in bytes (required)
-        \\                Supports suffixes: B, K/KB, M/MB
-        \\  --runs=N      Number of runs per test (required, max 32)
-        \\  --output=FILE Write markdown report to FILE (optional)
+        \\  --msgs=N       Number of messages (required)
+        \\  --size=N       Payload size in bytes (required)
+        \\                 Supports suffixes: B, K/KB, M/MB
+        \\  --runs=N       Number of runs per test (required, max 32)
+        \\  --output=FILE  Write markdown report to FILE (optional)
+        \\  --server=PATH  Use custom nats-server binary (optional)
         \\
         \\Examples:
         \\  zig build run-perf-bench -- --msgs=100000 --size=16 --runs=3
         \\  zig build run-perf-bench -- --msgs=1000000 --size=1K --runs=5 --output=results.md
+        \\  zig build run-perf-bench -- --msgs=100000 --size=16 --runs=3 --server=/opt/nats/nats-server
         \\
     , .{});
 }
@@ -1378,42 +1386,42 @@ fn parseSizeArg(val: []const u8) !usize {
     return error.InvalidSize;
 }
 
-fn ensureNatsServer(io: Io) void {
+fn ensureNatsServer(io: Io, server_path: ?[]const u8) void {
+    const server_bin = server_path orelse "nats-server";
+    const server_name = std.fs.path.basename(server_bin);
+
     // Check if nats-server is running
-    var child = std.process.Child.init(
-        &.{ "pgrep", "nats-server" },
-        std.heap.page_allocator,
-    );
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    child.spawn(io) catch return;
+    var child = std.process.spawn(io, .{
+        .argv = &.{ "pgrep", server_name },
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch return;
     const term = child.wait(io) catch return;
 
-    if (term.Exited != 0) {
+    if (term.exited != 0) {
         // Start nats-server
-        var server = std.process.Child.init(
-            &.{"nats-server"},
-            std.heap.page_allocator,
-        );
-        server.stdout_behavior = .Ignore;
-        server.stderr_behavior = .Ignore;
-        server.spawn(io) catch {};
-        std.posix.nanosleep(1, 0);
+        _ = std.process.spawn(io, .{
+            .argv = &.{server_bin},
+            .stdout = .ignore,
+            .stderr = .ignore,
+        }) catch {};
+        io.sleep(.fromSeconds(1), .awake) catch {};
     }
 }
 
-fn stopNatsServer(io: Io) void {
+fn stopNatsServer(io: Io, server_path: ?[]const u8) void {
+    const server_bin = server_path orelse "nats-server";
+    const server_name = std.fs.path.basename(server_bin);
+
     // Kill nats-server if running (needed before fire_starter test)
-    var child = std.process.Child.init(
-        &.{ "pkill", "nats-server" },
-        std.heap.page_allocator,
-    );
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    child.spawn(io) catch return;
+    var child = std.process.spawn(io, .{
+        .argv = &.{ "pkill", server_name },
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch return;
     _ = child.wait(io) catch {};
     // Wait for port to be released
-    std.posix.nanosleep(0, 500_000_000);
+    io.sleep(.fromMilliseconds(500), .awake) catch {};
 }
 
 fn printHeader(out: *StdOut, opts: BenchOpts, ui: *TerminalUI) void {

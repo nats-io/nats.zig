@@ -31,7 +31,11 @@ const SidMap = memory.SidMap;
 const Client = @This();
 
 /// Message received on a subscription.
-/// All messages are owned and must be freed via deinit().
+///
+/// All slices point into a single backing buffer for cache efficiency.
+/// Messages are owned and must be freed via deinit(allocator).
+///
+/// For zero-copy access without allocation overhead, see MessageRef.
 pub const Message = struct {
     subject: []const u8,
     sid: u64,
@@ -58,7 +62,9 @@ pub const Message = struct {
 };
 
 /// Zero-copy message reference (slices borrow from read buffer).
+///
 /// MUST be consumed before next read operation or converted via toOwned().
+/// Slices become invalid after any call that reads from the socket.
 /// Use for high-throughput scenarios where allocation overhead matters.
 pub const MessageRef = struct {
     subject: []const u8,
@@ -115,6 +121,12 @@ pub const MessageRef = struct {
 };
 
 /// Client connection options.
+///
+/// All fields have sensible defaults. Common customizations:
+/// - name: Client identifier visible in server logs
+/// - user/pass or auth_token: Authentication credentials
+/// - buffer_size: Increase for large messages (default 256KB)
+/// - async_queue_size: Messages buffered per subscription (default 256)
 pub const Options = struct {
     /// Client name for identification.
     name: ?[]const u8 = null,
@@ -266,6 +278,14 @@ read_mutex: Io.Mutex = .init,
 stats: Stats = .{},
 
 /// Connects to a NATS server.
+///
+/// Arguments:
+///     allocator: Allocator for client and buffer memory
+///     io: Io interface for async I/O operations
+///     url: NATS server URL (e.g., "nats://localhost:4222")
+///     opts: Connection options (timeouts, auth, buffer sizes)
+///
+/// Returns pointer to connected Client. Caller owns and must call deinit().
 pub fn connect(
     allocator: Allocator,
     io: Io,
@@ -275,7 +295,16 @@ pub fn connect(
     const parsed = try parseUrl(url);
 
     const client = try allocator.create(Client);
+    // Initialize fields with defaults (allocator.create returns undefined)
     client.server_info = null;
+    client.parser = .{};
+    client.state = .connecting;
+    client.pending_toss = 0;
+    client.sub_ptrs = [_]?*Sub{null} ** MAX_SUBSCRIPTIONS;
+    client.free_count = MAX_SUBSCRIPTIONS;
+    client.next_sid = 1;
+    client.read_mutex = .init;
+    client.stats = .{};
     errdefer {
         if (client.server_info) |*info| {
             info.deinit(allocator);
@@ -467,7 +496,13 @@ fn checkAuthRejection(self: *Client) !void {
     }
 }
 
-/// Subscribes to a subject. Returns subscription.
+/// Subscribes to a subject.
+///
+/// Arguments:
+///     allocator: Allocator for subscription resources
+///     subject: Subject pattern to subscribe to (wildcards allowed: *, >)
+///
+/// Returns subscription pointer. Caller must call sub.deinit() when done.
 pub fn subscribe(
     self: *Client,
     allocator: Allocator,
@@ -476,7 +511,15 @@ pub fn subscribe(
     return self.subscribeQueue(allocator, subject, null);
 }
 
-/// Subscribes with queue group.
+/// Subscribes with queue group for load balancing.
+///
+/// Arguments:
+///     allocator: Allocator for subscription resources
+///     subject: Subject pattern to subscribe to
+///     queue_group: Queue group name (messages distributed among members)
+///
+/// Queue groups allow multiple subscribers to share the message load.
+/// Only one subscriber in the group receives each message.
 pub fn subscribeQueue(
     self: *Client,
     allocator: Allocator,
@@ -487,6 +530,7 @@ pub fn subscribeQueue(
         return error.NotConnected;
     }
     try pubsub.validateSubscribe(subject);
+    if (queue_group) |qg| try pubsub.validateQueueGroup(qg);
     assert(self.next_sid >= 1);
 
     // Allocate slot
@@ -534,6 +578,11 @@ pub fn subscribeQueue(
 
     // Store in SidMap
     self.sidmap.put(sid, slot_idx) catch {
+        // Cleanup - errdefers inactive after sub.* initialization
+        allocator.free(queue_buf);
+        if (owned_queue) |qg| allocator.free(qg);
+        allocator.free(owned_subject);
+        allocator.destroy(sub);
         self.free_slots[self.free_count] = slot_idx;
         self.free_count += 1;
         return error.TooManySubscriptions;
@@ -546,6 +595,16 @@ pub fn subscribeQueue(
         .queue_group = queue_group,
         .sid = sid,
     }) catch {
+        // Rollback sidmap and sub_ptrs registration
+        _ = self.sidmap.remove(sid);
+        self.sub_ptrs[slot_idx] = null;
+        self.free_slots[self.free_count] = slot_idx;
+        self.free_count += 1;
+        // Cleanup allocations
+        allocator.free(queue_buf);
+        if (owned_queue) |qg| allocator.free(qg);
+        allocator.free(owned_subject);
+        allocator.destroy(sub);
         return error.EncodingFailed;
     };
 
@@ -553,6 +612,12 @@ pub fn subscribeQueue(
 }
 
 /// Publishes a message to a subject.
+///
+/// Arguments:
+///     subject: Destination subject (no wildcards allowed)
+///     payload: Message data
+///
+/// Messages are buffered. Call flush() to ensure delivery.
 pub fn publish(
     self: *Client,
     subject: []const u8,
@@ -563,6 +628,9 @@ pub fn publish(
         return error.NotConnected;
     }
     try pubsub.validatePublish(subject);
+    if (self.server_info) |info| {
+        if (payload.len > info.max_payload) return error.PayloadTooLarge;
+    }
 
     protocol.Encoder.encodePub(&self.writer.interface, .{
         .subject = subject,
@@ -589,6 +657,10 @@ pub fn publishRequest(
         return error.NotConnected;
     }
     try pubsub.validatePublish(subject);
+    try pubsub.validateReplyTo(reply_to);
+    if (self.server_info) |info| {
+        if (payload.len > info.max_payload) return error.PayloadTooLarge;
+    }
 
     protocol.Encoder.encodePub(&self.writer.interface, .{
         .subject = subject,
@@ -613,7 +685,15 @@ pub fn flush(self: *Client) !void {
 }
 
 /// Sends a request and waits for a reply with timeout.
-/// Uses io.select() for proper async timeout handling.
+///
+/// Arguments:
+///     allocator: Allocator for response message
+///     subject: Request destination subject
+///     payload: Request data
+///     timeout_ms: Maximum time to wait for reply in milliseconds
+///
+/// Creates a temporary inbox subscription, sends request with reply-to,
+/// and waits for response using io.select(). Returns null on timeout.
 pub fn request(
     self: *Client,
     allocator: Allocator,
@@ -628,7 +708,7 @@ pub fn request(
     }
 
     // Generate unique inbox for reply
-    const inbox = try pubsub.newInbox(allocator);
+    const inbox = try pubsub.newInbox(allocator, self.io);
     defer allocator.free(inbox);
 
     // Subscribe to inbox (temporary subscription)
@@ -660,7 +740,7 @@ pub fn request(
         .response = &response_future,
         .timeout = &timeout_future,
     }) catch |err| {
-        _ = timeout_future.cancel(self.io);
+        timeout_future.cancel(self.io);
         if (response_future.cancel(self.io)) |msg| {
             msg.deinit(allocator);
         } else |_| {}
@@ -670,7 +750,7 @@ pub fn request(
 
     switch (select_result) {
         .response => |msg_result| {
-            _ = timeout_future.cancel(self.io);
+            timeout_future.cancel(self.io);
             return msg_result catch |err| {
                 if (err == error.Canceled or err == error.Closed) {
                     return null;
@@ -678,7 +758,7 @@ pub fn request(
                 return err;
             };
         },
-        .timeout => |_| {
+        .timeout => {
             if (response_future.cancel(self.io)) |msg| {
                 msg.deinit(allocator);
             } else |_| {}
@@ -693,28 +773,38 @@ fn sleepForRequest(io: Io, timeout_ms: u32) void {
 }
 
 /// Gracefully drains subscriptions and closes the connection.
+///
+/// Arguments:
+///     alloc: Allocator used for subscription cleanup
+///
+/// Unsubscribes all active subscriptions, drains remaining messages,
+/// and closes the connection. Use for graceful shutdown.
 pub fn drain(self: *Client, alloc: Allocator) !void {
     if (self.state != .connected) {
         return error.NotConnected;
     }
     assert(self.next_sid >= 1);
 
+    // Acquire mutex for subscription cleanup (prevents races with next())
+    self.read_mutex.lockUncancelable(self.io);
+
     // Unsubscribe all active subscriptions
     for (self.sub_ptrs, 0..) |maybe_sub, slot_idx| {
         if (maybe_sub) |sub| {
+            // Buffer UNSUB command (no I/O yet)
             protocol.Encoder.encodeUnsub(&self.writer.interface, .{
                 .sid = sub.sid,
                 .max_msgs = null,
             }) catch {};
 
+            // Close queue and clear from data structures
             sub.queue.close(self.io);
-
             _ = self.sidmap.remove(sub.sid);
             self.sub_ptrs[slot_idx] = null;
             self.free_slots[self.free_count] = @intCast(slot_idx);
             self.free_count += 1;
 
-            // Drain remaining messages
+            // Drain remaining messages from queue (in-memory, no socket I/O)
             var drain_buf: [1]Message = undefined;
             while (true) {
                 const n = sub.queue.get(self.io, &drain_buf, 0) catch break;
@@ -727,6 +817,9 @@ pub fn drain(self: *Client, alloc: Allocator) !void {
         }
     }
 
+    self.read_mutex.unlock(self.io);
+
+    // I/O operations after mutex released
     self.writer.interface.flush() catch {};
     self.state = .draining;
 
@@ -845,7 +938,7 @@ pub fn routeNextMessage(
                 .pong, .ok => {
                     reader.toss(consumed);
                 },
-                .err => |_| {
+                .err => {
                     reader.toss(consumed);
                 },
                 .info => |new_info| {
@@ -856,6 +949,14 @@ pub fn routeNextMessage(
                     self.server_info = new_info;
                 },
                 .msg => |args| {
+                    // Validate payload size against server max_payload
+                    if (self.server_info) |info| {
+                        if (args.payload_len > info.max_payload) {
+                            reader.toss(consumed);
+                            continue;
+                        }
+                    }
+
                     self.stats.msgs_in += 1;
                     self.stats.bytes_in += args.payload.len;
 
@@ -898,6 +999,7 @@ pub fn routeNextMessage(
 
                         sub.pushMessage(msg) catch {
                             allocator.free(buf);
+                            sub.dropped_msgs += 1;
                         };
 
                         sub.received_msgs += 1;
@@ -906,6 +1008,14 @@ pub fn routeNextMessage(
                     return true;
                 },
                 .hmsg => |args| {
+                    // Validate total content size against server max_payload
+                    if (self.server_info) |info| {
+                        if (args.total_len > info.max_payload) {
+                            reader.toss(consumed);
+                            continue;
+                        }
+                    }
+
                     self.stats.msgs_in += 1;
                     self.stats.bytes_in +=
                         args.payload.len + args.headers.len;
@@ -968,6 +1078,7 @@ pub fn routeNextMessage(
 
                         sub.pushMessage(msg) catch {
                             allocator.free(buf);
+                            sub.dropped_msgs += 1;
                         };
 
                         sub.received_msgs += 1;
@@ -1044,7 +1155,7 @@ pub fn routeNextMessageRef(self: *Client, allocator: Allocator) !?MessageRef {
                     self.pending_toss = consumed;
                     self.tossPending();
                 },
-                .err => |_| {
+                .err => {
                     self.pending_toss = consumed;
                     self.tossPending();
                 },
@@ -1057,6 +1168,14 @@ pub fn routeNextMessageRef(self: *Client, allocator: Allocator) !?MessageRef {
                     self.tossPending();
                 },
                 .msg => |args| {
+                    // Validate payload size against server max_payload
+                    if (self.server_info) |info| {
+                        if (args.payload_len > info.max_payload) {
+                            reader.toss(consumed);
+                            continue;
+                        }
+                    }
+
                     self.stats.msgs_in += 1;
                     self.stats.bytes_in += args.payload.len;
                     self.pending_toss = consumed;
@@ -1073,6 +1192,14 @@ pub fn routeNextMessageRef(self: *Client, allocator: Allocator) !?MessageRef {
                     };
                 },
                 .hmsg => |args| {
+                    // Validate total content size against server max_payload
+                    if (self.server_info) |info| {
+                        if (args.total_len > info.max_payload) {
+                            reader.toss(consumed);
+                            continue;
+                        }
+                    }
+
                     self.stats.msgs_in += 1;
                     self.stats.bytes_in +=
                         args.payload.len + args.headers.len;
@@ -1128,28 +1255,29 @@ pub fn closeAllQueues(self: *Client) void {
     }
 }
 
-/// Closes the connection and frees resources.
+/// Closes the connection and frees all resources.
+///
+/// Arguments:
+///     alloc: Allocator used at connect() time
+///
+/// Drains if connected, closes all subscription queues, frees buffers.
+/// Safe to call multiple times.
 pub fn deinit(self: *Client, alloc: Allocator) void {
     assert(self.next_sid >= 1);
 
-    // Acquire mutex with uncancelable lock for cleanup (prevents races
-    // with subscriptions calling next() during shutdown)
-    self.read_mutex.lockUncancelable(self.io);
-
-    // Drain if connected (graceful shutdown with message cleanup)
+    // Drain if connected (drain handles its own mutex)
     if (self.state == .connected) {
-        // Release mutex before drain (drain may need to read)
-        self.read_mutex.unlock(self.io);
         self.drain(alloc) catch {};
-        self.read_mutex.lockUncancelable(self.io);
     } else {
-        // Not connected - close queues and mark subs destroyed
+        // Not connected - need mutex for queue/sub cleanup
+        self.read_mutex.lockUncancelable(self.io);
         self.closeAllQueues();
         for (self.sub_ptrs) |maybe_sub| {
             if (maybe_sub) |sub| {
                 sub.client_destroyed = true;
             }
         }
+        self.read_mutex.unlock(self.io);
     }
 
     // Close connection if not already closed by drain
@@ -1157,9 +1285,6 @@ pub fn deinit(self: *Client, alloc: Allocator) void {
         self.stream.close(self.io);
         self.state = .closed;
     }
-
-    // Release mutex before freeing (mutex is part of client struct)
-    self.read_mutex.unlock(self.io);
 
     // Free client resources
     if (self.server_info) |*info| {
@@ -1177,7 +1302,15 @@ pub const SubscriptionState = enum {
     unsubscribed,
 };
 
-/// Subscription with Io.Queue for message delivery.
+/// Subscription with Io.Queue for async message delivery.
+///
+/// Supports multiple concurrent consumers via inline routing:
+/// - First subscriber to call next() reads from socket
+/// - Messages for other subscriptions are routed to their queues
+/// - Io.Mutex ensures only one reader at a time
+///
+/// Use next() for blocking receive, nextWithTimeout() for bounded waits,
+/// nextRef() for zero-copy access, or tryNext() for non-blocking poll.
 pub const Subscription = struct {
     client: *Client,
     sid: u64,
@@ -1191,9 +1324,14 @@ pub const Subscription = struct {
     client_destroyed: bool = false,
 
     /// Blocks until a message is available or connection is closed.
-    /// Uses inline routing: acquires read mutex, reads from socket,
-    /// routes other subscriptions' messages to their queues.
-    /// Colorblind: works blocking or async based on Io implementation.
+    ///
+    /// Arguments:
+    ///     allocator: Allocator for owned message copy
+    ///     io: Io interface for blocking operations
+    ///
+    /// Uses inline routing: acquires read mutex, reads from socket, routes
+    /// other subscriptions' messages to their queues. Returns owned Message
+    /// that caller must free via msg.deinit(allocator).
     pub fn next(self: *Subscription, allocator: Allocator, io: Io) !Message {
         assert(self.state == .active or self.state == .draining);
 
@@ -1254,7 +1392,11 @@ pub const Subscription = struct {
     /// Slices borrow from read buffer - valid until next nextRef() call.
     /// Uses inline routing with mutex protection.
     /// Use with: while (try sub.nextRef(allocator, io)) |msg| { ... }
-    pub fn nextRef(self: *Subscription, allocator: Allocator, io: Io) !?MessageRef {
+    pub fn nextRef(
+        self: *Subscription,
+        allocator: Allocator,
+        io: Io,
+    ) !?MessageRef {
         assert(self.state == .active or self.state == .draining);
 
         // Acquire read mutex (only one reader at a time)
@@ -1328,6 +1470,12 @@ pub const Subscription = struct {
     }
 
     /// Receive with timeout using io.select().
+    ///
+    /// Arguments:
+    ///     allocator: Allocator for message
+    ///     timeout_ms: Maximum wait time in milliseconds
+    ///
+    /// Returns null on timeout. Uses async select for efficient waiting.
     pub fn nextWithTimeout(
         self: *Subscription,
         allocator: Allocator,
@@ -1348,7 +1496,7 @@ pub const Subscription = struct {
             .response = &response_future,
             .timeout = &timeout_future,
         }) catch |err| {
-            _ = timeout_future.cancel(io);
+            timeout_future.cancel(io);
             if (response_future.cancel(io)) |msg| {
                 msg.deinit(allocator);
             } else |_| {}
@@ -1358,7 +1506,7 @@ pub const Subscription = struct {
 
         switch (select_result) {
             .response => |msg_result| {
-                _ = timeout_future.cancel(io);
+                timeout_future.cancel(io);
                 return msg_result catch |err| {
                     if (err == error.Canceled or err == error.Closed) {
                         return null;
@@ -1366,7 +1514,7 @@ pub const Subscription = struct {
                     return err;
                 };
             },
-            .timeout => |_| {
+            .timeout => {
                 if (response_future.cancel(io)) |msg| {
                     msg.deinit(allocator);
                 } else |_| {}
@@ -1409,7 +1557,11 @@ pub const Subscription = struct {
     pub fn deinit(self: *Subscription, allocator: Allocator) void {
         // Skip client access if client already destroyed/drained
         if (!self.client_destroyed) {
+            // Close queue first (wakes any waiters)
             self.queue.close(self.client.io);
+
+            // Acquire mutex for shared state modification
+            self.client.read_mutex.lockUncancelable(self.client.io);
 
             if (self.state != .unsubscribed) {
                 self.client.unsubscribeSid(self.sid) catch {};
@@ -1422,7 +1574,9 @@ pub const Subscription = struct {
                 self.client.free_count += 1;
             }
 
-            // Drain remaining messages
+            self.client.read_mutex.unlock(self.client.io);
+
+            // Drain remaining messages (no mutex - queue is closed)
             var drain_buf: [1]Message = undefined;
             while (true) {
                 const n = self.queue.get(

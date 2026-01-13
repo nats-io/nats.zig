@@ -18,7 +18,7 @@ pub fn testClientAsyncManySubs(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     // Publisher client
@@ -62,7 +62,7 @@ pub fn testClientAsyncManySubs(allocator: std.mem.Allocator) void {
     client.flush() catch {};
 
     // Wait for subscriptions to register
-    std.posix.nanosleep(0, 50_000_000);
+    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Publish to all topics
     for (topics) |t| {
@@ -100,7 +100,7 @@ pub fn testClientAsyncWildcard(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const publisher = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -127,7 +127,7 @@ pub fn testClientAsyncWildcard(allocator: std.mem.Allocator) void {
     };
 
     // Wait for subscription to register server-side
-    std.posix.nanosleep(0, 50_000_000);
+    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Publish to matching subjects
     publisher.publish("async.wild.a", "msg-a") catch {
@@ -175,7 +175,7 @@ pub fn testClientAsyncDuplicateSubs(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const publisher = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -206,7 +206,7 @@ pub fn testClientAsyncDuplicateSubs(allocator: std.mem.Allocator) void {
     client.flush() catch {};
 
     // Wait for subscriptions to register server-side
-    std.posix.nanosleep(0, 50_000_000);
+    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     publisher.publish("async.dup", "hello") catch {};
     publisher.flush() catch {};
@@ -235,7 +235,7 @@ pub fn testClientAsyncQueueGroup(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const publisher = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -260,7 +260,7 @@ pub fn testClientAsyncQueueGroup(allocator: std.mem.Allocator) void {
     client.flush() catch {};
 
     // Wait for subscription to register server-side
-    std.posix.nanosleep(0, 50_000_000);
+    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     publisher.publish("async.qg", "task") catch {};
     publisher.flush() catch {};
@@ -285,7 +285,7 @@ pub fn testAsyncWildcardMatching(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -323,7 +323,7 @@ pub fn testAsyncWildcardGreater(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -361,7 +361,7 @@ pub fn testAsyncSubjectCaseSensitivity(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -400,7 +400,7 @@ pub fn testAsyncUnsubscribeStopsDelivery(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -425,7 +425,7 @@ pub fn testAsyncUnsubscribeStopsDelivery(allocator: std.mem.Allocator) void {
     client.flush() catch {};
 
     // Brief sleep to allow any potential delivery
-    std.posix.nanosleep(0, 10_000_000);
+    io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     // Client should still be connected
     if (client.isConnected()) {
@@ -443,7 +443,7 @@ pub fn testAsyncHierarchicalSubject(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -481,7 +481,7 @@ pub fn testUnsubscribeWithPending(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -504,7 +504,7 @@ pub fn testUnsubscribeWithPending(allocator: std.mem.Allocator) void {
     client.flush() catch {};
 
     // Small delay for messages to arrive
-    std.posix.nanosleep(0, 50_000_000);
+    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Unsubscribe while messages pending
     sub.unsubscribe() catch {
@@ -520,7 +520,7 @@ pub fn testSubscribeAfterDisconnect(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -551,7 +551,7 @@ pub fn testSubscriptionQueueCapacity(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {

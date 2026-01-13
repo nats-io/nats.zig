@@ -18,7 +18,7 @@ pub fn testAsyncCrossClientRouting(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     // Publisher (regular client)
@@ -45,7 +45,7 @@ pub fn testAsyncCrossClientRouting(allocator: std.mem.Allocator) void {
         reportResult("async_cross_client", false, "sub flush failed");
         return;
     };
-    std.posix.nanosleep(0, 50_000_000);
+    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Publish from regular client
     publisher.publish("async.cross", "cross-message") catch {
@@ -77,7 +77,7 @@ pub fn testAsyncMultipleClients(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     // Create 3 async clients
@@ -114,7 +114,7 @@ pub fn testClientAsyncHighRate(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const publisher = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -183,7 +183,7 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
     const url = formatUrl(&url_buf, test_port);
 
     // Client A - initial publisher
-    var io_a: std.Io.Threaded = .init(allocator, .{});
+    var io_a: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_a.deinit();
     const client_a = nats.Client.connect(allocator, io_a.io(), url, .{}) catch {
         reportResult("three_client_chain", false, "A connect failed");
@@ -192,7 +192,7 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
     defer client_a.deinit(allocator);
 
     // Client B - middleware (receives from A, forwards to C)
-    var io_b: std.Io.Threaded = .init(allocator, .{});
+    var io_b: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_b.deinit();
     const client_b = nats.Client.connect(allocator, io_b.io(), url, .{}) catch {
         reportResult("three_client_chain", false, "B connect failed");
@@ -201,7 +201,7 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
     defer client_b.deinit(allocator);
 
     // Client C - final receiver
-    var io_c: std.Io.Threaded = .init(allocator, .{});
+    var io_c: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_c.deinit();
     const client_c = nats.Client.connect(allocator, io_c.io(), url, .{}) catch {
         reportResult("three_client_chain", false, "C connect failed");
@@ -225,7 +225,7 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
 
     client_b.flush() catch {};
     client_c.flush() catch {};
-    std.posix.nanosleep(0, 50_000_000); // 50ms
+    io_a.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // A publishes to step1
     client_a.publish("chain.step1", "start") catch {
@@ -272,7 +272,7 @@ pub fn testMultipleSubscribersSameSubject(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {

@@ -17,7 +17,10 @@ pub const TOMB: u16 = 0xFFFE;
 pub const MAX_SLOT: u16 = 0xFFFD;
 
 /// Zero-allocation subscription ID to slot index map.
+///
+/// Uses open-addressing with linear probing and splitmix64 hash.
 /// Caller provides pre-allocated keys/vals arrays at init.
+/// Maximum 70% load factor enforced to maintain O(1) performance.
 pub const SidMap = struct {
     keys: []u64,
     vals: []u16,

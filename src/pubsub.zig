@@ -26,6 +26,8 @@ pub const isInbox = inbox.isInbox;
 // Subject functions
 pub const validatePublish = subject.validatePublish;
 pub const validateSubscribe = subject.validateSubscribe;
+pub const validateQueueGroup = subject.validateQueueGroup;
+pub const validateReplyTo = subject.validateReplyTo;
 pub const subjectMatches = subject.matches;
 
 test {

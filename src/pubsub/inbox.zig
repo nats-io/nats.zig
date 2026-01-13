@@ -6,6 +6,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 
 /// Inbox prefix used by NATS.
 pub const prefix = "_INBOX.";
@@ -22,28 +23,28 @@ const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" ++
 
 /// Generates a new unique inbox subject.
 /// Caller owns returned memory.
-pub fn newInbox(allocator: Allocator) Allocator.Error![]u8 {
+pub fn newInbox(allocator: Allocator, io: Io) Allocator.Error![]u8 {
     const result = try allocator.alloc(u8, total_len);
     @memcpy(result[0..prefix.len], prefix);
-    fillRandom(result[prefix.len..]);
+    fillRandom(io, result[prefix.len..]);
     assert(result.len == total_len);
     return result;
 }
 
 /// Generates inbox into provided buffer.
 /// Buffer must be at least total_len bytes.
-pub fn newInboxBuf(buf: []u8) error{BufferTooSmall}![]u8 {
+pub fn newInboxBuf(io: Io, buf: []u8) error{BufferTooSmall}![]u8 {
     if (buf.len < total_len) return error.BufferTooSmall;
     assert(buf.len >= total_len);
     @memcpy(buf[0..prefix.len], prefix);
-    fillRandom(buf[prefix.len..][0..random_len]);
+    fillRandom(io, buf[prefix.len..][0..random_len]);
     return buf[0..total_len];
 }
 
 /// Fills buffer with random base62 characters.
-fn fillRandom(buf: []u8) void {
+fn fillRandom(io: Io, buf: []u8) void {
     assert(buf.len > 0);
-    std.crypto.random.bytes(buf);
+    io.random(buf);
     for (buf) |*b| {
         b.* = alphabet[@mod(b.*, alphabet.len)];
     }
@@ -59,6 +60,7 @@ pub fn isInbox(subject: []const u8) bool {
 /// Caller owns returned memory.
 pub fn newInboxWithPrefix(
     allocator: Allocator,
+    io: Io,
     custom_prefix: []const u8,
 ) Allocator.Error![]u8 {
     assert(custom_prefix.len > 0);
@@ -75,15 +77,17 @@ pub fn newInboxWithPrefix(
     result[pos] = '.';
     pos += 1;
 
-    fillRandom(result[pos..][0..random_len]);
+    fillRandom(io, result[pos..][0..random_len]);
 
     return result;
 }
 
 test "new inbox" {
     const allocator = std.testing.allocator;
+    var io: Io.Threaded = .init(allocator, .{ .environ = .empty });
+    defer io.deinit();
 
-    const inbox = try newInbox(allocator);
+    const inbox = try newInbox(allocator, io.io());
     defer allocator.free(inbox);
 
     try std.testing.expectEqual(total_len, inbox.len);
@@ -92,26 +96,35 @@ test "new inbox" {
 }
 
 test "new inbox buf" {
-    var buf: [64]u8 = undefined;
+    const allocator = std.testing.allocator;
+    var io: Io.Threaded = .init(allocator, .{ .environ = .empty });
+    defer io.deinit();
 
-    const inbox = try newInboxBuf(&buf);
+    var buf: [64]u8 = undefined;
+    const inbox = try newInboxBuf(io.io(), &buf);
 
     try std.testing.expectEqual(total_len, inbox.len);
     try std.testing.expect(std.mem.startsWith(u8, inbox, prefix));
 }
 
 test "new inbox buf too small" {
+    const allocator = std.testing.allocator;
+    var io: Io.Threaded = .init(allocator, .{ .environ = .empty });
+    defer io.deinit();
+
     var buf: [10]u8 = undefined;
-    try std.testing.expectError(error.BufferTooSmall, newInboxBuf(&buf));
+    try std.testing.expectError(error.BufferTooSmall, newInboxBuf(io.io(), &buf));
 }
 
 test "inbox uniqueness" {
     const allocator = std.testing.allocator;
+    var io: Io.Threaded = .init(allocator, .{ .environ = .empty });
+    defer io.deinit();
 
-    const inbox1 = try newInbox(allocator);
+    const inbox1 = try newInbox(allocator, io.io());
     defer allocator.free(inbox1);
 
-    const inbox2 = try newInbox(allocator);
+    const inbox2 = try newInbox(allocator, io.io());
     defer allocator.free(inbox2);
 
     try std.testing.expect(!std.mem.eql(u8, inbox1, inbox2));
@@ -126,8 +139,10 @@ test "is inbox" {
 
 test "inbox with prefix" {
     const allocator = std.testing.allocator;
+    var io: Io.Threaded = .init(allocator, .{ .environ = .empty });
+    defer io.deinit();
 
-    const inbox = try newInboxWithPrefix(allocator, "myprefix");
+    const inbox = try newInboxWithPrefix(allocator, io.io(), "myprefix");
     defer allocator.free(inbox);
 
     try std.testing.expect(std.mem.startsWith(u8, inbox, "_INBOX.myprefix."));

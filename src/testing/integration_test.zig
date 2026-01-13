@@ -26,7 +26,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Create I/O system for server process management
-    var threaded: std.Io.Threaded = .init(allocator, .{});
+    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer threaded.deinit();
     const io = threaded.io();
 
@@ -54,7 +54,7 @@ pub fn main() !void {
     };
 
     // Extra settle time for servers to fully initialize
-    std.posix.nanosleep(0, 200_000_000); // 200ms
+    io.sleep(.fromMilliseconds(200), .awake) catch {};
 
     std.debug.print("\nRunning tests...\n\n", .{});
 

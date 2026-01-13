@@ -15,7 +15,7 @@ const test_token = utils.test_token;
 const ServerManager = utils.ServerManager;
 
 pub fn testAsyncConnectionRefused(allocator: std.mem.Allocator) void {
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     // Try to connect to a port where nothing is listening
@@ -40,7 +40,7 @@ pub fn testAsyncConsecutiveConnections(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     // Connect and disconnect 3 times
@@ -63,7 +63,7 @@ pub fn testAsyncIsConnectedState(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -92,7 +92,7 @@ pub fn testAsyncReconnection(
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -108,7 +108,7 @@ pub fn testAsyncReconnection(
 
     // Stop server
     manager.stopServer(0, io.io());
-    std.posix.nanosleep(0, 100_000_000); // 100ms
+    io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
     // Restart server
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
@@ -127,7 +127,7 @@ pub fn testAsyncServerRestartNewConnection(
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io1: std.Io.Threaded = .init(allocator, .{});
+    var io1: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io1.deinit();
 
     const client1 = nats.Client.connect(allocator, io1.io(), url, .{}) catch {
@@ -145,7 +145,7 @@ pub fn testAsyncServerRestartNewConnection(
 
     // Stop and restart server
     manager.stopServer(0, io1.io());
-    std.posix.nanosleep(0, 100_000_000);
+    io1.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
     _ = manager.startServer(allocator, io1.io(), .{ .port = test_port }) catch {
         reportResult("async_server_restart", false, "restart failed");
@@ -153,7 +153,7 @@ pub fn testAsyncServerRestartNewConnection(
     };
 
     // New connection should work
-    var io2: std.Io.Threaded = .init(allocator, .{});
+    var io2: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io2.deinit();
 
     const client2 = nats.Client.connect(allocator, io2.io(), url, .{}) catch {
@@ -173,7 +173,7 @@ pub fn testConnectionStateAfterOps(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -223,7 +223,7 @@ pub fn testRapidConnectDisconnect(allocator: std.mem.Allocator) void {
     var success: u32 = 0;
 
     for (0..CYCLES) |_| {
-        var io: std.Io.Threaded = .init(allocator, .{});
+        var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
         defer io.deinit();
 
         const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -253,7 +253,7 @@ pub fn testConnectionOptions(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     // Test with custom options
@@ -292,7 +292,7 @@ pub fn testConnectionDrain(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -338,7 +338,7 @@ pub fn testConnectionDrain(allocator: std.mem.Allocator) void {
 // Test: Invalid URL handling
 // Verifies invalid URLs are rejected properly.
 pub fn testInvalidUrlHandling(allocator: std.mem.Allocator) void {
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     // Empty URL
@@ -375,7 +375,7 @@ pub fn testConnectionStateTransitions(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
@@ -418,7 +418,7 @@ pub fn testManyClientSubscriptions(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{});
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {

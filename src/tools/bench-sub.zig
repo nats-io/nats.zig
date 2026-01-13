@@ -18,12 +18,10 @@ const BenchConfig = struct {
     progress: bool = true,
 };
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
-    const config = parseArgs(allocator) catch |err| {
+    const config = parseArgs(init) catch |err| {
         printUsage();
         return err;
     };
@@ -31,15 +29,20 @@ pub fn main() !void {
     try runBenchmark(allocator, config);
 }
 
-fn parseArgs(allocator: Allocator) !BenchConfig {
-    var args = try std.process.argsWithAllocator(allocator);
-    defer args.deinit();
+fn parseArgs(init: std.process.Init) !BenchConfig {
+    var args_iter = std.process.Args.Iterator.initAllocator(
+        init.minimal.args,
+        init.gpa,
+    ) catch |err| {
+        std.process.fatal("failed to init args: {}", .{err});
+    };
+    defer args_iter.deinit();
 
-    _ = args.next(); // skip program name
+    _ = args_iter.skip(); // skip program name
 
     var config = BenchConfig{ .subject = "" };
 
-    while (args.next()) |arg| {
+    while (args_iter.next()) |arg| {
         if (std.mem.startsWith(u8, arg, "--msgs=")) {
             const val = arg[7..];
             config.msgs = std.fmt.parseInt(u64, val, 10) catch {
@@ -83,7 +86,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     }
 
     // Create I/O
-    var threaded: std.Io.Threaded = .init(allocator, .{});
+    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer threaded.deinit();
     const io = threaded.io();
 

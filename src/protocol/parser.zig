@@ -15,9 +15,10 @@ const MsgArgs = commands.MsgArgs;
 const HMsgArgs = commands.HMsgArgs;
 
 /// Fast decimal parser for u64. Inlined for hot path performance.
-/// Uses wrapping math - no overflow checks (NATS values are bounded).
-pub inline fn parseU64Fast(s: []const u8) error{InvalidCharacter}!u64 {
+/// Uses wrapping math with length guard to prevent overflow.
+pub inline fn parseU64Fast(s: []const u8) error{ InvalidCharacter, Overflow }!u64 {
     assert(s.len > 0);
+    if (s.len > 20) return error.Overflow; // u64 max is 20 digits
     var v: u64 = 0;
     for (s) |c| {
         if (c < '0' or c > '9') return error.InvalidCharacter;
@@ -27,8 +28,10 @@ pub inline fn parseU64Fast(s: []const u8) error{InvalidCharacter}!u64 {
 }
 
 /// Fast decimal parser for usize. Inlined for hot path performance.
-pub inline fn parseUsizeFast(s: []const u8) error{InvalidCharacter}!usize {
+/// Uses wrapping math with length guard to prevent overflow.
+pub inline fn parseUsizeFast(s: []const u8) error{ InvalidCharacter, Overflow }!usize {
     assert(s.len > 0);
+    if (s.len > 20) return error.Overflow; // usize max is 20 digits (64-bit)
     var v: usize = 0;
     for (s) |c| {
         if (c < '0' or c > '9') return error.InvalidCharacter;
@@ -38,7 +41,10 @@ pub inline fn parseUsizeFast(s: []const u8) error{InvalidCharacter}!usize {
 }
 
 /// Protocol parser for NATS server commands.
-/// Stateless single-pass parser - no multi-stage state machine.
+///
+/// Stateless single-pass parser - no multi-stage state machine needed.
+/// Handles partial data by returning null (need more bytes).
+/// Allocates only for INFO command (ServerInfo string copies).
 pub const Parser = struct {
     /// Parse error types.
     pub const Error = error{
@@ -200,14 +206,15 @@ inline fn parseFullMsgFast(
 
     // Parse SID inline (avoids separate function call overhead)
     var sid: u64 = 0;
-    var have_sid = false;
+    var sid_digits: u8 = 0;
     while (i < args_line.len and args_line[i] != ' ') : (i += 1) {
         const c = args_line[i];
         if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
-        have_sid = true;
+        sid_digits += 1;
+        if (sid_digits > 20) return Parser.Error.InvalidArguments; // overflow guard
         sid = sid *% 10 +% @as(u64, c - '0');
     }
-    if (!have_sid) return Parser.Error.InvalidArguments;
+    if (sid_digits == 0) return Parser.Error.InvalidArguments;
 
     // Check if there's more to parse
     if (i >= args_line.len) return Parser.Error.InvalidArguments;
@@ -234,7 +241,8 @@ inline fn parseFullMsgFast(
         payload_len_slice = third;
     }
 
-    // Parse payload length inline
+    // Parse payload length inline (with overflow guard)
+    if (payload_len_slice.len > 20) return Parser.Error.InvalidArguments;
     var payload_len: usize = 0;
     for (payload_len_slice) |c| {
         if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
@@ -302,16 +310,17 @@ inline fn parseFullHMsgFast(
     const subject = args_line[subj_start..i];
     i += 1; // skip space
 
-    // Parse SID inline
+    // Parse SID inline (with overflow guard)
     var sid: u64 = 0;
-    var have_sid = false;
+    var sid_digits: u8 = 0;
     while (i < args_line.len and args_line[i] != ' ') : (i += 1) {
         const c = args_line[i];
         if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
-        have_sid = true;
+        sid_digits += 1;
+        if (sid_digits > 20) return Parser.Error.InvalidArguments; // overflow guard
         sid = sid *% 10 +% @as(u64, c - '0');
     }
-    if (!have_sid or i >= args_line.len) return Parser.Error.InvalidArguments;
+    if (sid_digits == 0 or i >= args_line.len) return Parser.Error.InvalidArguments;
     i += 1; // skip space
 
     // Collect remaining tokens (2 or 3: [reply-to] hdr_len total_len)
@@ -342,14 +351,16 @@ inline fn parseFullHMsgFast(
         total_len_slice = tokens[1];
     }
 
-    // Parse hdr_len inline
+    // Parse hdr_len inline (with overflow guard)
+    if (hdr_len_slice.len > 20) return Parser.Error.InvalidArguments;
     var hdr_len: usize = 0;
     for (hdr_len_slice) |c| {
         if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
         hdr_len = hdr_len *% 10 +% @as(usize, c - '0');
     }
 
-    // Parse total_content_len inline
+    // Parse total_content_len inline (with overflow guard)
+    if (total_len_slice.len > 20) return Parser.Error.InvalidArguments;
     var total_content_len: usize = 0;
     for (total_len_slice) |c| {
         if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
@@ -682,4 +693,20 @@ test "parseUsizeFast valid numbers" {
 test "parseUsizeFast invalid input" {
     try std.testing.expectError(error.InvalidCharacter, parseUsizeFast("xyz"));
     try std.testing.expectError(error.InvalidCharacter, parseUsizeFast("1 2"));
+}
+
+test "parseU64Fast overflow protection" {
+    // 21 digits - guaranteed overflow, should be rejected
+    try std.testing.expectError(error.Overflow, parseU64Fast("123456789012345678901"));
+    // 20 digits at max value edge - should work
+    _ = try parseU64Fast("18446744073709551615");
+    // 20 zeros - should work (equals 0)
+    try std.testing.expectEqual(@as(u64, 0), try parseU64Fast("00000000000000000000"));
+}
+
+test "parseUsizeFast overflow protection" {
+    // 21 digits - guaranteed overflow, should be rejected
+    try std.testing.expectError(error.Overflow, parseUsizeFast("123456789012345678901"));
+    // 20 digits - should work
+    _ = try parseUsizeFast("18446744073709551615");
 }

@@ -34,8 +34,8 @@ pub const connection = @import("connection.zig");
 pub const pubsub = @import("pubsub.zig");
 pub const memory = @import("memory.zig");
 
-// Client module (file-as-struct: the file IS the Client type)
-pub const Client = @import("client.zig");
+// Client module
+pub const Client = @import("Client.zig");
 
 // Primary types (nested in Client)
 pub const Subscription = Client.Subscription;
@@ -43,9 +43,6 @@ pub const Message = Client.Message;
 pub const MessageRef = Client.MessageRef;
 pub const Options = Client.Options;
 pub const Stats = Client.Stats;
-
-// Connection types
-pub const Status = connection.State;
 
 // Convenience exports
 pub const newInbox = pubsub.newInbox;

@@ -15,21 +15,24 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
 
-    // Connect example
-    const connect_exe = b.addExecutable(.{
-        .name = "connect",
+    // Simple example (quickstart)
+    const simple_exe = b.addExecutable(.{
+        .name = "simple",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/examples/connect.zig"),
+            .root_source_file = b.path("src/examples/simple.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
         }),
     });
-    b.installArtifact(connect_exe);
+    b.installArtifact(simple_exe);
 
-    const run_connect = b.step("run-connect", "Run connect example");
-    const connect_cmd = b.addRunArtifact(connect_exe);
-    run_connect.dependOn(&connect_cmd.step);
-    connect_cmd.step.dependOn(b.getInstallStep());
+    const run_simple = b.step("run-simple", "Run simple example");
+    const simple_cmd = b.addRunArtifact(simple_exe);
+    run_simple.dependOn(&simple_cmd.step);
+    simple_cmd.step.dependOn(b.getInstallStep());
 
     // Pub/Sub example
     const pubsub_exe = b.addExecutable(.{
@@ -49,6 +52,47 @@ pub fn build(b: *std.Build) void {
     const pubsub_cmd = b.addRunArtifact(pubsub_exe);
     run_pubsub.dependOn(&pubsub_cmd.step);
     pubsub_cmd.step.dependOn(b.getInstallStep());
+
+    // Request/Reply example
+    const request_reply_exe = b.addExecutable(.{
+        .name = "request-reply",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/examples/request_reply.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(request_reply_exe);
+
+    const run_request_reply = b.step(
+        "run-request-reply",
+        "Run request/reply example",
+    );
+    const request_reply_cmd = b.addRunArtifact(request_reply_exe);
+    run_request_reply.dependOn(&request_reply_cmd.step);
+    request_reply_cmd.step.dependOn(b.getInstallStep());
+
+    // Workers (queue groups) example
+    const workers_exe = b.addExecutable(.{
+        .name = "workers",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/examples/workers.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(workers_exe);
+
+    const run_workers = b.step("run-workers", "Run workers (queue groups) example");
+    const workers_cmd = b.addRunArtifact(workers_exe);
+    run_workers.dependOn(&workers_cmd.step);
+    workers_cmd.step.dependOn(b.getInstallStep());
 
     const fmt = b.addFmt(.{
         .paths = &.{ "src", "build.zig" },
