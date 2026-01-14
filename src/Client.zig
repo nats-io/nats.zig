@@ -329,6 +329,7 @@ pub fn connect(
     }) catch {
         return error.ConnectionFailed;
     };
+    errdefer client.stream.close(io);
 
     // Set TCP_NODELAY
     const enable: u32 = 1;
@@ -351,16 +352,11 @@ pub fn connect(
 
     // Allocate buffers based on options
     client.read_buffer = allocator.alloc(u8, opts.buffer_size) catch {
-        client.stream.close(io);
-        allocator.destroy(client);
         return error.OutOfMemory;
     };
     errdefer allocator.free(client.read_buffer);
 
     client.write_buffer = allocator.alloc(u8, opts.buffer_size) catch {
-        allocator.free(client.read_buffer);
-        client.stream.close(io);
-        allocator.destroy(client);
         return error.OutOfMemory;
     };
     errdefer allocator.free(client.write_buffer);

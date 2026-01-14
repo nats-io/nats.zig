@@ -214,7 +214,7 @@ inline fn parseFullMsgFast(
         if (sid_digits > 20) return Parser.Error.InvalidArguments; // overflow guard
         sid = sid *% 10 +% @as(u64, c - '0');
     }
-    if (sid_digits == 0) return Parser.Error.InvalidArguments;
+    if (sid_digits == 0 or sid == 0) return Parser.Error.InvalidArguments;
 
     // Check if there's more to parse
     if (i >= args_line.len) return Parser.Error.InvalidArguments;
@@ -320,7 +320,7 @@ inline fn parseFullHMsgFast(
         if (sid_digits > 20) return Parser.Error.InvalidArguments; // overflow guard
         sid = sid *% 10 +% @as(u64, c - '0');
     }
-    if (sid_digits == 0 or i >= args_line.len) return Parser.Error.InvalidArguments;
+    if (sid_digits == 0 or sid == 0 or i >= args_line.len) return Parser.Error.InvalidArguments;
     i += 1; // skip space
 
     // Collect remaining tokens (2 or 3: [reply-to] hdr_len total_len)
@@ -709,4 +709,26 @@ test "parseUsizeFast overflow protection" {
     try std.testing.expectError(error.Overflow, parseUsizeFast("123456789012345678901"));
     // 20 digits - should work
     _ = try parseUsizeFast("18446744073709551615");
+}
+
+test "parse MSG with SID=0 rejected" {
+    var parser: Parser = .{};
+    var consumed: usize = 0;
+    const result = parser.parse(
+        std.testing.allocator,
+        "MSG test.subject 0 5\r\nhello\r\n",
+        &consumed,
+    );
+    try std.testing.expectError(Parser.Error.InvalidArguments, result);
+}
+
+test "parse HMSG with SID=0 rejected" {
+    var parser: Parser = .{};
+    var consumed: usize = 0;
+    const result = parser.parse(
+        std.testing.allocator,
+        "HMSG test.subject 0 12 12\r\nNATS/1.0\r\n\r\n\r\n",
+        &consumed,
+    );
+    try std.testing.expectError(Parser.Error.InvalidArguments, result);
 }

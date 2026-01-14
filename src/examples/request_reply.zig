@@ -1,11 +1,9 @@
 //! Request/Reply Pattern
 //!
-//! Demonstrates the request/reply pattern for RPC-style communication.
-//! A single process acts as both the service (responder) and client (requester).
-//! Run with: zig build run-request-reply
+//! Demonstrates RPC-style request/reply communication.
+//! Run with: zig build example-request-reply
 //!
 //! Prerequisites: nats-server running on localhost:4222
-//!   nats-server -DV
 
 const std = @import("std");
 const nats = @import("nats");
@@ -19,74 +17,75 @@ pub fn main() !void {
     defer threaded.deinit();
     const io = threaded.io();
 
-    const client = try nats.Client.connect(
+    // Service client
+    const service_client = try nats.Client.connect(
         allocator,
         io,
         "nats://localhost:4222",
-        .{ .name = "request-reply-example" },
+        .{ .name = "service" },
     );
-    defer client.deinit(allocator);
+    defer service_client.deinit(allocator);
+
+    // Requester client
+    const requester = try nats.Client.connect(
+        allocator,
+        io,
+        "nats://localhost:4222",
+        .{ .name = "requester" },
+    );
+    defer requester.deinit(allocator);
 
     std.debug.print("Connected to NATS!\n", .{});
 
-    // Subscribe to the service subject - this is our "responder"
-    const service_sub = try client.subscribe(allocator, "service.echo");
-    defer service_sub.deinit(allocator);
-    try client.flush();
+    // Service subscribes to handle requests
+    const service = try service_client.subscribe(allocator, "math.double");
+    defer service.deinit(allocator);
+    try service_client.flush();
 
-    std.debug.print("Service listening on 'service.echo'\n", .{});
+    std.debug.print("Service listening on 'math.double'\n", .{});
 
-    // Send a request using client.request() - handles inbox creation
-    std.debug.print("\nSending request: 'Hello, Service!'\n", .{});
+    // Run service handler in background (returns void, so no catch)
+    var service_future = io.async(handleService, .{
+        service_client,
+        service,
+        allocator,
+    });
+    defer service_future.cancel(io);
 
-    // First, check for the incoming request on service subscription
-    // Then respond to it before the request() timeout expires
-    //
-    // In real applications, the service would run in a separate process.
-    // Here we interleave to demonstrate both sides in one example.
+    // Wait for service subscription to be ready
+    io.sleep(.fromMilliseconds(50), .awake) catch {};
 
-    // Publish request manually so we can respond before timeout
-    const inbox = try nats.newInbox(allocator, io);
-    defer allocator.free(inbox);
+    // Send request using client.request() - handles inbox automatically
+    std.debug.print("\nRequester: What is 21 * 2?\n", .{});
 
-    const reply_sub = try client.subscribe(allocator, inbox);
-    defer reply_sub.deinit(allocator);
-
-    try client.publishRequest("service.echo", inbox, "Hello!");
-    try client.flush();
-
-    // Service receives the request
-    if (try service_sub.nextWithTimeout(allocator, 1000)) |request| {
-        defer request.deinit(allocator);
-        std.debug.print(
-            "Service received: '{s}' (reply-to: {s})\n",
-            .{ request.data, request.reply_to orelse "none" },
-        );
-
-        // Service sends reply to the inbox
-        if (request.reply_to) |reply_to| {
-            try client.publish(reply_to, "Echo: Hello!");
-            try client.flush();
-            std.debug.print("Service sent reply\n", .{});
-        }
-    }
-
-    // Client receives the reply
-    if (try reply_sub.nextWithTimeout(allocator, 1000)) |reply| {
-        defer reply.deinit(allocator);
-        std.debug.print("Client received reply: '{s}'\n", .{reply.data});
-    }
-
-    // Demonstrate the convenience method client.request()
-    std.debug.print("\n--- Using client.request() convenience method ---\n", .{});
-    std.debug.print("(This will timeout since no service is responding)\n", .{});
-
-    if (try client.request(allocator, "service.other", "ping", 500)) |reply| {
+    if (try requester.request(allocator, "math.double", "21", 1000)) |reply| {
         defer reply.deinit(allocator);
         std.debug.print("Reply: {s}\n", .{reply.data});
     } else {
-        std.debug.print("Request timed out (expected)\n", .{});
+        std.debug.print("Request timed out\n", .{});
     }
 
     std.debug.print("\nDone!\n", .{});
+}
+
+fn handleService(
+    client: *nats.Client,
+    service: *nats.Client.Sub,
+    allocator: std.mem.Allocator,
+) void {
+    const req = service.nextWithTimeout(allocator, 2000) catch return;
+    if (req) |r| {
+        defer r.deinit(allocator);
+
+        const num = std.fmt.parseInt(i32, r.data, 10) catch 0;
+        var buf: [32]u8 = undefined;
+        const result = std.fmt.bufPrint(&buf, "{d}", .{num * 2}) catch "error";
+
+        std.debug.print("Service: {d} * 2 = {s}\n", .{ num, result });
+
+        if (r.reply_to) |reply_to| {
+            client.publish(reply_to, result) catch {};
+            client.flush() catch {};
+        }
+    }
 }

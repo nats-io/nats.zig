@@ -33,6 +33,13 @@ fn writeUsizeToBuffer(buf: *[20]u8, value: usize) []const u8 {
 
 /// Protocol encoder for client commands.
 pub const Encoder = struct {
+    /// Encoding validation errors.
+    pub const Error = error{
+        EmptySubject,
+        EmptyHeaders,
+        InvalidSid,
+    };
+
     /// Encodes CONNECT command with JSON options.
     pub fn encodeConnect(
         writer: *Io.Writer,
@@ -47,7 +54,8 @@ pub const Encoder = struct {
     pub fn encodePub(
         writer: *Io.Writer,
         args: PubArgs,
-    ) Io.Writer.Error!void {
+    ) (Error || Io.Writer.Error)!void {
+        if (args.subject.len == 0) return Error.EmptySubject;
         assert(args.subject.len > 0);
         try writer.writeAll("PUB ");
         try writer.writeAll(args.subject);
@@ -69,7 +77,9 @@ pub const Encoder = struct {
     pub fn encodeHPub(
         writer: *Io.Writer,
         args: HPubArgs,
-    ) Io.Writer.Error!void {
+    ) (Error || Io.Writer.Error)!void {
+        if (args.subject.len == 0) return Error.EmptySubject;
+        if (args.headers.len == 0) return Error.EmptyHeaders;
         assert(args.subject.len > 0);
         assert(args.headers.len > 0);
         try writer.writeAll("HPUB ");
@@ -96,7 +106,9 @@ pub const Encoder = struct {
     pub fn encodeSub(
         writer: *Io.Writer,
         args: SubArgs,
-    ) Io.Writer.Error!void {
+    ) (Error || Io.Writer.Error)!void {
+        if (args.subject.len == 0) return Error.EmptySubject;
+        if (args.sid == 0) return Error.InvalidSid;
         assert(args.subject.len > 0);
         assert(args.sid > 0);
         try writer.writeAll("SUB ");
@@ -117,7 +129,8 @@ pub const Encoder = struct {
     pub fn encodeUnsub(
         writer: *Io.Writer,
         args: UnsubArgs,
-    ) Io.Writer.Error!void {
+    ) (Error || Io.Writer.Error)!void {
+        if (args.sid == 0) return Error.InvalidSid;
         assert(args.sid > 0);
         var num_buf: [20]u8 = undefined;
         try writer.writeAll("UNSUB ");
@@ -255,4 +268,63 @@ test "encode CONNECT" {
     try std.testing.expect(
         std.mem.indexOf(u8, written, "\"name\":\"test-client\"") != null,
     );
+}
+
+test "encodePub empty subject rejected" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+    const result = Encoder.encodePub(&writer, .{
+        .subject = "",
+        .payload = "hello",
+    });
+    try std.testing.expectError(Encoder.Error.EmptySubject, result);
+}
+
+test "encodeHPub empty subject rejected" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+    const result = Encoder.encodeHPub(&writer, .{
+        .subject = "",
+        .headers = "NATS/1.0\r\n\r\n",
+        .payload = "hello",
+    });
+    try std.testing.expectError(Encoder.Error.EmptySubject, result);
+}
+
+test "encodeHPub empty headers rejected" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+    const result = Encoder.encodeHPub(&writer, .{
+        .subject = "test",
+        .headers = "",
+        .payload = "hello",
+    });
+    try std.testing.expectError(Encoder.Error.EmptyHeaders, result);
+}
+
+test "encodeSub empty subject rejected" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+    const result = Encoder.encodeSub(&writer, .{
+        .subject = "",
+        .sid = 1,
+    });
+    try std.testing.expectError(Encoder.Error.EmptySubject, result);
+}
+
+test "encodeSub invalid SID rejected" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+    const result = Encoder.encodeSub(&writer, .{
+        .subject = "test",
+        .sid = 0,
+    });
+    try std.testing.expectError(Encoder.Error.InvalidSid, result);
+}
+
+test "encodeUnsub invalid SID rejected" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+    const result = Encoder.encodeUnsub(&writer, .{ .sid = 0 });
+    try std.testing.expectError(Encoder.Error.InvalidSid, result);
 }

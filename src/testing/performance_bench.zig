@@ -1190,7 +1190,7 @@ pub fn runPubSub(
 /// Spawn fire_starter (io_uring server + publisher).
 /// Usage: fire_starter <msg_count> <msg_size>
 /// Fixed subject: stress.test
-pub fn runFireStarter(_: Allocator, io: Io, opts: BenchOpts) !std.process.Child {
+pub fn runFireStarter(io: Io, opts: BenchOpts) !std.process.Child {
     assert(opts.num_msgs > 0);
     assert(opts.size > 0);
 
@@ -1219,7 +1219,7 @@ pub fn runFireStarterTest(
     assert(opts.size > 0);
 
     // Start fire_starter
-    var fire = try runFireStarter(allocator, io, opts);
+    var fire = try runFireStarter(io, opts);
 
     // Wait for fire_starter to be ready
     io.sleep(.fromMilliseconds(500), .awake) catch {};

@@ -124,6 +124,9 @@ pub fn parse(data: []const u8) ParseResult {
         if (result.count < result.entries.len) {
             result.entries[result.count] = .{ .key = key, .value = value };
             result.count += 1;
+        } else {
+            result.err = .header_overflow;
+            return result;
         }
 
         pos = line_end + 2;
@@ -146,6 +149,7 @@ pub const ParseResult = struct {
         invalid_version,
         invalid_header,
         incomplete,
+        header_overflow,
     };
 
     /// Returns slice of parsed entries.
@@ -270,4 +274,21 @@ test "encoded size" {
 
     const size = encodedSize(&entries);
     try std.testing.expectEqual(@as(usize, 22), size);
+}
+
+test "parse header overflow" {
+    // Build header block with 17 headers (exceeds 16 limit)
+    const data = "NATS/1.0\r\n" ++
+        "H0: v\r\nH1: v\r\nH2: v\r\nH3: v\r\n" ++
+        "H4: v\r\nH5: v\r\nH6: v\r\nH7: v\r\n" ++
+        "H8: v\r\nH9: v\r\nHA: v\r\nHB: v\r\n" ++
+        "HC: v\r\nHD: v\r\nHE: v\r\nHF: v\r\n" ++
+        "HG: v\r\n\r\n";
+
+    const result = parse(data);
+    try std.testing.expectEqual(
+        ParseResult.ParseError.header_overflow,
+        result.err.?,
+    );
+    try std.testing.expectEqual(@as(usize, 16), result.count);
 }

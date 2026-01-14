@@ -32,13 +32,13 @@ pub fn testAsyncDrainOperation(allocator: std.mem.Allocator) void {
         reportResult("async_drain_operation", false, "sub1 failed");
         return;
     };
-    _ = sub1;
+    defer sub1.deinit(allocator);
 
     const sub2 = client.subscribe(allocator, "drain.test.2") catch {
         reportResult("async_drain_operation", false, "sub2 failed");
         return;
     };
-    _ = sub2;
+    defer sub2.deinit(allocator);
 
     client.flush() catch {};
 
@@ -75,13 +75,13 @@ pub fn testAsyncDrainCleansUp(allocator: std.mem.Allocator) void {
         reportResult("async_drain_cleanup", false, "sub1 failed");
         return;
     };
-    _ = sub1;
+    defer sub1.deinit(allocator);
 
     const sub2 = client.subscribe(allocator, "drain.cleanup.2") catch {
         reportResult("async_drain_cleanup", false, "sub2 failed");
         return;
     };
-    _ = sub2;
+    defer sub2.deinit(allocator);
 
     client.publish("drain.cleanup.1", "msg1") catch {};
     client.publish("drain.cleanup.2", "msg2") catch {};
@@ -146,6 +146,10 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
     var subs: [20]?*nats.Subscription = undefined;
     @memset(&subs, null);
 
+    defer for (&subs) |*s| {
+        if (s.*) |sub| sub.deinit(allocator);
+    };
+
     var created: usize = 0;
     for (0..20) |i| {
         var sub_buf: [32]u8 = undefined;
@@ -158,17 +162,12 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
 
     client.flush() catch {};
 
-    // Drain should clean up all subscriptions
     client.drain(allocator) catch {
-        // Cleanup any created subscriptions
-        for (&subs) |*s| {
-            if (s.*) |sub| sub.deinit(allocator);
-        }
         reportResult("drain_many_subs", false, "drain failed");
         return;
     };
 
-    // After drain, no need to cleanup subs - drain handles it
+    // Subs cleaned by defer above
     if (!client.isConnected() and created >= 15) {
         reportResult("drain_many_subs", true, "");
     } else {

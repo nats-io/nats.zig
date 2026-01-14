@@ -59,34 +59,41 @@ pub fn main() !void {
     }
     try client.flush();
 
+    // Wait for messages to be distributed by NATS server
+    io.sleep(.fromMilliseconds(100), .awake) catch {};
+
     // Count how many messages each worker receives
     var counts = [3]u32{ 0, 0, 0 };
-    const workers = [_]*nats.Subscription{ worker1, worker2, worker3 };
 
     std.debug.print("\nProcessing messages:\n", .{});
 
-    // Poll each worker for messages
-    var total_received: u32 = 0;
-    while (total_received < message_count) {
-        var received_any = false;
+    // Drain each worker's queue sequentially
+    // (messages were already routed to workers by NATS)
+    while (true) {
+        const msg = worker1.nextWithTimeout(allocator, 50) catch break;
+        if (msg) |m| {
+            defer m.deinit(allocator);
+            counts[0] += 1;
+            std.debug.print("  Worker 1 received: {s}\n", .{m.data});
+        } else break;
+    }
 
-        for (workers, 0..) |worker, idx| {
-            if (worker.tryNext()) |msg| {
-                defer msg.deinit(allocator);
-                counts[idx] += 1;
-                total_received += 1;
-                received_any = true;
-                std.debug.print(
-                    "  Worker {d} received: {s}\n",
-                    .{ idx + 1, msg.data },
-                );
-            }
-        }
+    while (true) {
+        const msg = worker2.nextWithTimeout(allocator, 50) catch break;
+        if (msg) |m| {
+            defer m.deinit(allocator);
+            counts[1] += 1;
+            std.debug.print("  Worker 2 received: {s}\n", .{m.data});
+        } else break;
+    }
 
-        if (!received_any) {
-            // Brief wait for messages to arrive
-            io.sleep(.fromMilliseconds(10), .awake) catch {};
-        }
+    while (true) {
+        const msg = worker3.nextWithTimeout(allocator, 50) catch break;
+        if (msg) |m| {
+            defer m.deinit(allocator);
+            counts[2] += 1;
+            std.debug.print("  Worker 3 received: {s}\n", .{m.data});
+        } else break;
     }
 
     std.debug.print("\nDistribution summary:\n", .{});

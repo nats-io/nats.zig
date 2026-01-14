@@ -306,14 +306,14 @@ pub fn testConnectionDrain(allocator: std.mem.Allocator) void {
         reportResult("connection_drain", false, "sub1 failed");
         return;
     };
-    _ = sub1;
+    defer sub1.deinit(allocator);
 
     const sub2 = client.subscribe(allocator, "drain.2") catch {
         client.deinit(allocator);
         reportResult("connection_drain", false, "sub2 failed");
         return;
     };
-    _ = sub2;
+    defer sub2.deinit(allocator);
 
     client.flush() catch {};
 

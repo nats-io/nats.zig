@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
 
     // Simple example (quickstart)
     const simple_exe = b.addExecutable(.{
-        .name = "simple",
+        .name = "example-simple",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/examples/simple.zig"),
             .target = target,
@@ -29,14 +29,14 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(simple_exe);
 
-    const run_simple = b.step("run-simple", "Run simple example");
+    const run_simple = b.step("example-simple", "Run simple example");
     const simple_cmd = b.addRunArtifact(simple_exe);
     run_simple.dependOn(&simple_cmd.step);
     simple_cmd.step.dependOn(b.getInstallStep());
 
     // Pub/Sub example
     const pubsub_exe = b.addExecutable(.{
-        .name = "pubsub",
+        .name = "example-pubsub",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/examples/pubsub.zig"),
             .target = target,
@@ -48,14 +48,14 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(pubsub_exe);
 
-    const run_pubsub = b.step("run-pubsub", "Run pub/sub example");
+    const run_pubsub = b.step("example-pubsub", "Run pub/sub example");
     const pubsub_cmd = b.addRunArtifact(pubsub_exe);
     run_pubsub.dependOn(&pubsub_cmd.step);
     pubsub_cmd.step.dependOn(b.getInstallStep());
 
     // Request/Reply example
     const request_reply_exe = b.addExecutable(.{
-        .name = "request-reply",
+        .name = "example-request-reply",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/examples/request_reply.zig"),
             .target = target,
@@ -68,7 +68,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(request_reply_exe);
 
     const run_request_reply = b.step(
-        "run-request-reply",
+        "example-request-reply",
         "Run request/reply example",
     );
     const request_reply_cmd = b.addRunArtifact(request_reply_exe);
@@ -77,7 +77,7 @@ pub fn build(b: *std.Build) void {
 
     // Workers (queue groups) example
     const workers_exe = b.addExecutable(.{
-        .name = "workers",
+        .name = "example-workers",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/examples/workers.zig"),
             .target = target,
@@ -89,10 +89,120 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(workers_exe);
 
-    const run_workers = b.step("run-workers", "Run workers (queue groups) example");
+    const run_workers = b.step("example-workers", "Run workers (queue groups) example");
     const workers_cmd = b.addRunArtifact(workers_exe);
     run_workers.dependOn(&workers_cmd.step);
     workers_cmd.step.dependOn(b.getInstallStep());
+
+    // Workers polling example
+    const workers_polling_exe = b.addExecutable(.{
+        .name = "example-workers-polling",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/examples/workers_polling.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(workers_polling_exe);
+
+    const run_workers_polling = b.step(
+        "example-workers-polling",
+        "Run workers polling example",
+    );
+    const workers_polling_cmd = b.addRunArtifact(workers_polling_exe);
+    run_workers_polling.dependOn(&workers_polling_cmd.step);
+    workers_polling_cmd.step.dependOn(b.getInstallStep());
+
+    // Workers concurrent example (io.concurrent + Io.Queue)
+    const workers_concurrent_exe = b.addExecutable(.{
+        .name = "example-workers-concurrent",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/examples/workers_concurrent.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(workers_concurrent_exe);
+
+    const run_workers_concurrent = b.step(
+        "example-workers-concurrent",
+        "Run workers concurrent example (io.concurrent + Io.Queue)",
+    );
+    const workers_concurrent_cmd = b.addRunArtifact(workers_concurrent_exe);
+    run_workers_concurrent.dependOn(&workers_concurrent_cmd.step);
+    workers_concurrent_cmd.step.dependOn(b.getInstallStep());
+
+    // Select example (io.select pattern)
+    const select_exe = b.addExecutable(.{
+        .name = "example-select",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/examples/select.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(select_exe);
+
+    const run_select = b.step(
+        "example-select",
+        "Run io.select() pattern example",
+    );
+    const select_cmd = b.addRunArtifact(select_exe);
+    run_select.dependOn(&select_cmd.step);
+    select_cmd.step.dependOn(b.getInstallStep());
+
+    // Multiple subscriptions example
+    const multi_sub_exe = b.addExecutable(.{
+        .name = "example-multi-sub",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/examples/multi_sub.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(multi_sub_exe);
+
+    const run_multi_sub = b.step(
+        "example-multi-sub",
+        "Run multiple subscriptions example (polling)",
+    );
+    const multi_sub_cmd = b.addRunArtifact(multi_sub_exe);
+    run_multi_sub.dependOn(&multi_sub_cmd.step);
+    multi_sub_cmd.step.dependOn(b.getInstallStep());
+
+    // Multiple subscriptions async example (io.concurrent + Io.Queue)
+    const multi_sub_async_exe = b.addExecutable(.{
+        .name = "example-multi-sub-async",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/examples/multi_sub_async.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(multi_sub_async_exe);
+
+    const run_multi_sub_async = b.step(
+        "example-multi-sub-async",
+        "Run multiple subscriptions async example (io.concurrent)",
+    );
+    const multi_sub_async_cmd = b.addRunArtifact(multi_sub_async_exe);
+    run_multi_sub_async.dependOn(&multi_sub_async_cmd.step);
+    multi_sub_async_cmd.step.dependOn(b.getInstallStep());
 
     const fmt = b.addFmt(.{
         .paths = &.{ "src", "build.zig" },

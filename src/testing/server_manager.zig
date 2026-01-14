@@ -98,7 +98,6 @@ pub const ServerInstance = struct {
     pub fn stop(self: *ServerInstance, io: Io) void {
         if (self.process) |*proc| {
             proc.kill(io);
-            _ = proc.wait(io) catch {};
             self.process = null;
         }
         assert(self.process == null);
