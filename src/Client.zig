@@ -195,6 +195,11 @@ pub const SIDMAP_CAPACITY: u32 = 512;
 /// Default queue size per subscription.
 pub const DEFAULT_QUEUE_SIZE: u16 = 256;
 
+// Compile-time validation of capacity constraints
+comptime {
+    assert(SIDMAP_CAPACITY >= MAX_SUBSCRIPTIONS);
+}
+
 /// Parses a NATS URL like nats://user:pass@host:port
 pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     if (url.len == 0) return error.InvalidUrl;
@@ -277,6 +282,10 @@ next_sid: u64 = 1,
 read_mutex: Io.Mutex = .init,
 stats: Stats = .{},
 
+// Connection diagnostics
+tcp_nodelay_set: bool = false,
+tcp_rcvbuf_set: bool = false,
+
 /// Connects to a NATS server.
 ///
 /// Arguments:
@@ -331,23 +340,29 @@ pub fn connect(
     };
     errdefer client.stream.close(io);
 
-    // Set TCP_NODELAY
+    // Set TCP_NODELAY (track success for diagnostics)
     const enable: u32 = 1;
+    client.tcp_nodelay_set = true;
     std.posix.setsockopt(
         client.stream.socket.handle,
         std.posix.IPPROTO.TCP,
         std.os.linux.TCP.NODELAY,
         std.mem.asBytes(&enable),
-    ) catch {};
+    ) catch {
+        client.tcp_nodelay_set = false;
+    };
 
     // Set TCP receive buffer size for better backpressure handling
+    client.tcp_rcvbuf_set = opts.tcp_rcvbuf > 0;
     if (opts.tcp_rcvbuf > 0) {
         std.posix.setsockopt(
             client.stream.socket.handle,
             std.posix.SOL.SOCKET,
             std.posix.SO.RCVBUF,
             std.mem.asBytes(&opts.tcp_rcvbuf),
-        ) catch {};
+        ) catch {
+            client.tcp_rcvbuf_set = false;
+        };
     }
 
     // Allocate buffers based on options
@@ -492,6 +507,30 @@ fn checkAuthRejection(self: *Client) !void {
     }
 }
 
+/// Cleanup subscription resources after failed registration.
+/// Inline to avoid function call overhead in error path.
+inline fn cleanupFailedSub(
+    self: *Client,
+    sub: *Sub,
+    allocator: Allocator,
+    slot_idx: u16,
+    queue_buf: []Message,
+    owned_queue: ?[]const u8,
+    owned_subject: []const u8,
+    remove_from_sidmap: bool,
+) void {
+    if (remove_from_sidmap) {
+        _ = self.sidmap.remove(sub.sid);
+        self.sub_ptrs[slot_idx] = null;
+    }
+    self.free_slots[self.free_count] = slot_idx;
+    self.free_count += 1;
+    allocator.free(queue_buf);
+    if (owned_queue) |qg| allocator.free(qg);
+    allocator.free(owned_subject);
+    allocator.destroy(sub);
+}
+
 /// Subscribes to a subject.
 ///
 /// Arguments:
@@ -574,33 +613,35 @@ pub fn subscribeQueue(
 
     // Store in SidMap
     self.sidmap.put(sid, slot_idx) catch {
-        // Cleanup - errdefers inactive after sub.* initialization
-        allocator.free(queue_buf);
-        if (owned_queue) |qg| allocator.free(qg);
-        allocator.free(owned_subject);
-        allocator.destroy(sub);
-        self.free_slots[self.free_count] = slot_idx;
-        self.free_count += 1;
+        self.cleanupFailedSub(
+            sub,
+            allocator,
+            slot_idx,
+            queue_buf,
+            owned_queue,
+            owned_subject,
+            false,
+        );
         return error.TooManySubscriptions;
     };
     self.sub_ptrs[slot_idx] = sub;
 
     // Send SUB command
-    protocol.Encoder.encodeSub(&self.writer.interface, .{
+    const writer = &self.writer.interface;
+    protocol.Encoder.encodeSub(writer, .{
         .subject = subject,
         .queue_group = queue_group,
         .sid = sid,
     }) catch {
-        // Rollback sidmap and sub_ptrs registration
-        _ = self.sidmap.remove(sid);
-        self.sub_ptrs[slot_idx] = null;
-        self.free_slots[self.free_count] = slot_idx;
-        self.free_count += 1;
-        // Cleanup allocations
-        allocator.free(queue_buf);
-        if (owned_queue) |qg| allocator.free(qg);
-        allocator.free(owned_subject);
-        allocator.destroy(sub);
+        self.cleanupFailedSub(
+            sub,
+            allocator,
+            slot_idx,
+            queue_buf,
+            owned_queue,
+            owned_subject,
+            true,
+        );
         return error.EncodingFailed;
     };
 
@@ -628,7 +669,8 @@ pub fn publish(
         if (payload.len > info.max_payload) return error.PayloadTooLarge;
     }
 
-    protocol.Encoder.encodePub(&self.writer.interface, .{
+    const writer = &self.writer.interface;
+    protocol.Encoder.encodePub(writer, .{
         .subject = subject,
         .reply_to = null,
         .payload = payload,
@@ -658,7 +700,8 @@ pub fn publishRequest(
         if (payload.len > info.max_payload) return error.PayloadTooLarge;
     }
 
-    protocol.Encoder.encodePub(&self.writer.interface, .{
+    const writer = &self.writer.interface;
+    protocol.Encoder.encodePub(writer, .{
         .subject = subject,
         .reply_to = reply_to,
         .payload = payload,
@@ -675,7 +718,8 @@ pub fn flush(self: *Client) !void {
     if (!self.state.canSend()) {
         return error.NotConnected;
     }
-    self.writer.interface.flush() catch {
+    const writer = &self.writer.interface;
+    writer.flush() catch {
         return error.WriteFailed;
     };
 }
@@ -726,27 +770,34 @@ pub fn request(
         Subscription.next,
         .{ sub, allocator, self.io },
     );
-
     var timeout_future = self.io.async(
         sleepForRequest,
         .{ self.io, timeout_ms },
     );
 
+    // Winner-tracking pattern: defer cleanup for non-winners
+    var winner: enum { none, response, timeout } = .none;
+
+    defer if (winner != .response) {
+        if (response_future.cancel(self.io)) |msg| {
+            msg.deinit(allocator);
+        } else |_| {}
+    };
+    defer if (winner != .timeout) {
+        timeout_future.cancel(self.io);
+    };
+
     const select_result = self.io.select(.{
         .response = &response_future,
         .timeout = &timeout_future,
     }) catch |err| {
-        timeout_future.cancel(self.io);
-        if (response_future.cancel(self.io)) |msg| {
-            msg.deinit(allocator);
-        } else |_| {}
         if (err == error.Canceled) return null;
         return err;
     };
 
     switch (select_result) {
         .response => |msg_result| {
-            timeout_future.cancel(self.io);
+            winner = .response;
             return msg_result catch |err| {
                 if (err == error.Canceled or err == error.Closed) {
                     return null;
@@ -755,9 +806,7 @@ pub fn request(
             };
         },
         .timeout => {
-            if (response_future.cancel(self.io)) |msg| {
-                msg.deinit(allocator);
-            } else |_| {}
+            winner = .timeout;
             return null;
         },
     }
@@ -781,6 +830,8 @@ pub fn drain(self: *Client, alloc: Allocator) !void {
     }
     assert(self.next_sid >= 1);
 
+    const writer = &self.writer.interface;
+
     // Acquire mutex for subscription cleanup (prevents races with next())
     self.read_mutex.lockUncancelable(self.io);
 
@@ -788,7 +839,7 @@ pub fn drain(self: *Client, alloc: Allocator) !void {
     for (self.sub_ptrs, 0..) |maybe_sub, slot_idx| {
         if (maybe_sub) |sub| {
             // Buffer UNSUB command (no I/O yet)
-            protocol.Encoder.encodeUnsub(&self.writer.interface, .{
+            protocol.Encoder.encodeUnsub(writer, .{
                 .sid = sub.sid,
                 .max_msgs = null,
             }) catch {};
@@ -816,7 +867,7 @@ pub fn drain(self: *Client, alloc: Allocator) !void {
     self.read_mutex.unlock(self.io);
 
     // I/O operations after mutex released
-    self.writer.interface.flush() catch {};
+    writer.flush() catch {};
     self.state = .draining;
 
     self.stream.close(self.io);
@@ -849,6 +900,16 @@ pub fn getServerInfo(self: *const Client) ?*const ServerInfo {
     return null;
 }
 
+/// Returns true if TCP_NODELAY was successfully set.
+pub fn isTcpNoDelaySet(self: *const Client) bool {
+    return self.tcp_nodelay_set;
+}
+
+/// Returns true if TCP receive buffer was successfully set.
+pub fn isTcpRcvBufSet(self: *const Client) bool {
+    return self.tcp_rcvbuf_set;
+}
+
 /// Get subscription by SID.
 pub fn getSubscriptionBySid(self: *Client, sid: u64) ?*Sub {
     assert(sid > 0);
@@ -865,7 +926,8 @@ pub fn unsubscribeSid(self: *Client, sid: u64) !void {
         return error.NotConnected;
     }
 
-    protocol.Encoder.encodeUnsub(&self.writer.interface, .{
+    const writer = &self.writer.interface;
+    protocol.Encoder.encodeUnsub(writer, .{
         .sid = sid,
         .max_msgs = null,
     }) catch {
@@ -880,11 +942,54 @@ pub fn unsubscribeSid(self: *Client, sid: u64) !void {
     }
 }
 
+/// Destroys a subscription safely while client is alive.
+/// Called by Subscription.deinit() when client_destroyed == false.
+pub fn destroySubscription(
+    self: *Client,
+    sub: *Sub,
+    allocator: Allocator,
+) void {
+    sub.queue.close(self.io);
+
+    self.read_mutex.lockUncancelable(self.io);
+    defer self.read_mutex.unlock(self.io);
+
+    if (sub.state != .unsubscribed) {
+        const writer = &self.writer.interface;
+        protocol.Encoder.encodeUnsub(writer, .{
+            .sid = sub.sid,
+            .max_msgs = null,
+        }) catch {};
+    }
+
+    if (self.sidmap.get(sub.sid)) |slot_idx| {
+        self.sub_ptrs[slot_idx] = null;
+        _ = self.sidmap.remove(sub.sid);
+        self.free_slots[self.free_count] = slot_idx;
+        self.free_count += 1;
+    }
+
+    // Drain remaining messages
+    var drain_buf: [1]Message = undefined;
+    while (true) {
+        const n = sub.queue.get(self.io, &drain_buf, 0) catch break;
+        if (n == 0) break;
+        drain_buf[0].deinit(allocator);
+    }
+
+    // Free subscription resources
+    allocator.free(sub.queue_buf);
+    allocator.free(sub.subject);
+    if (sub.queue_group) |qg| allocator.free(qg);
+    allocator.destroy(sub);
+}
+
 /// Toss bytes consumed from previous read.
 pub fn tossPending(self: *Client) void {
     assert(self.pending_toss <= self.read_buffer.len);
     if (self.pending_toss > 0) {
-        self.reader.interface.toss(self.pending_toss);
+        const reader = &self.reader.interface;
+        reader.toss(self.pending_toss);
         self.pending_toss = 0;
     }
 }
@@ -967,6 +1072,7 @@ pub fn routeNextMessage(
 
                         const buf = allocator.alloc(u8, total) catch {
                             reader.toss(consumed);
+                            sub.alloc_failed_msgs += 1;
                             continue;
                         };
 
@@ -1028,6 +1134,7 @@ pub fn routeNextMessage(
 
                         const buf = allocator.alloc(u8, total) catch {
                             reader.toss(consumed);
+                            sub.alloc_failed_msgs += 1;
                             continue;
                         };
 
@@ -1317,6 +1424,7 @@ pub const Subscription = struct {
     state: SubscriptionState,
     received_msgs: u64,
     dropped_msgs: u64 = 0,
+    alloc_failed_msgs: u64 = 0,
     client_destroyed: bool = false,
 
     /// Blocks until a message is available or connection is closed.
@@ -1527,8 +1635,13 @@ pub const Subscription = struct {
     /// Returns count of messages dropped due to queue overflow.
     /// Only incremented when other subscriptions route messages to this one
     /// and the queue is full. The reading subscription bypasses its queue.
-    pub fn getDroppedCount(self: *Subscription) u64 {
+    pub fn getDroppedCount(self: *const Subscription) u64 {
         return self.dropped_msgs;
+    }
+
+    /// Returns count of messages dropped due to allocation failure.
+    pub fn getAllocFailedCount(self: *const Subscription) u64 {
+        return self.alloc_failed_msgs;
     }
 
     /// Push message to queue (called by reader task).
@@ -1551,47 +1664,16 @@ pub const Subscription = struct {
 
     /// Closes the subscription and frees resources.
     pub fn deinit(self: *Subscription, allocator: Allocator) void {
-        // Skip client access if client already destroyed/drained
-        if (!self.client_destroyed) {
-            // Close queue first (wakes any waiters)
-            self.queue.close(self.client.io);
-
-            // Acquire mutex for shared state modification
-            self.client.read_mutex.lockUncancelable(self.client.io);
-
-            if (self.state != .unsubscribed) {
-                self.client.unsubscribeSid(self.sid) catch {};
-            }
-
-            if (self.client.sidmap.get(self.sid)) |slot_idx| {
-                self.client.sub_ptrs[slot_idx] = null;
-                _ = self.client.sidmap.remove(self.sid);
-                self.client.free_slots[self.client.free_count] = slot_idx;
-                self.client.free_count += 1;
-            }
-
-            self.client.read_mutex.unlock(self.client.io);
-
-            // Drain remaining messages (no mutex - queue is closed)
-            var drain_buf: [1]Message = undefined;
-            while (true) {
-                const n = self.queue.get(
-                    self.client.io,
-                    &drain_buf,
-                    0,
-                ) catch break;
-                if (n == 0) break;
-                drain_buf[0].deinit(allocator);
-            }
+        if (self.client_destroyed) {
+            // Client already handled cleanup - just free local resources
+            allocator.free(self.queue_buf);
+            allocator.free(self.subject);
+            if (self.queue_group) |qg| allocator.free(qg);
+            allocator.destroy(self);
+        } else {
+            // Client is alive - delegate for safe cleanup
+            self.client.destroySubscription(self, allocator);
         }
-
-        // Always free local resources
-        allocator.free(self.queue_buf);
-        allocator.free(self.subject);
-        if (self.queue_group) |qg| {
-            allocator.free(qg);
-        }
-        allocator.destroy(self);
     }
 };
 
