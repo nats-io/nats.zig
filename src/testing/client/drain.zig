@@ -43,7 +43,7 @@ pub fn testAsyncDrainOperation(allocator: std.mem.Allocator) void {
     client.flush() catch {};
 
     // Drain should clean up everything
-    client.drain(allocator) catch {
+    _ = client.drain(allocator) catch {
         reportResult("async_drain_operation", false, "drain failed");
         return;
     };
@@ -91,7 +91,7 @@ pub fn testAsyncDrainCleansUp(allocator: std.mem.Allocator) void {
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Drain - should clean up all subscriptions and close connection
-    client.drain(allocator) catch {
+    _ = client.drain(allocator) catch {
         reportResult("async_drain_cleanup", false, "drain failed");
         return;
     };
@@ -118,13 +118,13 @@ pub fn testDrainTwice(allocator: std.mem.Allocator) void {
     defer client.deinit(allocator);
 
     // First drain
-    client.drain(allocator) catch {
+    _ = client.drain(allocator) catch {
         reportResult("drain_twice", false, "first drain failed");
         return;
     };
 
     // Second drain should be safe (no-op or error, but not crash)
-    client.drain(allocator) catch {};
+    _ = client.drain(allocator) catch {};
 
     reportResult("drain_twice", true, "");
 }
@@ -162,7 +162,7 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
 
     client.flush() catch {};
 
-    client.drain(allocator) catch {
+    _ = client.drain(allocator) catch {
         reportResult("drain_many_subs", false, "drain failed");
         return;
     };

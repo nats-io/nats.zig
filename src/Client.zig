@@ -27,6 +27,8 @@ const pubsub = @import("pubsub.zig");
 const subscription_mod = @import("pubsub/subscription.zig");
 const memory = @import("memory.zig");
 const SidMap = memory.SidMap;
+const TieredSlab = memory.TieredSlab;
+const SlabAllocator = memory.SlabAllocator;
 
 const Client = @This();
 
@@ -164,6 +166,9 @@ pub const Options = struct {
     /// queue in the kernel before backpressure kicks in. Default 256KB.
     /// Set to 0 to use system default.
     tcp_rcvbuf: u32 = 256 * 1024,
+    /// Use slab allocator for message buffers (~26 MB pre-allocated).
+    /// Provides O(1) alloc/free for high-throughput scenarios.
+    use_slab_allocator: bool = false,
 };
 
 /// Connection statistics (Go client parity).
@@ -178,6 +183,14 @@ pub const Stats = struct {
     bytes_out: u64 = 0,
     /// Number of reconnects.
     reconnects: u32 = 0,
+};
+
+/// Result of drain operation for visibility into cleanup quality.
+pub const DrainResult = struct {
+    /// Count of UNSUB commands that failed to encode.
+    unsub_failures: u16 = 0,
+    /// True if final flush failed (data may not have reached server).
+    flush_failed: bool = false,
 };
 
 /// Parse result for NATS URL.
@@ -286,6 +299,16 @@ stats: Stats = .{},
 tcp_nodelay_set: bool = false,
 tcp_rcvbuf_set: bool = false,
 
+// Fast path cache for single-subscription case
+cached_sub: ?*Sub = null,
+
+// Cached max_payload from server_info (avoids optional unwrap in hot path)
+max_payload: usize = 1024 * 1024,
+
+// Slab allocator for message buffers (optional, ~26 MB pre-allocated)
+tiered_slab: ?TieredSlab = null,
+slab_allocator: ?SlabAllocator = null,
+
 /// Connects to a NATS server.
 ///
 /// Arguments:
@@ -314,7 +337,21 @@ pub fn connect(
     client.next_sid = 1;
     client.read_mutex = .init;
     client.stats = .{};
+    client.cached_sub = null;
+    client.max_payload = 1024 * 1024;
+    client.tiered_slab = null;
+    client.slab_allocator = null;
+
+    // Initialize slab allocator if requested
+    if (opts.use_slab_allocator) {
+        client.tiered_slab = TieredSlab.init(allocator) catch null;
+        if (client.tiered_slab != null) {
+            client.slab_allocator = .{ .slab = &client.tiered_slab.? };
+        }
+    }
+
     errdefer {
+        if (client.tiered_slab) |*ts| ts.deinit();
         if (client.server_info) |*info| {
             info.deinit(allocator);
         }
@@ -428,6 +465,7 @@ fn handshake(
         switch (c) {
             .info => |parsed_info| {
                 self.server_info = parsed_info;
+                self.max_payload = parsed_info.max_payload;
                 self.state = .connected;
             },
             else => return error.UnexpectedCommand,
@@ -523,6 +561,7 @@ inline fn cleanupFailedSub(
         _ = self.sidmap.remove(sub.sid);
         self.sub_ptrs[slot_idx] = null;
     }
+    if (self.cached_sub == sub) self.cached_sub = null;
     self.free_slots[self.free_count] = slot_idx;
     self.free_count += 1;
     allocator.free(queue_buf);
@@ -625,6 +664,7 @@ pub fn subscribeQueue(
         return error.TooManySubscriptions;
     };
     self.sub_ptrs[slot_idx] = sub;
+    self.cached_sub = sub;
 
     // Send SUB command
     const writer = &self.writer.interface;
@@ -665,9 +705,7 @@ pub fn publish(
         return error.NotConnected;
     }
     try pubsub.validatePublish(subject);
-    if (self.server_info) |info| {
-        if (payload.len > info.max_payload) return error.PayloadTooLarge;
-    }
+    if (payload.len > self.max_payload) return error.PayloadTooLarge;
 
     const writer = &self.writer.interface;
     protocol.Encoder.encodePub(writer, .{
@@ -696,9 +734,7 @@ pub fn publishRequest(
     }
     try pubsub.validatePublish(subject);
     try pubsub.validateReplyTo(reply_to);
-    if (self.server_info) |info| {
-        if (payload.len > info.max_payload) return error.PayloadTooLarge;
-    }
+    if (payload.len > self.max_payload) return error.PayloadTooLarge;
 
     const writer = &self.writer.interface;
     protocol.Encoder.encodePub(writer, .{
@@ -822,14 +858,16 @@ fn sleepForRequest(io: Io, timeout_ms: u32) void {
 /// Arguments:
 ///     alloc: Allocator used for subscription cleanup
 ///
+/// Returns DrainResult indicating any failures during cleanup.
 /// Unsubscribes all active subscriptions, drains remaining messages,
 /// and closes the connection. Use for graceful shutdown.
-pub fn drain(self: *Client, alloc: Allocator) !void {
+pub fn drain(self: *Client, alloc: Allocator) !DrainResult {
     if (self.state != .connected) {
         return error.NotConnected;
     }
     assert(self.next_sid >= 1);
 
+    var result: DrainResult = .{};
     const writer = &self.writer.interface;
 
     // Acquire mutex for subscription cleanup (prevents races with next())
@@ -842,12 +880,15 @@ pub fn drain(self: *Client, alloc: Allocator) !void {
             protocol.Encoder.encodeUnsub(writer, .{
                 .sid = sub.sid,
                 .max_msgs = null,
-            }) catch {};
+            }) catch {
+                result.unsub_failures += 1;
+            };
 
             // Close queue and clear from data structures
             sub.queue.close(self.io);
             _ = self.sidmap.remove(sub.sid);
             self.sub_ptrs[slot_idx] = null;
+            if (self.cached_sub == sub) self.cached_sub = null;
             self.free_slots[self.free_count] = @intCast(slot_idx);
             self.free_count += 1;
 
@@ -867,7 +908,9 @@ pub fn drain(self: *Client, alloc: Allocator) !void {
     self.read_mutex.unlock(self.io);
 
     // I/O operations after mutex released
-    writer.flush() catch {};
+    writer.flush() catch {
+        result.flush_failed = true;
+    };
     self.state = .draining;
 
     self.stream.close(self.io);
@@ -877,6 +920,8 @@ pub fn drain(self: *Client, alloc: Allocator) !void {
         info.deinit(alloc);
         self.server_info = null;
     }
+
+    return result;
 }
 
 /// Returns true if connected.
@@ -910,9 +955,27 @@ pub fn isTcpRcvBufSet(self: *const Client) bool {
     return self.tcp_rcvbuf_set;
 }
 
+/// Returns allocator for message buffers.
+///
+/// When use_slab_allocator is enabled, returns the slab allocator which
+/// provides O(1) alloc/free. Otherwise returns the provided fallback.
+/// Use this for Message.deinit() to ensure correct allocator is used.
+pub fn getMsgAllocator(self: *Client, fallback: Allocator) Allocator {
+    if (self.slab_allocator) |*sa| {
+        return sa.allocator();
+    }
+    return fallback;
+}
+
 /// Get subscription by SID.
-pub fn getSubscriptionBySid(self: *Client, sid: u64) ?*Sub {
+/// Uses cached pointer for fast path when single subscription matches.
+pub inline fn getSubscriptionBySid(self: *Client, sid: u64) ?*Sub {
     assert(sid > 0);
+    // Fast path: cached subscription (common in benchmarks)
+    if (self.cached_sub) |sub| {
+        if (sub.sid == sid) return sub;
+    }
+    // Normal hash lookup
     if (self.sidmap.get(sid)) |slot_idx| {
         return self.sub_ptrs[slot_idx];
     }
@@ -935,6 +998,9 @@ pub fn unsubscribeSid(self: *Client, sid: u64) !void {
     };
 
     if (self.sidmap.get(sid)) |slot_idx| {
+        if (self.cached_sub) |cached| {
+            if (cached.sid == sid) self.cached_sub = null;
+        }
         self.sub_ptrs[slot_idx] = null;
         _ = self.sidmap.remove(sid);
         self.free_slots[self.free_count] = slot_idx;
@@ -964,6 +1030,7 @@ pub fn destroySubscription(
 
     if (self.sidmap.get(sub.sid)) |slot_idx| {
         self.sub_ptrs[slot_idx] = null;
+        if (self.cached_sub == sub) self.cached_sub = null;
         _ = self.sidmap.remove(sub.sid);
         self.free_slots[self.free_count] = slot_idx;
         self.free_count += 1;
@@ -985,13 +1052,12 @@ pub fn destroySubscription(
 }
 
 /// Toss bytes consumed from previous read.
-pub fn tossPending(self: *Client) void {
+/// Discards pending bytes from read buffer. Inlined for hot path performance.
+pub inline fn tossPending(self: *Client) void {
+    if (self.pending_toss == 0) return;
     assert(self.pending_toss <= self.read_buffer.len);
-    if (self.pending_toss > 0) {
-        const reader = &self.reader.interface;
-        reader.toss(self.pending_toss);
-        self.pending_toss = 0;
-    }
+    self.reader.interface.toss(self.pending_toss);
+    self.pending_toss = 0;
 }
 
 /// Routes a single message from socket to subscription queues.
@@ -1005,6 +1071,9 @@ pub fn routeNextMessage(
     }
 
     self.tossPending();
+
+    // Use slab allocator for message buffers if available
+    const msg_allocator = self.getMsgAllocator(allocator);
 
     const reader = &self.reader.interface;
 
@@ -1048,14 +1117,13 @@ pub fn routeNextMessage(
                         info.deinit(allocator);
                     }
                     self.server_info = new_info;
+                    self.max_payload = new_info.max_payload;
                 },
                 .msg => |args| {
-                    // Validate payload size against server max_payload
-                    if (self.server_info) |info| {
-                        if (args.payload_len > info.max_payload) {
-                            reader.toss(consumed);
-                            continue;
-                        }
+                    // Validate payload size against cached max_payload
+                    if (args.payload_len > self.max_payload) {
+                        reader.toss(consumed);
+                        continue;
                     }
 
                     self.stats.msgs_in += 1;
@@ -1070,7 +1138,7 @@ pub fn routeNextMessage(
                         const total = args.subject.len +
                             args.payload.len + reply_len;
 
-                        const buf = allocator.alloc(u8, total) catch {
+                        const buf = msg_allocator.alloc(u8, total) catch {
                             reader.toss(consumed);
                             sub.alloc_failed_msgs += 1;
                             continue;
@@ -1100,7 +1168,7 @@ pub fn routeNextMessage(
                         };
 
                         sub.pushMessage(msg) catch {
-                            allocator.free(buf);
+                            msg_allocator.free(buf);
                             sub.dropped_msgs += 1;
                         };
 
@@ -1110,12 +1178,10 @@ pub fn routeNextMessage(
                     return true;
                 },
                 .hmsg => |args| {
-                    // Validate total content size against server max_payload
-                    if (self.server_info) |info| {
-                        if (args.total_len > info.max_payload) {
-                            reader.toss(consumed);
-                            continue;
-                        }
+                    // Validate total content size against cached max_payload
+                    if (args.total_len > self.max_payload) {
+                        reader.toss(consumed);
+                        continue;
                     }
 
                     self.stats.msgs_in += 1;
@@ -1132,7 +1198,7 @@ pub fn routeNextMessage(
                         const total = args.subject.len +
                             args.payload.len + reply_len + hdrs_len;
 
-                        const buf = allocator.alloc(u8, total) catch {
+                        const buf = msg_allocator.alloc(u8, total) catch {
                             reader.toss(consumed);
                             sub.alloc_failed_msgs += 1;
                             continue;
@@ -1180,7 +1246,7 @@ pub fn routeNextMessage(
                         };
 
                         sub.pushMessage(msg) catch {
-                            allocator.free(buf);
+                            msg_allocator.free(buf);
                             sub.dropped_msgs += 1;
                         };
 
@@ -1268,15 +1334,14 @@ pub fn routeNextMessageRef(self: *Client, allocator: Allocator) !?MessageRef {
                         info.deinit(allocator);
                     }
                     self.server_info = new_info;
+                    self.max_payload = new_info.max_payload;
                     self.tossPending();
                 },
                 .msg => |args| {
-                    // Validate payload size against server max_payload
-                    if (self.server_info) |info| {
-                        if (args.payload_len > info.max_payload) {
-                            reader.toss(consumed);
-                            continue;
-                        }
+                    // Validate payload size against cached max_payload
+                    if (args.payload_len > self.max_payload) {
+                        reader.toss(consumed);
+                        continue;
                     }
 
                     self.stats.msgs_in += 1;
@@ -1295,12 +1360,10 @@ pub fn routeNextMessageRef(self: *Client, allocator: Allocator) !?MessageRef {
                     };
                 },
                 .hmsg => |args| {
-                    // Validate total content size against server max_payload
-                    if (self.server_info) |info| {
-                        if (args.total_len > info.max_payload) {
-                            reader.toss(consumed);
-                            continue;
-                        }
+                    // Validate total content size against cached max_payload
+                    if (args.total_len > self.max_payload) {
+                        reader.toss(consumed);
+                        continue;
                     }
 
                     self.stats.msgs_in += 1;
@@ -1370,7 +1433,7 @@ pub fn deinit(self: *Client, alloc: Allocator) void {
 
     // Drain if connected (drain handles its own mutex)
     if (self.state == .connected) {
-        self.drain(alloc) catch {};
+        _ = self.drain(alloc) catch {};
     } else {
         // Not connected - need mutex for queue/sub cleanup
         self.read_mutex.lockUncancelable(self.io);
@@ -1392,6 +1455,9 @@ pub fn deinit(self: *Client, alloc: Allocator) void {
     // Free client resources
     if (self.server_info) |*info| {
         info.deinit(alloc);
+    }
+    if (self.tiered_slab) |*ts| {
+        ts.deinit();
     }
     alloc.free(self.read_buffer);
     alloc.free(self.write_buffer);
@@ -1435,9 +1501,12 @@ pub const Subscription = struct {
     ///
     /// Uses inline routing: acquires read mutex, reads from socket, routes
     /// other subscriptions' messages to their queues. Returns owned Message
-    /// that caller must free via msg.deinit(allocator).
+    /// that caller must free via msg.deinit(client.getMsgAllocator(allocator)).
     pub fn next(self: *Subscription, allocator: Allocator, io: Io) !Message {
         assert(self.state == .active or self.state == .draining);
+
+        // Use slab allocator for message buffers if available
+        const msg_allocator = self.client.getMsgAllocator(allocator);
 
         // 1. Check our queue first (routed by other subscriptions)
         if (self.tryNext()) |msg| {
@@ -1461,7 +1530,7 @@ pub const Subscription = struct {
 
             if (ref.sid == self.sid) {
                 // Convert to owned and return
-                const owned = try ref.toOwned(allocator);
+                const owned = try ref.toOwned(msg_allocator);
                 self.client.tossPending();
                 self.received_msgs += 1;
                 return owned;
@@ -1469,14 +1538,14 @@ pub const Subscription = struct {
 
             // Route to other subscription's queue
             if (self.client.getSubscriptionBySid(ref.sid)) |other_sub| {
-                const owned = ref.toOwned(allocator) catch {
+                const owned = ref.toOwned(msg_allocator) catch {
                     self.client.tossPending();
                     continue;
                 };
                 other_sub.pushMessage(owned) catch {
                     // Queue full - message dropped
                     other_sub.dropped_msgs += 1;
-                    owned.deinit(allocator);
+                    owned.deinit(msg_allocator);
                 };
                 other_sub.received_msgs += 1;
             }
@@ -1503,6 +1572,9 @@ pub const Subscription = struct {
     ) !?MessageRef {
         assert(self.state == .active or self.state == .draining);
 
+        // Use slab allocator for message buffers if available
+        const msg_allocator = self.client.getMsgAllocator(allocator);
+
         // Acquire read mutex (only one reader at a time)
         try self.client.read_mutex.lock(io);
         defer self.client.read_mutex.unlock(io);
@@ -1520,12 +1592,12 @@ pub const Subscription = struct {
 
             // Message for different subscription - route to its queue
             if (self.client.getSubscriptionBySid(ref.sid)) |other_sub| {
-                const owned = ref.toOwned(allocator) catch {
+                const owned = ref.toOwned(msg_allocator) catch {
                     self.client.tossPending();
                     continue;
                 };
                 other_sub.pushMessage(owned) catch {
-                    owned.deinit(allocator);
+                    owned.deinit(msg_allocator);
                 };
                 other_sub.received_msgs += 1;
             }
@@ -1550,13 +1622,16 @@ pub const Subscription = struct {
         const timeout_ns = @as(u64, timeout_ms) * 1_000_000;
 
         while (true) {
+            // Check for message BEFORE time check - avoids syscall when
+            // messages are buffered
+            if (try self.nextRef(allocator, io)) |ref| {
+                return ref;
+            }
+
+            // Only check timeout when no message available
             const now = std.time.Instant.now() catch return null;
             if (now.since(start) >= timeout_ns) {
                 return null;
-            }
-
-            if (try self.nextRef(allocator, io)) |ref| {
-                return ref;
             }
         }
     }

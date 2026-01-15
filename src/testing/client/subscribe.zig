@@ -529,7 +529,7 @@ pub fn testSubscribeAfterDisconnect(allocator: std.mem.Allocator) void {
     };
 
     // Disconnect
-    client.drain(allocator) catch {
+    _ = client.drain(allocator) catch {
         client.deinit(allocator);
         reportResult("sub_after_disconnect", false, "drain failed");
         return;

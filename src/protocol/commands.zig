@@ -32,6 +32,12 @@ pub const ClientCommand = union(enum) {
 /// Server info with owned string copies.
 /// All strings are allocated and owned by this struct.
 pub const ServerInfo = struct {
+    /// Maximum allowed max_payload value (1GB).
+    pub const MAX_PAYLOAD_LIMIT = 1024 * 1024 * 1024;
+
+    /// Validation errors for ServerInfo.
+    pub const ValidationError = error{InvalidServerInfo};
+
     server_id: []const u8,
     server_name: []const u8,
     version: []const u8,
@@ -51,12 +57,22 @@ pub const ServerInfo = struct {
 
     /// Creates an owned copy from parsed JSON RawServerInfo.
     /// Copies all strings so they outlive the JSON arena.
+    /// Returns InvalidServerInfo if required fields are missing or invalid.
     pub fn fromParsed(
         allocator: Allocator,
         parsed: std.json.Parsed(RawServerInfo),
-    ) Allocator.Error!ServerInfo {
+    ) (ValidationError || Allocator.Error)!ServerInfo {
         const info = parsed.value;
-        assert(info.server_id.len > 0 or info.version.len > 0);
+
+        // Must have at least server_id or version for identification
+        if (info.server_id.len == 0 and info.version.len == 0) {
+            return error.InvalidServerInfo;
+        }
+
+        // max_payload must be > 0 and <= 1GB
+        if (info.max_payload == 0 or info.max_payload > MAX_PAYLOAD_LIMIT) {
+            return error.InvalidServerInfo;
+        }
 
         const owned = ServerInfo{
             .server_id = try allocator.dupe(u8, info.server_id),

@@ -259,7 +259,7 @@ pub fn testPublishAfterDisconnect(allocator: std.mem.Allocator) void {
         return;
     };
 
-    client.drain(allocator) catch {
+    _ = client.drain(allocator) catch {
         reportResult("publish_after_disconnect", false, "drain failed");
         client.deinit(allocator);
         return;

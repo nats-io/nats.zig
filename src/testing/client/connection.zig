@@ -318,7 +318,7 @@ pub fn testConnectionDrain(allocator: std.mem.Allocator) void {
     client.flush() catch {};
 
     // Drain should clean up everything
-    client.drain(allocator) catch {
+    _ = client.drain(allocator) catch {
         client.deinit(allocator);
         reportResult("connection_drain", false, "drain failed");
         return;
