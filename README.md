@@ -540,7 +540,27 @@ zig build fmt
 
 ## Benchmarks
 
-Built-in benchmark tools:
+**Via NATS Server** (1M messages, 128B payload, Zig publisher):
+
+| Subscriber | Rate | Bandwidth | Latency |
+|------------|------|-----------|---------|
+| **Zig** | **2,614,273 msg/s** | **319 MB/s** | **0.38μs** |
+| Zig io_uring | 2,616,561 msg/s | 319 MB/s | - |
+| Go | 2,478,678 msg/s | 303 MB/s | 0.40μs |
+| C | 2,277,904 msg/s | 292 MB/s | - |
+| Rust | 2,233,444 msg/s | 286 MB/s | - |
+
+**Direct Connection** (no NATS server, raw throughput):
+
+| Subscriber | Publisher Rate | Subscriber Rate | Bandwidth |
+|------------|----------------|-----------------|-----------|
+| Zig io_uring | 22,232,024 msg/s | 22,413,431 msg/s | 2736 MB/s |
+| **Zig** | **8,183,090 msg/s** | **7,993,197 msg/s** | **976 MB/s** |
+| Go | 3,307,826 msg/s | 3,180,441 msg/s | 388 MB/s |
+| C | 2,680,022 msg/s | 2,590,673 msg/s | 332 MB/s |
+| Rust | 2,092,537 msg/s | 1,995,394 msg/s | 255 MB/s |
+
+### Benchmark Tools
 
 ```bash
 # Publisher benchmark
