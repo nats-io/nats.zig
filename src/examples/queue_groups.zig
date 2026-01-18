@@ -1,9 +1,13 @@
-//! Queue Groups - Concurrent Workers with io.concurrent()
+//! Queue Groups - Load-Balanced Workers
 //!
-//! Demonstrates true parallel workers using io.concurrent() and Io.Queue.
-//! Each worker runs in its own thread, pushing results to a shared queue.
+//! Demonstrates horizontal scaling with NATS queue groups. Multiple workers
+//! subscribe to the same subject with the same queue group name - NATS
+//! distributes messages round-robin among them.
 //!
-//! Run with: zig build example-workers-concurrent
+//! This example uses io.concurrent() to run workers in parallel threads,
+//! pushing results to a shared Io.Queue for the main loop to consume.
+//!
+//! Run with: zig build run-queue-groups
 //!
 //! Prerequisites: nats-server running on localhost:4222
 
@@ -57,7 +61,7 @@ pub fn main() !void {
         allocator,
         io,
         "nats://localhost:4222",
-        .{ .name = "workers-concurrent" },
+        .{ .name = "queue-groups-example" },
     );
     defer client.deinit(allocator);
 
@@ -73,7 +77,7 @@ pub fn main() !void {
     const worker3 = try client.subscribeQueue(allocator, "tasks", "workers");
     defer worker3.deinit(allocator);
 
-    try client.flush();
+    try client.flush(allocator);
 
     std.debug.print("Created 3 workers in queue group 'workers'\n", .{});
 
@@ -107,7 +111,7 @@ pub fn main() !void {
         const msg = std.fmt.bufPrint(&buf, "Task {d}", .{i + 1}) catch "Task";
         try client.publish("tasks", msg);
     }
-    try client.flush();
+    try client.flush(allocator);
 
     // Consume results from queue
     var counts = [3]u32{ 0, 0, 0 };

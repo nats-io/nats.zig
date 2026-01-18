@@ -40,7 +40,7 @@ pub fn main() !void {
     // Service subscribes to handle requests
     const service = try service_client.subscribe(allocator, "math.double");
     defer service.deinit(allocator);
-    try service_client.flush();
+    try service_client.flush(allocator);
 
     std.debug.print("Service listening on 'math.double'\n", .{});
 
@@ -85,7 +85,7 @@ fn handleService(
 
         if (r.reply_to) |reply_to| {
             client.publish(reply_to, result) catch {};
-            client.flush() catch {};
+            client.flush(allocator) catch {};
         }
     }
 }

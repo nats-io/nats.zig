@@ -121,7 +121,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     }
 
     // Single flush at end
-    client.flush() catch |err| {
+    client.flush(allocator) catch |err| {
         std.debug.print("Flush failed: {}\n", .{err});
         return err;
     };

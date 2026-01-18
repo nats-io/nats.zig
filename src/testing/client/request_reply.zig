@@ -21,7 +21,7 @@ pub fn testAsyncRequestMethod(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("async_request_method", false, "connect failed");
         return;
     };
@@ -62,7 +62,7 @@ pub fn testAsyncRequestReturns(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("async_request_returns", false, "connect failed");
         return;
     };
@@ -121,7 +121,7 @@ pub fn testAsyncReplyToPreserved(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("async_reply_preserved", false, "connect failed");
         return;
     };
@@ -137,7 +137,7 @@ pub fn testAsyncReplyToPreserved(allocator: std.mem.Allocator) void {
         reportResult("async_reply_preserved", false, "pub failed");
         return;
     };
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
@@ -161,7 +161,7 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
     // Responder client
     var io_r: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_r.deinit();
-    const responder = nats.Client.connect(allocator, io_r.io(), url, .{}) catch {
+    const responder = nats.Client.connect(allocator, io_r.io(), url, .{ .reconnect = false }) catch {
         reportResult("request_reply_success", false, "responder connect failed");
         return;
     };
@@ -170,7 +170,7 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
     // Requester client
     var io_req: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_req.deinit();
-    const requester = nats.Client.connect(allocator, io_req.io(), url, .{}) catch {
+    const requester = nats.Client.connect(allocator, io_req.io(), url, .{ .reconnect = false }) catch {
         reportResult("request_reply_success", false, "requester connect failed");
         return;
     };
@@ -182,7 +182,7 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    responder.flush() catch {};
+    responder.flush(allocator) catch {};
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Start a task to handle the request
@@ -198,7 +198,7 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
                 defer req.deinit(a);
                 if (req.reply_to) |reply_inbox| {
                     r.publish(reply_inbox, "pong") catch {};
-                    r.flush() catch {};
+                    r.flush(a) catch {};
                 }
             }
         }
@@ -242,7 +242,7 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
     // Client A
     var io_a: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_a.deinit();
-    const client_a = nats.Client.connect(allocator, io_a.io(), url, .{}) catch {
+    const client_a = nats.Client.connect(allocator, io_a.io(), url, .{ .reconnect = false }) catch {
         reportResult("cross_client_reqrep", false, "A connect failed");
         return;
     };
@@ -251,7 +251,7 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
     // Client B
     var io_b: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_b.deinit();
-    const client_b = nats.Client.connect(allocator, io_b.io(), url, .{}) catch {
+    const client_b = nats.Client.connect(allocator, io_b.io(), url, .{ .reconnect = false }) catch {
         reportResult("cross_client_reqrep", false, "B connect failed");
         return;
     };
@@ -263,7 +263,7 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client_b.flush() catch {};
+    client_b.flush(allocator) catch {};
     io_b.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // B handles request in background
@@ -279,7 +279,7 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
                 defer req.deinit(a);
                 if (req.reply_to) |inbox| {
                     b.publish(inbox, "response-from-B") catch {};
-                    b.flush() catch {};
+                    b.flush(a) catch {};
                 }
             }
         }
@@ -324,6 +324,7 @@ pub fn testRequestTimeout(allocator: std.mem.Allocator) void {
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .no_responders = false, // Disable no_responders for this test
+        .reconnect = false,
     }) catch {
         reportResult("request_timeout", false, "connect failed");
         return;
@@ -377,7 +378,7 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
     // Responder client
     var io_r: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_r.deinit();
-    const responder = nats.Client.connect(allocator, io_r.io(), url, .{}) catch {
+    const responder = nats.Client.connect(allocator, io_r.io(), url, .{ .reconnect = false }) catch {
         reportResult("request_large_payload", false, "responder connect failed");
         return;
     };
@@ -386,7 +387,7 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
     // Requester client
     var io_req: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_req.deinit();
-    const requester = nats.Client.connect(allocator, io_req.io(), url, .{}) catch {
+    const requester = nats.Client.connect(allocator, io_req.io(), url, .{ .reconnect = false }) catch {
         reportResult("request_large_payload", false, "requester connect failed");
         return;
     };
@@ -398,7 +399,7 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    responder.flush() catch {};
+    responder.flush(allocator) catch {};
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Start a task to handle the request
@@ -415,7 +416,7 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
                 if (req.reply_to) |reply_inbox| {
                     // Reply with same size payload
                     r.publish(reply_inbox, req.data) catch {};
-                    r.flush() catch {};
+                    r.flush(a) catch {};
                 }
             }
         }
@@ -467,7 +468,7 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
     // Responder client
     var io_r: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_r.deinit();
-    const responder = nats.Client.connect(allocator, io_r.io(), url, .{}) catch {
+    const responder = nats.Client.connect(allocator, io_r.io(), url, .{ .reconnect = false }) catch {
         reportResult("multi_requests_seq", false, "responder connect failed");
         return;
     };
@@ -476,7 +477,7 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
     // Requester client
     var io_req: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_req.deinit();
-    const requester = nats.Client.connect(allocator, io_req.io(), url, .{}) catch {
+    const requester = nats.Client.connect(allocator, io_req.io(), url, .{ .reconnect = false }) catch {
         reportResult("multi_requests_seq", false, "requester connect failed");
         return;
     };
@@ -488,7 +489,7 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    responder.flush() catch {};
+    responder.flush(allocator) catch {};
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Responder handler - handles multiple requests
@@ -505,7 +506,7 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
                     defer req.deinit(a);
                     if (req.reply_to) |reply_inbox| {
                         r.publish(reply_inbox, "response") catch {};
-                        r.flush() catch {};
+                        r.flush(a) catch {};
                     }
                 } else break;
             }

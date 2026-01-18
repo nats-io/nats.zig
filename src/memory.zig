@@ -8,7 +8,6 @@ pub const SidMap = sidmap.SidMap;
 
 pub const slab = @import("memory/slab.zig");
 pub const TieredSlab = slab.TieredSlab;
-pub const SlabAllocator = slab.SlabAllocator;
 pub const SlabConfig = slab.Config;
 
 test {

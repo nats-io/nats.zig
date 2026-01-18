@@ -55,6 +55,11 @@ pub const ServerInfo = struct {
     client_ip: ?[]const u8,
     cluster: ?[]const u8,
 
+    /// Discovered server URLs from cluster (inline storage, no allocation).
+    connect_urls: [16][256]u8 = undefined,
+    connect_urls_lens: [16]u8 = [_]u8{0} ** 16,
+    connect_urls_count: u8 = 0,
+
     /// Creates an owned copy from parsed JSON RawServerInfo.
     /// Copies all strings so they outlive the JSON arena.
     /// Returns InvalidServerInfo if required fields are missing or invalid.
@@ -74,7 +79,7 @@ pub const ServerInfo = struct {
             return error.InvalidServerInfo;
         }
 
-        const owned = ServerInfo{
+        var owned = ServerInfo{
             .server_id = try allocator.dupe(u8, info.server_id),
             .server_name = try allocator.dupe(u8, info.server_name),
             .version = try allocator.dupe(u8, info.version),
@@ -99,6 +104,17 @@ pub const ServerInfo = struct {
                 null,
         };
 
+        // Copy connect_urls (inline, no allocation)
+        if (info.connect_urls) |urls| {
+            for (urls, 0..) |url, i| {
+                if (i >= 16) break;
+                const len: u8 = @intCast(@min(url.len, 256));
+                @memcpy(owned.connect_urls[i][0..len], url[0..len]);
+                owned.connect_urls_lens[i] = len;
+                owned.connect_urls_count += 1;
+            }
+        }
+
         return owned;
     }
 
@@ -113,6 +129,14 @@ pub const ServerInfo = struct {
         if (self.client_ip) |ip| allocator.free(ip);
         if (self.cluster) |c| allocator.free(c);
         self.* = undefined;
+    }
+
+    /// Get connect URL at index. Returns null if index out of bounds.
+    pub fn getConnectUrl(self: *const ServerInfo, idx: u8) ?[]const u8 {
+        if (idx >= self.connect_urls_count) return null;
+        const len = self.connect_urls_lens[idx];
+        if (len == 0) return null;
+        return self.connect_urls[idx][0..len];
     }
 };
 

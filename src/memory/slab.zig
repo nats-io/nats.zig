@@ -7,28 +7,23 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
+const defaults = @import("../defaults.zig");
 
-/// Configuration for tiered slab allocator.
+/// Configuration for tiered slab allocator (derived from defaults.Memory).
 pub const Config = struct {
-    pub const TIER_COUNT = 5;
+    pub const TIER_COUNT = defaults.Memory.tier_count;
 
     /// Slice sizes per tier (power-of-2 for efficient selection).
-    pub const tier_sizes = [TIER_COUNT]u32{ 256, 512, 1024, 4096, 16384 };
+    pub const tier_sizes = defaults.Memory.tier_sizes;
 
-    /// Slice counts per tier.
-    pub const tier_counts = [TIER_COUNT]u32{ 8192, 8192, 4096, 2048, 512 };
+    /// Slice counts per tier (derived from queue_size).
+    pub const tier_counts = defaults.Memory.tier_counts;
 
     /// Maximum slice size handled by slab (larger uses fallback).
-    pub const max_slice_size: usize = 16384;
+    pub const max_slice_size: usize = defaults.Memory.max_slice_size;
 
-    /// Total pre-allocated memory (~26 MB).
-    pub const total_memory: usize = blk: {
-        var total: usize = 0;
-        for (tier_sizes, tier_counts) |size, count| {
-            total += @as(usize, size) * count;
-        }
-        break :blk total;
-    };
+    /// Total pre-allocated memory.
+    pub const total_memory: usize = defaults.Memory.total_memory;
 };
 
 /// Single-tier slab with embedded free list.

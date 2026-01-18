@@ -17,7 +17,7 @@ pub fn testWildcardSubscribe(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("wildcard_subscribe", false, "connect failed");
         return;
     };
@@ -37,7 +37,7 @@ pub fn testWildcardSubscribe(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit(allocator);
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("wildcard_subscribe", false, "flush failed");
         return;
     };
@@ -52,7 +52,7 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("wildcard_matching", false, "connect failed");
         return;
     };
@@ -72,7 +72,7 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
     };
     defer sub_gt.deinit(allocator);
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Publish to wtest.bar (matches both)
     client.publish("wtest.bar", "one") catch {
@@ -86,7 +86,7 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
         return;
     };
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // star should get 1 message
     var star_count: u32 = 0;
@@ -136,7 +136,7 @@ pub fn testWildcardPositions(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("wildcard_positions", false, "connect failed");
         return;
     };
@@ -156,12 +156,12 @@ pub fn testWildcardPositions(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit(allocator);
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Publish matching messages
     client.publish("foo.middle.end", "msg1") catch {};
     client.publish("start.bar.end", "msg2") catch {};
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     var count: u32 = 0;
     if (sub1.nextWithTimeout(allocator, 500) catch null) |m| {
@@ -189,7 +189,7 @@ pub fn testMultipleWildcards(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("multi_wildcards", false, "connect failed");
         return;
     };
@@ -201,13 +201,13 @@ pub fn testMultipleWildcards(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Publish matching subjects
     client.publish("mw.foo.middle.bar", "hit1") catch {};
     client.publish("mw.a.middle.b", "hit2") catch {};
     client.publish("mw.xyz.other.abc", "miss") catch {}; // should not match
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     var count: u32 = 0;
     for (0..4) |_| {
@@ -234,7 +234,7 @@ pub fn testPublishSubscribe(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("publish_subscribe", false, "connect failed");
         return;
     };
@@ -246,7 +246,7 @@ pub fn testPublishSubscribe(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("publish_subscribe", false, "flush after sub failed");
         return;
     };
@@ -256,7 +256,7 @@ pub fn testPublishSubscribe(allocator: std.mem.Allocator) void {
         return;
     };
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("publish_subscribe", false, "flush after pub failed");
         return;
     };

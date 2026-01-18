@@ -17,7 +17,7 @@ pub fn testServerInfo(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("server_info", false, "connect failed");
         return;
     };
@@ -40,7 +40,7 @@ pub fn testServerInfoFields(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("server_info_fields", false, "connect failed");
         return;
     };
@@ -74,7 +74,7 @@ pub fn testServerVersion(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("server_version", false, "connect failed");
         return;
     };
@@ -102,7 +102,7 @@ pub fn testServerMaxPayloadEnforced(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("max_payload_enforced", false, "connect failed");
         return;
     };
@@ -130,7 +130,7 @@ pub fn testMaxPayloadRespected(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("max_payload_respected", false, "connect failed");
         return;
     };
@@ -163,7 +163,7 @@ pub fn testProtocolVersion(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("proto_version", false, "connect failed");
         return;
     };
@@ -192,6 +192,7 @@ pub fn testClientName(allocator: std.mem.Allocator) void {
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .name = "my-test-client-12345",
+        .reconnect = false,
     }) catch {
         reportResult("client_name", false, "connect failed");
         return;

@@ -17,7 +17,7 @@ pub fn testQueueGroups(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("queue_groups", false, "connect failed");
         return;
     };
@@ -35,7 +35,7 @@ pub fn testQueueGroups(allocator: std.mem.Allocator) void {
         return;
     }
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("queue_groups", false, "flush failed");
         return;
     };
@@ -50,7 +50,7 @@ pub fn testQueueGroupDistribution(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("queue_group_distribution", false, "connect failed");
         return;
     };
@@ -75,7 +75,7 @@ pub fn testQueueGroupDistribution(allocator: std.mem.Allocator) void {
     };
     defer sub3.deinit(allocator);
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Publish 30 messages
     for (0..30) |_| {
@@ -84,7 +84,7 @@ pub fn testQueueGroupDistribution(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Count how many each receives
     var count1: u32 = 0;
@@ -147,7 +147,7 @@ pub fn testQueueGroupMultipleClients(allocator: std.mem.Allocator) void {
     // Client A
     var io_a: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_a.deinit();
-    const client_a = nats.Client.connect(allocator, io_a.io(), url, .{}) catch {
+    const client_a = nats.Client.connect(allocator, io_a.io(), url, .{ .reconnect = false }) catch {
         reportResult("queue_multi_client", false, "A connect failed");
         return;
     };
@@ -156,7 +156,7 @@ pub fn testQueueGroupMultipleClients(allocator: std.mem.Allocator) void {
     // Client B
     var io_b: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_b.deinit();
-    const client_b = nats.Client.connect(allocator, io_b.io(), url, .{}) catch {
+    const client_b = nats.Client.connect(allocator, io_b.io(), url, .{ .reconnect = false }) catch {
         reportResult("queue_multi_client", false, "B connect failed");
         return;
     };
@@ -165,7 +165,7 @@ pub fn testQueueGroupMultipleClients(allocator: std.mem.Allocator) void {
     // Client C (publisher)
     var io_c: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_c.deinit();
-    const client_c = nats.Client.connect(allocator, io_c.io(), url, .{}) catch {
+    const client_c = nats.Client.connect(allocator, io_c.io(), url, .{ .reconnect = false }) catch {
         reportResult("queue_multi_client", false, "C connect failed");
         return;
     };
@@ -192,8 +192,8 @@ pub fn testQueueGroupMultipleClients(allocator: std.mem.Allocator) void {
     };
     defer sub_b.deinit(allocator);
 
-    client_a.flush() catch {};
-    client_b.flush() catch {};
+    client_a.flush(allocator) catch {};
+    client_b.flush(allocator) catch {};
     io_a.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // C publishes 20 messages
@@ -203,7 +203,7 @@ pub fn testQueueGroupMultipleClients(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    client_c.flush() catch {};
+    client_c.flush(allocator) catch {};
 
     // Count messages received by each
     var count_a: u32 = 0;
@@ -243,7 +243,7 @@ pub fn testQueueGroupSingleReceiver(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("queue_single_recv", false, "connect failed");
         return;
     };
@@ -255,13 +255,13 @@ pub fn testQueueGroupSingleReceiver(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Publish 10 messages
     for (0..10) |_| {
         client.publish("qsingle.test", "msg") catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Should receive all 10
     var count: u32 = 0;
@@ -289,7 +289,7 @@ pub fn testQueueWithWildcard(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("queue_wildcard", false, "connect failed");
         return;
     };
@@ -301,13 +301,13 @@ pub fn testQueueWithWildcard(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Publish to various subjects
     client.publish("qw.foo", "one") catch {};
     client.publish("qw.bar", "two") catch {};
     client.publish("qw.baz.deep", "three") catch {};
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     var count: u32 = 0;
     for (0..5) |_| {
@@ -334,7 +334,7 @@ pub fn testMultipleQueueGroups(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("multi_queue_groups", false, "connect failed");
         return;
     };
@@ -353,14 +353,14 @@ pub fn testMultipleQueueGroups(allocator: std.mem.Allocator) void {
     };
     defer sub_b.deinit(allocator);
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Publish one message
     client.publish("mqg.test", "hello") catch {
         reportResult("multi_queue_groups", false, "publish failed");
         return;
     };
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Both groups should receive (each group gets a copy)
     var count: u32 = 0;
@@ -399,7 +399,7 @@ pub fn testFourClientQueueGroup(allocator: std.mem.Allocator) void {
     };
 
     for (&clients, 0..) |*c, i| {
-        c.* = nats.Client.connect(allocator, ios[i].io(), url, .{}) catch {
+        c.* = nats.Client.connect(allocator, ios[i].io(), url, .{ .reconnect = false }) catch {
             reportResult("four_client_queue", false, "connect failed");
             return;
         };
@@ -420,7 +420,7 @@ pub fn testFourClientQueueGroup(allocator: std.mem.Allocator) void {
             reportResult("four_client_queue", false, "subscribe failed");
             return;
         };
-        clients[i].?.flush() catch {};
+        clients[i].?.flush(allocator) catch {};
     }
 
     ios[0].io().sleep(.fromMilliseconds(50), .awake) catch {};
@@ -429,7 +429,7 @@ pub fn testFourClientQueueGroup(allocator: std.mem.Allocator) void {
     for (0..40) |_| {
         clients[4].?.publish("fourq.test", "work") catch {};
     }
-    clients[4].?.flush() catch {};
+    clients[4].?.flush(allocator) catch {};
 
     // Count per subscriber
     var counts: [4]u32 = .{ 0, 0, 0, 0 };
@@ -469,7 +469,7 @@ pub fn testQueueMemberJoinsMidStream(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("queue_join_midstream", false, "connect failed");
         return;
     };
@@ -481,13 +481,13 @@ pub fn testQueueMemberJoinsMidStream(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub1.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Publish some messages (sub1 should get all)
     for (0..10) |_| {
         client.publish("qjoin.test", "msg") catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Second subscriber joins
     const sub2 = client.subscribeQueue(allocator, "qjoin.test", "workers") catch {
@@ -495,13 +495,13 @@ pub fn testQueueMemberJoinsMidStream(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub2.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Publish more messages (should be distributed)
     for (0..10) |_| {
         client.publish("qjoin.test", "msg") catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Count messages
     var count1: u32 = 0;
@@ -548,7 +548,7 @@ pub fn testQueueMemberLeaves(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("queue_member_leaves", false, "connect failed");
         return;
     };
@@ -567,24 +567,24 @@ pub fn testQueueMemberLeaves(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit(allocator);
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Publish 10 messages
     for (0..10) |_| {
         client.publish("qleave.test", "msg") catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // sub1 leaves
     sub1.unsubscribe() catch {};
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Publish 10 more (only sub2 should receive)
     for (0..10) |_| {
         client.publish("qleave.test", "msg") catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // sub2 should receive at least the second batch
     var count2: u32 = 0;
@@ -614,7 +614,7 @@ pub fn testLargeQueueGroup(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("large_queue_group", false, "connect failed");
         return;
     };
@@ -647,7 +647,7 @@ pub fn testLargeQueueGroup(allocator: std.mem.Allocator) void {
         return;
     }
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
     // Publish 100 messages
@@ -655,7 +655,7 @@ pub fn testLargeQueueGroup(allocator: std.mem.Allocator) void {
     for (0..NUM_MSGS) |_| {
         client.publish("lqg.test", "work") catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Count total received across all subscribers
     var total: u32 = 0;
@@ -689,7 +689,7 @@ pub fn testQueueGroupNameValidation(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("queue_name_validation", false, "connect failed");
         return;
     };
@@ -731,7 +731,7 @@ pub fn testQueueGroupFairness(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("queue_fairness", false, "connect failed");
         return;
     };
@@ -752,7 +752,7 @@ pub fn testQueueGroupFairness(allocator: std.mem.Allocator) void {
         };
     }
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
     // Publish 100 messages
@@ -760,7 +760,7 @@ pub fn testQueueGroupFairness(allocator: std.mem.Allocator) void {
     for (0..NUM_MSGS) |_| {
         client.publish("qfair.test", "msg") catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Count per subscriber
     var counts: [NUM_SUBS]u32 = [_]u32{0} ** NUM_SUBS;

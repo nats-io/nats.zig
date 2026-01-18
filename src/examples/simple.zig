@@ -36,7 +36,7 @@ pub fn main() !void {
 
     // Publish a message
     try client.publish("hello", "Hello, NATS!");
-    try client.flush();
+    try client.flush(allocator);
 
     // Receive the message
     if (try sub.nextWithTimeout(allocator, 1000)) |msg| {

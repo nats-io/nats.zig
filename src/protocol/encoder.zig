@@ -1,6 +1,7 @@
 //! NATS Protocol Encoder
 //!
 //! Encodes client commands into NATS wire protocol format.
+//! All string fields are validated against CRLF injection and control chars.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -13,6 +14,9 @@ const PubArgs = commands.PubArgs;
 const HPubArgs = commands.HPubArgs;
 const SubArgs = commands.SubArgs;
 const UnsubArgs = commands.UnsubArgs;
+
+const subject = @import("../pubsub/subject.zig");
+const ValidationError = subject.ValidationError;
 
 /// Fast integer-to-string conversion (avoids std.fmt overhead).
 /// Writes digits directly to buffer, returns slice of written digits.
@@ -34,11 +38,11 @@ fn writeUsizeToBuffer(buf: *[20]u8, value: usize) []const u8 {
 /// Protocol encoder for client commands.
 pub const Encoder = struct {
     /// Encoding validation errors.
+    /// Includes ValidationError for subject/reply-to/queue-group validation.
     pub const Error = error{
-        EmptySubject,
         EmptyHeaders,
         InvalidSid,
-    };
+    } || ValidationError;
 
     /// Encodes CONNECT command with JSON options.
     pub fn encodeConnect(
@@ -51,18 +55,24 @@ pub const Encoder = struct {
     }
 
     /// Encodes PUB command.
+    /// Validates subject and reply_to for CRLF injection and control chars.
     pub fn encodePub(
         writer: *Io.Writer,
         args: PubArgs,
     ) (Error || Io.Writer.Error)!void {
-        if (args.subject.len == 0) return Error.EmptySubject;
+        try subject.validatePublish(args.subject);
         assert(args.subject.len > 0);
+
         try writer.writeAll("PUB ");
         try writer.writeAll(args.subject);
 
+        // Validate and write reply_to if present and non-empty
         if (args.reply_to) |reply| {
-            try writer.writeByte(' ');
-            try writer.writeAll(reply);
+            if (reply.len > 0) {
+                try subject.validateReplyTo(reply);
+                try writer.writeByte(' ');
+                try writer.writeAll(reply);
+            }
         }
 
         var num_buf: [20]u8 = undefined;
@@ -74,20 +84,26 @@ pub const Encoder = struct {
     }
 
     /// Encodes HPUB command (publish with headers).
+    /// Validates subject and reply_to for CRLF injection and control chars.
     pub fn encodeHPub(
         writer: *Io.Writer,
         args: HPubArgs,
     ) (Error || Io.Writer.Error)!void {
-        if (args.subject.len == 0) return Error.EmptySubject;
+        try subject.validatePublish(args.subject);
         if (args.headers.len == 0) return Error.EmptyHeaders;
         assert(args.subject.len > 0);
         assert(args.headers.len > 0);
+
         try writer.writeAll("HPUB ");
         try writer.writeAll(args.subject);
 
+        // Validate and write reply_to if present and non-empty
         if (args.reply_to) |reply| {
-            try writer.writeByte(' ');
-            try writer.writeAll(reply);
+            if (reply.len > 0) {
+                try subject.validateReplyTo(reply);
+                try writer.writeByte(' ');
+                try writer.writeAll(reply);
+            }
         }
 
         const total_len = args.headers.len + args.payload.len;
@@ -103,20 +119,26 @@ pub const Encoder = struct {
     }
 
     /// Encodes SUB command.
+    /// Validates subject and queue_group for CRLF injection and control chars.
     pub fn encodeSub(
         writer: *Io.Writer,
         args: SubArgs,
     ) (Error || Io.Writer.Error)!void {
-        if (args.subject.len == 0) return Error.EmptySubject;
+        try subject.validateSubscribe(args.subject);
         if (args.sid == 0) return Error.InvalidSid;
         assert(args.subject.len > 0);
         assert(args.sid > 0);
+
         try writer.writeAll("SUB ");
         try writer.writeAll(args.subject);
 
+        // Validate and write queue_group if present and non-empty
         if (args.queue_group) |queue| {
-            try writer.writeByte(' ');
-            try writer.writeAll(queue);
+            if (queue.len > 0) {
+                try subject.validateQueueGroup(queue);
+                try writer.writeByte(' ');
+                try writer.writeAll(queue);
+            }
         }
 
         var num_buf: [20]u8 = undefined;
@@ -155,176 +177,6 @@ pub const Encoder = struct {
     }
 };
 
-test "encode PING" {
-    var buf: [64]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-    try Encoder.encodePing(&writer);
-    try std.testing.expectEqualSlices(u8, "PING\r\n", writer.buffered());
-}
-
-test "encode PONG" {
-    var buf: [64]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-    try Encoder.encodePong(&writer);
-    try std.testing.expectEqualSlices(u8, "PONG\r\n", writer.buffered());
-}
-
-test "encode PUB" {
-    var buf: [256]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-
-    try Encoder.encodePub(&writer, .{
-        .subject = "test.subject",
-        .payload = "hello",
-    });
-
-    try std.testing.expectEqualSlices(
-        u8,
-        "PUB test.subject 5\r\nhello\r\n",
-        writer.buffered(),
-    );
-}
-
-test "encode PUB with reply" {
-    var buf: [256]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-
-    try Encoder.encodePub(&writer, .{
-        .subject = "request",
-        .reply_to = "_INBOX.123",
-        .payload = "data",
-    });
-
-    try std.testing.expectEqualSlices(
-        u8,
-        "PUB request _INBOX.123 4\r\ndata\r\n",
-        writer.buffered(),
-    );
-}
-
-test "encode SUB" {
-    var buf: [256]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-
-    try Encoder.encodeSub(&writer, .{
-        .subject = "events.>",
-        .sid = 42,
-    });
-
-    try std.testing.expectEqualSlices(
-        u8,
-        "SUB events.> 42\r\n",
-        writer.buffered(),
-    );
-}
-
-test "encode SUB with queue" {
-    var buf: [256]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-
-    try Encoder.encodeSub(&writer, .{
-        .subject = "orders.*",
-        .queue_group = "workers",
-        .sid = 1,
-    });
-
-    try std.testing.expectEqualSlices(
-        u8,
-        "SUB orders.* workers 1\r\n",
-        writer.buffered(),
-    );
-}
-
-test "encode UNSUB" {
-    var buf: [256]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-
-    try Encoder.encodeUnsub(&writer, .{ .sid = 5 });
-
-    try std.testing.expectEqualSlices(u8, "UNSUB 5\r\n", writer.buffered());
-}
-
-test "encode UNSUB with max" {
-    var buf: [256]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-
-    try Encoder.encodeUnsub(&writer, .{ .sid = 5, .max_msgs = 10 });
-
-    try std.testing.expectEqualSlices(u8, "UNSUB 5 10\r\n", writer.buffered());
-}
-
-test "encode CONNECT" {
-    var buf: [1024]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-
-    try Encoder.encodeConnect(&writer, .{
-        .verbose = false,
-        .name = "test-client",
-    });
-
-    const written = writer.buffered();
-    try std.testing.expect(std.mem.startsWith(u8, written, "CONNECT {"));
-    try std.testing.expect(std.mem.endsWith(u8, written, "}\r\n"));
-    try std.testing.expect(
-        std.mem.indexOf(u8, written, "\"name\":\"test-client\"") != null,
-    );
-}
-
-test "encodePub empty subject rejected" {
-    var buf: [256]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-    const result = Encoder.encodePub(&writer, .{
-        .subject = "",
-        .payload = "hello",
-    });
-    try std.testing.expectError(Encoder.Error.EmptySubject, result);
-}
-
-test "encodeHPub empty subject rejected" {
-    var buf: [256]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-    const result = Encoder.encodeHPub(&writer, .{
-        .subject = "",
-        .headers = "NATS/1.0\r\n\r\n",
-        .payload = "hello",
-    });
-    try std.testing.expectError(Encoder.Error.EmptySubject, result);
-}
-
-test "encodeHPub empty headers rejected" {
-    var buf: [256]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-    const result = Encoder.encodeHPub(&writer, .{
-        .subject = "test",
-        .headers = "",
-        .payload = "hello",
-    });
-    try std.testing.expectError(Encoder.Error.EmptyHeaders, result);
-}
-
-test "encodeSub empty subject rejected" {
-    var buf: [256]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-    const result = Encoder.encodeSub(&writer, .{
-        .subject = "",
-        .sid = 1,
-    });
-    try std.testing.expectError(Encoder.Error.EmptySubject, result);
-}
-
-test "encodeSub invalid SID rejected" {
-    var buf: [256]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-    const result = Encoder.encodeSub(&writer, .{
-        .subject = "test",
-        .sid = 0,
-    });
-    try std.testing.expectError(Encoder.Error.InvalidSid, result);
-}
-
-test "encodeUnsub invalid SID rejected" {
-    var buf: [256]u8 = undefined;
-    var writer = Io.Writer.fixed(&buf);
-    const result = Encoder.encodeUnsub(&writer, .{ .sid = 0 });
-    try std.testing.expectError(Encoder.Error.InvalidSid, result);
+test {
+    _ = @import("encoder_test.zig");
 }

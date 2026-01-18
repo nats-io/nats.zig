@@ -28,16 +28,24 @@ const subscription_mod = @import("pubsub/subscription.zig");
 const memory = @import("memory.zig");
 const SidMap = memory.SidMap;
 const TieredSlab = memory.TieredSlab;
-const SlabAllocator = memory.SlabAllocator;
+const SpscQueue = @import("sync/spsc_queue.zig").SpscQueue;
+const dbg = @import("dbg.zig");
+const defaults = @import("defaults.zig");
 
 const Client = @This();
+
+/// Gets current time in nanoseconds (Zig 0.16 compatible).
+fn getNowNs() error{TimerUnavailable}!u64 {
+    const instant = std.time.Instant.now() catch return error.TimerUnavailable;
+    const secs: u64 = @intCast(instant.timestamp.sec);
+    const nsecs: u64 = @intCast(instant.timestamp.nsec);
+    return secs * std.time.ns_per_s + nsecs;
+}
 
 /// Message received on a subscription.
 ///
 /// All slices point into a single backing buffer for cache efficiency.
 /// Messages are owned and must be freed via deinit(allocator).
-///
-/// For zero-copy access without allocation overhead, see MessageRef.
 pub const Message = struct {
     subject: []const u8,
     sid: u64,
@@ -63,72 +71,13 @@ pub const Message = struct {
     }
 };
 
-/// Zero-copy message reference (slices borrow from read buffer).
-///
-/// MUST be consumed before next read operation or converted via toOwned().
-/// Slices become invalid after any call that reads from the socket.
-/// Use for high-throughput scenarios where allocation overhead matters.
-pub const MessageRef = struct {
-    subject: []const u8,
-    sid: u64,
-    reply_to: ?[]const u8,
-    data: []const u8,
-    headers: ?[]const u8,
-
-    /// Converts borrowed MessageRef to owned Message by copying all data.
-    /// Use when you need to keep the message beyond the current iteration.
-    pub fn toOwned(self: MessageRef, allocator: Allocator) !Message {
-        const reply_len = if (self.reply_to) |rt| rt.len else 0;
-        const hdr_len = if (self.headers) |h| h.len else 0;
-        const total = self.subject.len + self.data.len + reply_len + hdr_len;
-
-        assert(self.subject.len > 0);
-        assert(self.sid > 0);
-
-        const buf = try allocator.alloc(u8, total);
-        errdefer allocator.free(buf);
-
-        var offset: usize = 0;
-
-        @memcpy(buf[offset..][0..self.subject.len], self.subject);
-        const subj = buf[offset..][0..self.subject.len];
-        offset += self.subject.len;
-
-        @memcpy(buf[offset..][0..self.data.len], self.data);
-        const payload = buf[offset..][0..self.data.len];
-        offset += self.data.len;
-
-        const reply = if (self.reply_to) |rt| blk: {
-            @memcpy(buf[offset..][0..rt.len], rt);
-            const slice = buf[offset..][0..rt.len];
-            offset += rt.len;
-            break :blk slice;
-        } else null;
-
-        const hdrs = if (self.headers) |h| blk: {
-            @memcpy(buf[offset..][0..h.len], h);
-            break :blk buf[offset..][0..h.len];
-        } else null;
-
-        return Message{
-            .subject = subj,
-            .sid = self.sid,
-            .reply_to = reply,
-            .data = payload,
-            .headers = hdrs,
-            .owned = true,
-            .backing_buf = buf,
-        };
-    }
-};
-
 /// Client connection options.
 ///
 /// All fields have sensible defaults. Common customizations:
 /// - name: Client identifier visible in server logs
 /// - user/pass or auth_token: Authentication credentials
 /// - buffer_size: Increase for large messages (default 256KB)
-/// - async_queue_size: Messages buffered per subscription (default 256)
+/// - sub_queue_size: Messages buffered per subscription (default 1024)
 pub const Options = struct {
     /// Client name for identification.
     name: ?[]const u8 = null,
@@ -143,9 +92,9 @@ pub const Options = struct {
     /// Auth token.
     auth_token: ?[]const u8 = null,
     /// Connection timeout in nanoseconds.
-    connect_timeout_ns: u64 = 5_000_000_000,
-    /// Per-subscription queue size.
-    async_queue_size: u16 = 256,
+    connect_timeout_ns: u64 = defaults.Connection.timeout_ns,
+    /// Per-subscription queue size (messages buffered before dropping).
+    sub_queue_size: u32 = defaults.Memory.queue_size.value(),
     /// Echo messages back to sender (default true).
     echo: bool = true,
     /// Enable message headers support.
@@ -161,14 +110,36 @@ pub const Options = struct {
     /// Read/write buffer size. Must be >= max message size you expect.
     /// Default 256KB is suitable for most workloads. Increase if sending
     /// large messages (NATS max_payload default is 1MB).
-    buffer_size: usize = 256 * 1024,
+    buffer_size: usize = defaults.Connection.buffer_size,
     /// TCP receive buffer size hint. Larger values allow more messages to
     /// queue in the kernel before backpressure kicks in. Default 256KB.
     /// Set to 0 to use system default.
-    tcp_rcvbuf: u32 = 256 * 1024,
-    /// Use slab allocator for message buffers (~26 MB pre-allocated).
-    /// Provides O(1) alloc/free for high-throughput scenarios.
-    use_slab_allocator: bool = false,
+    tcp_rcvbuf: u32 = defaults.Connection.tcp_rcvbuf,
+
+    // === RECONNECTION OPTIONS ===
+
+    /// Enable automatic reconnection on disconnect.
+    reconnect: bool = defaults.Reconnection.enabled,
+    /// Maximum reconnection attempts (0 = infinite).
+    max_reconnect_attempts: u32 = defaults.Reconnection.max_attempts,
+    /// Initial wait between reconnect attempts (ms).
+    reconnect_wait_ms: u32 = defaults.Reconnection.wait_ms,
+    /// Maximum wait with exponential backoff (ms).
+    reconnect_wait_max_ms: u32 = defaults.Reconnection.wait_max_ms,
+    /// Jitter percentage for backoff (0-50).
+    reconnect_jitter_percent: u8 = defaults.Reconnection.jitter_percent,
+    /// Discover servers from INFO connect_urls.
+    discover_servers: bool = defaults.Reconnection.discover_servers,
+    /// Size of pending buffer for publishes during reconnect.
+    /// Set to 0 to disable buffering (publish returns error during reconnect).
+    pending_buffer_size: usize = defaults.Reconnection.pending_buffer_size,
+
+    // === PING/PONG HEALTH CHECK ===
+
+    /// Interval between client-initiated PINGs (ms). 0 = disable.
+    ping_interval_ms: u32 = defaults.Connection.ping_interval_ms,
+    /// Max outstanding PINGs before connection is considered stale.
+    max_pings_outstanding: u8 = defaults.Connection.max_pings_outstanding,
 };
 
 /// Connection statistics (Go client parity).
@@ -185,12 +156,40 @@ pub const Stats = struct {
     reconnects: u32 = 0,
 };
 
+/// Subscription backup for restoration after reconnect.
+/// Stores essential subscription state with inline buffers (no allocation).
+pub const SubBackup = struct {
+    sid: u64 = 0,
+    subject_buf: [256]u8 = undefined,
+    subject_len: u8 = 0,
+    queue_group_buf: [64]u8 = undefined,
+    queue_group_len: u8 = 0,
+
+    /// Get subject as slice.
+    pub fn getSubject(self: *const SubBackup) []const u8 {
+        return self.subject_buf[0..self.subject_len];
+    }
+
+    /// Get queue group as optional slice.
+    pub fn getQueueGroup(self: *const SubBackup) ?[]const u8 {
+        if (self.queue_group_len == 0) return null;
+        return self.queue_group_buf[0..self.queue_group_len];
+    }
+};
+
 /// Result of drain operation for visibility into cleanup quality.
 pub const DrainResult = struct {
     /// Count of UNSUB commands that failed to encode.
     unsub_failures: u16 = 0,
     /// True if final flush failed (data may not have reached server).
     flush_failed: bool = false,
+};
+
+/// Subscribe command data (used by restoreSubscriptions).
+pub const SubscribeCmd = struct {
+    sid: u64,
+    subject: []const u8,
+    queue_group: ?[]const u8,
 };
 
 /// Parse result for NATS URL.
@@ -201,12 +200,12 @@ pub const ParsedUrl = struct {
     pass: ?[]const u8,
 };
 
-/// Fixed subscription limits.
-pub const MAX_SUBSCRIPTIONS: u16 = 256;
-pub const SIDMAP_CAPACITY: u32 = 512;
+/// Fixed subscription limits (from defaults.zig).
+pub const MAX_SUBSCRIPTIONS: u16 = defaults.Client.max_subscriptions;
+pub const SIDMAP_CAPACITY: u32 = defaults.Client.sidmap_capacity;
 
-/// Default queue size per subscription.
-pub const DEFAULT_QUEUE_SIZE: u16 = 256;
+/// Default queue size per subscription (messages buffered before dropping).
+pub const DEFAULT_QUEUE_SIZE: u32 = defaults.Memory.queue_size.value();
 
 // Compile-time validation of capacity constraints
 comptime {
@@ -288,7 +287,6 @@ free_slots: [MAX_SUBSCRIPTIONS]u16,
 parser: Parser = .{},
 server_info: ?ServerInfo = null,
 state: State = .connecting,
-pending_toss: usize = 0,
 sub_ptrs: [MAX_SUBSCRIPTIONS]?*Sub = [_]?*Sub{null} ** MAX_SUBSCRIPTIONS,
 free_count: u16 = MAX_SUBSCRIPTIONS,
 next_sid: u64 = 1,
@@ -305,9 +303,32 @@ cached_sub: ?*Sub = null,
 // Cached max_payload from server_info (avoids optional unwrap in hot path)
 max_payload: usize = 1024 * 1024,
 
-// Slab allocator for message buffers (optional, ~26 MB pre-allocated)
-tiered_slab: ?TieredSlab = null,
-slab_allocator: ?SlabAllocator = null,
+// Slab allocator for message buffers (~26 MB pre-allocated)
+tiered_slab: TieredSlab = undefined,
+
+// Reconnection state
+server_pool: connection.ServerPool = undefined,
+server_pool_initialized: bool = false,
+sub_backups: [MAX_SUBSCRIPTIONS]SubBackup = [_]SubBackup{.{}} ** MAX_SUBSCRIPTIONS,
+sub_backup_count: u16 = 0,
+reconnect_attempt: u32 = 0,
+original_url: [256]u8 = undefined,
+original_url_len: u8 = 0,
+
+// Pending buffer for publishes during reconnect
+pending_buffer: ?[]u8 = null,
+pending_buffer_pos: usize = 0,
+pending_buffer_capacity: usize = 0,
+
+// PING/PONG health check state
+last_ping_sent_ns: u64 = 0,
+last_pong_received_ns: u64 = 0,
+pings_outstanding: u8 = 0,
+
+// Background I/O task infrastructure
+write_mutex: Io.Mutex = .init,
+/// Future for background I/O task (for proper cancellation in deinit).
+io_task_future: ?Io.Future(void) = null,
 
 /// Connects to a NATS server.
 ///
@@ -331,7 +352,6 @@ pub fn connect(
     client.server_info = null;
     client.parser = .{};
     client.state = .connecting;
-    client.pending_toss = 0;
     client.sub_ptrs = [_]?*Sub{null} ** MAX_SUBSCRIPTIONS;
     client.free_count = MAX_SUBSCRIPTIONS;
     client.next_sid = 1;
@@ -339,19 +359,37 @@ pub fn connect(
     client.stats = .{};
     client.cached_sub = null;
     client.max_payload = 1024 * 1024;
-    client.tiered_slab = null;
-    client.slab_allocator = null;
 
-    // Initialize slab allocator if requested
-    if (opts.use_slab_allocator) {
-        client.tiered_slab = TieredSlab.init(allocator) catch null;
-        if (client.tiered_slab != null) {
-            client.slab_allocator = .{ .slab = &client.tiered_slab.? };
-        }
-    }
+    // Initialize reconnection state
+    client.server_pool = undefined;
+    client.server_pool_initialized = false;
+    client.sub_backups = [_]SubBackup{.{}} ** MAX_SUBSCRIPTIONS;
+    client.sub_backup_count = 0;
+    client.reconnect_attempt = 0;
+    client.original_url = undefined;
+    client.original_url_len = 0;
+
+    // Initialize pending buffer state
+    client.pending_buffer = null;
+    client.pending_buffer_pos = 0;
+    client.pending_buffer_capacity = 0;
+
+    // Initialize health check state
+    client.last_ping_sent_ns = 0;
+    client.last_pong_received_ns = 0;
+    client.pings_outstanding = 0;
+
+    // Initialize background I/O task infrastructure
+    client.write_mutex = .init;
+
+    // Initialize slab allocator (critical for O(1) message allocation)
+    client.tiered_slab = TieredSlab.init(allocator) catch |err| {
+        allocator.destroy(client);
+        return err;
+    };
 
     errdefer {
-        if (client.tiered_slab) |*ts| ts.deinit();
+        client.tiered_slab.deinit();
         if (client.server_info) |*info| {
             info.deinit(allocator);
         }
@@ -429,6 +467,47 @@ pub fn connect(
 
     // Perform handshake
     try client.handshake(allocator, opts, parsed);
+
+    // Store original URL for reconnection
+    const url_len: u8 = @intCast(@min(url.len, 256));
+    @memcpy(client.original_url[0..url_len], url[0..url_len]);
+    client.original_url_len = url_len;
+
+    // Initialize server pool with primary URL
+    client.server_pool = connection.ServerPool.init(url) catch {
+        return error.InvalidUrl;
+    };
+    client.server_pool_initialized = true;
+
+    // Add discovered servers from INFO connect_urls
+    if (opts.discover_servers) {
+        if (client.server_info) |info| {
+            client.server_pool.addFromConnectUrls(
+                &info.connect_urls,
+                &info.connect_urls_lens,
+                info.connect_urls_count,
+            );
+        }
+    }
+
+    // Initialize pending buffer for reconnect
+    try client.initPendingBuffer(allocator);
+
+    // Initialize health check timestamps
+    const now_ns = getNowNs() catch 0;
+    client.last_ping_sent_ns = now_ns;
+    client.last_pong_received_ns = now_ns;
+
+    // Start background I/O task for message routing and keepalive
+    // MUST use concurrent() for true parallelism - async() may not schedule
+    // the task until the main thread yields, causing deadlock on flush()
+    client.io_task_future = io.concurrent(
+        connection.io_task.run,
+        .{ client, allocator },
+    ) catch blk: {
+        dbg.print("WARNING: concurrent() failed, using async()", .{});
+        break :blk io.async(connection.io_task.run, .{ client, allocator });
+    };
 
     assert(client.next_sid >= 1);
     assert(client.state == .connected);
@@ -635,7 +714,7 @@ pub fn subscribeQueue(
     errdefer if (owned_queue) |qg| allocator.free(qg);
 
     // Allocate Io.Queue buffer
-    const queue_size = self.options.async_queue_size;
+    const queue_size = self.options.sub_queue_size;
     const queue_buf = try allocator.alloc(Message, queue_size);
     errdefer allocator.free(queue_buf);
 
@@ -695,6 +774,7 @@ pub fn subscribeQueue(
 ///     payload: Message data
 ///
 /// Messages are buffered. Call flush() to ensure delivery.
+/// Thread-safe: protected by write_mutex for concurrent publish.
 pub fn publish(
     self: *Client,
     subject: []const u8,
@@ -706,6 +786,10 @@ pub fn publish(
     }
     try pubsub.validatePublish(subject);
     if (payload.len > self.max_payload) return error.PayloadTooLarge;
+
+    // Acquire write mutex for thread-safe buffer access
+    try self.write_mutex.lock(self.io);
+    defer self.write_mutex.unlock(self.io);
 
     const writer = &self.writer.interface;
     protocol.Encoder.encodePub(writer, .{
@@ -721,6 +805,7 @@ pub fn publish(
 }
 
 /// Publishes with a reply-to subject.
+/// Thread-safe: protected by write_mutex for concurrent publish.
 pub fn publishRequest(
     self: *Client,
     subject: []const u8,
@@ -736,6 +821,10 @@ pub fn publishRequest(
     try pubsub.validateReplyTo(reply_to);
     if (payload.len > self.max_payload) return error.PayloadTooLarge;
 
+    // Acquire write mutex for thread-safe buffer access
+    try self.write_mutex.lock(self.io);
+    defer self.write_mutex.unlock(self.io);
+
     const writer = &self.writer.interface;
     protocol.Encoder.encodePub(writer, .{
         .subject = subject,
@@ -750,14 +839,19 @@ pub fn publishRequest(
 }
 
 /// Flushes pending writes to the server.
-pub fn flush(self: *Client) !void {
+///
+/// Sends all buffered data to the TCP socket. This is a simple TCP flush
+/// without PING/PONG verification - for maximum performance.
+pub fn flush(self: *Client, allocator: Allocator) !void {
+    _ = allocator;
     if (!self.state.canSend()) {
         return error.NotConnected;
     }
-    const writer = &self.writer.interface;
-    writer.flush() catch {
-        return error.WriteFailed;
-    };
+
+    // Flush write buffer under mutex to sync with other writers
+    try self.write_mutex.lock(self.io);
+    defer self.write_mutex.unlock(self.io);
+    self.writer.interface.flush() catch return error.WriteFailed;
 }
 
 /// Sends a request and waits for a reply with timeout.
@@ -792,14 +886,14 @@ pub fn request(
     defer sub.deinit(allocator);
 
     // Flush subscription registration before publishing
-    try self.flush();
+    try self.flush(allocator);
 
     // Brief delay to ensure server has registered subscription
     self.io.sleep(.fromMilliseconds(5), .awake) catch {};
 
     // Publish request with reply-to
     try self.publishRequest(subject, inbox, payload);
-    try self.flush();
+    try self.flush(allocator);
 
     // Wait for reply using io.select()
     var response_future = self.io.async(
@@ -895,7 +989,7 @@ pub fn drain(self: *Client, alloc: Allocator) !DrainResult {
             // Drain remaining messages from queue (in-memory, no socket I/O)
             var drain_buf: [1]Message = undefined;
             while (true) {
-                const n = sub.queue.get(self.io, &drain_buf, 0) catch break;
+                const n = sub.queue.popBatch(&drain_buf);
                 if (n == 0) break;
                 drain_buf[0].deinit(alloc);
             }
@@ -953,18 +1047,6 @@ pub fn isTcpNoDelaySet(self: *const Client) bool {
 /// Returns true if TCP receive buffer was successfully set.
 pub fn isTcpRcvBufSet(self: *const Client) bool {
     return self.tcp_rcvbuf_set;
-}
-
-/// Returns allocator for message buffers.
-///
-/// When use_slab_allocator is enabled, returns the slab allocator which
-/// provides O(1) alloc/free. Otherwise returns the provided fallback.
-/// Use this for Message.deinit() to ensure correct allocator is used.
-pub fn getMsgAllocator(self: *Client, fallback: Allocator) Allocator {
-    if (self.slab_allocator) |*sa| {
-        return sa.allocator();
-    }
-    return fallback;
 }
 
 /// Get subscription by SID.
@@ -1039,7 +1121,7 @@ pub fn destroySubscription(
     // Drain remaining messages
     var drain_buf: [1]Message = undefined;
     while (true) {
-        const n = sub.queue.get(self.io, &drain_buf, 0) catch break;
+        const n = sub.queue.popBatch(&drain_buf);
         if (n == 0) break;
         drain_buf[0].deinit(allocator);
     }
@@ -1049,355 +1131,6 @@ pub fn destroySubscription(
     allocator.free(sub.subject);
     if (sub.queue_group) |qg| allocator.free(qg);
     allocator.destroy(sub);
-}
-
-/// Toss bytes consumed from previous read.
-/// Discards pending bytes from read buffer. Inlined for hot path performance.
-pub inline fn tossPending(self: *Client) void {
-    if (self.pending_toss == 0) return;
-    assert(self.pending_toss <= self.read_buffer.len);
-    self.reader.interface.toss(self.pending_toss);
-    self.pending_toss = 0;
-}
-
-/// Routes a single message from socket to subscription queues.
-pub fn routeNextMessage(
-    self: *Client,
-    allocator: Allocator,
-) !bool {
-    // Check state instead of asserting - allows graceful disconnect handling
-    if (!self.state.canReceive()) {
-        return error.NotConnected;
-    }
-
-    self.tossPending();
-
-    // Use slab allocator for message buffers if available
-    const msg_allocator = self.getMsgAllocator(allocator);
-
-    const reader = &self.reader.interface;
-
-    while (true) {
-        var data = reader.buffered();
-
-        if (data.len == 0) {
-            reader.fillMore() catch |err| {
-                switch (err) {
-                    error.EndOfStream, error.ReadFailed => {
-                        self.state = .disconnected;
-                        return false;
-                    },
-                }
-            };
-
-            data = reader.buffered();
-            if (data.len == 0) return false;
-        }
-
-        var consumed: usize = 0;
-        const cmd = self.parser.parse(allocator, data, &consumed) catch {
-            return error.ProtocolError;
-        };
-
-        if (cmd) |c| {
-            switch (c) {
-                .ping => {
-                    reader.toss(consumed);
-                    try self.sendPong();
-                },
-                .pong, .ok => {
-                    reader.toss(consumed);
-                },
-                .err => {
-                    reader.toss(consumed);
-                },
-                .info => |new_info| {
-                    reader.toss(consumed);
-                    if (self.server_info) |*info| {
-                        info.deinit(allocator);
-                    }
-                    self.server_info = new_info;
-                    self.max_payload = new_info.max_payload;
-                },
-                .msg => |args| {
-                    // Validate payload size against cached max_payload
-                    if (args.payload_len > self.max_payload) {
-                        reader.toss(consumed);
-                        continue;
-                    }
-
-                    self.stats.msgs_in += 1;
-                    self.stats.bytes_in += args.payload.len;
-
-                    if (self.getSubscriptionBySid(args.sid)) |sub| {
-                        // Allocate-and-queue delivery
-                        const reply_len = if (args.reply_to) |rt|
-                            rt.len
-                        else
-                            0;
-                        const total = args.subject.len +
-                            args.payload.len + reply_len;
-
-                        const buf = msg_allocator.alloc(u8, total) catch {
-                            reader.toss(consumed);
-                            sub.alloc_failed_msgs += 1;
-                            continue;
-                        };
-
-                        @memcpy(buf[0..args.subject.len], args.subject);
-                        const subj = buf[0..args.subject.len];
-
-                        const data_start = args.subject.len;
-                        const data_end = data_start + args.payload.len;
-                        @memcpy(buf[data_start..data_end], args.payload);
-                        const payload = buf[data_start..data_end];
-
-                        const reply = if (args.reply_to) |rt| blk: {
-                            @memcpy(buf[data_end..], rt);
-                            break :blk buf[data_end..][0..rt.len];
-                        } else null;
-
-                        const msg = Message{
-                            .subject = subj,
-                            .sid = args.sid,
-                            .reply_to = reply,
-                            .data = payload,
-                            .headers = null,
-                            .owned = true,
-                            .backing_buf = buf,
-                        };
-
-                        sub.pushMessage(msg) catch {
-                            msg_allocator.free(buf);
-                            sub.dropped_msgs += 1;
-                        };
-
-                        sub.received_msgs += 1;
-                    }
-                    reader.toss(consumed);
-                    return true;
-                },
-                .hmsg => |args| {
-                    // Validate total content size against cached max_payload
-                    if (args.total_len > self.max_payload) {
-                        reader.toss(consumed);
-                        continue;
-                    }
-
-                    self.stats.msgs_in += 1;
-                    self.stats.bytes_in +=
-                        args.payload.len + args.headers.len;
-
-                    if (self.getSubscriptionBySid(args.sid)) |sub| {
-                        // Allocate-and-queue delivery
-                        const reply_len = if (args.reply_to) |rt|
-                            rt.len
-                        else
-                            0;
-                        const hdrs_len = args.headers.len;
-                        const total = args.subject.len +
-                            args.payload.len + reply_len + hdrs_len;
-
-                        const buf = msg_allocator.alloc(u8, total) catch {
-                            reader.toss(consumed);
-                            sub.alloc_failed_msgs += 1;
-                            continue;
-                        };
-
-                        var offset: usize = 0;
-
-                        @memcpy(
-                            buf[offset..][0..args.subject.len],
-                            args.subject,
-                        );
-                        const subj = buf[offset..][0..args.subject.len];
-                        offset += args.subject.len;
-
-                        @memcpy(
-                            buf[offset..][0..args.payload.len],
-                            args.payload,
-                        );
-                        const payload = buf[offset..][0..args.payload.len];
-                        offset += args.payload.len;
-
-                        const reply = if (args.reply_to) |rt| blk: {
-                            @memcpy(buf[offset..][0..rt.len], rt);
-                            const slice = buf[offset..][0..rt.len];
-                            offset += rt.len;
-                            break :blk slice;
-                        } else null;
-
-                        const hdrs = if (hdrs_len > 0) blk: {
-                            @memcpy(
-                                buf[offset..][0..hdrs_len],
-                                args.headers,
-                            );
-                            break :blk buf[offset..][0..hdrs_len];
-                        } else null;
-
-                        const msg = Message{
-                            .subject = subj,
-                            .sid = args.sid,
-                            .reply_to = reply,
-                            .data = payload,
-                            .headers = hdrs,
-                            .owned = true,
-                            .backing_buf = buf,
-                        };
-
-                        sub.pushMessage(msg) catch {
-                            msg_allocator.free(buf);
-                            sub.dropped_msgs += 1;
-                        };
-
-                        sub.received_msgs += 1;
-                    }
-                    reader.toss(consumed);
-                    return true;
-                },
-            }
-        } else {
-            // Check if buffer is full before trying to read more.
-            // Full buffer with unparseable data = protocol error.
-            const buffered_len = reader.buffered().len;
-            if (buffered_len >= self.read_buffer.len) {
-                return error.ProtocolError;
-            }
-            reader.fillMore() catch |err| {
-                switch (err) {
-                    error.EndOfStream, error.ReadFailed => {
-                        self.state = .disconnected;
-                        return false;
-                    },
-                }
-            };
-        }
-    }
-}
-
-/// Routes next message as zero-copy MessageRef (no allocation).
-/// Returns null if no message available or connection closed.
-/// Caller must consume MessageRef before next call (slices borrow buffer).
-pub fn routeNextMessageRef(self: *Client, allocator: Allocator) !?MessageRef {
-    if (!self.state.canReceive()) {
-        return error.NotConnected;
-    }
-
-    self.tossPending();
-
-    const reader = &self.reader.interface;
-
-    while (true) {
-        var data = reader.buffered();
-
-        if (data.len == 0) {
-            reader.fillMore() catch |err| {
-                switch (err) {
-                    error.EndOfStream, error.ReadFailed => {
-                        self.state = .disconnected;
-                        return null;
-                    },
-                }
-            };
-
-            data = reader.buffered();
-            if (data.len == 0) return null;
-        }
-
-        var consumed: usize = 0;
-        const cmd = self.parser.parse(
-            allocator,
-            data,
-            &consumed,
-        ) catch {
-            return error.ProtocolError;
-        };
-
-        if (cmd) |c| {
-            switch (c) {
-                .ping => {
-                    self.pending_toss = consumed;
-                    try self.sendPong();
-                    self.tossPending();
-                },
-                .pong, .ok => {
-                    self.pending_toss = consumed;
-                    self.tossPending();
-                },
-                .err => {
-                    self.pending_toss = consumed;
-                    self.tossPending();
-                },
-                .info => |new_info| {
-                    self.pending_toss = consumed;
-                    if (self.server_info) |*info| {
-                        info.deinit(allocator);
-                    }
-                    self.server_info = new_info;
-                    self.max_payload = new_info.max_payload;
-                    self.tossPending();
-                },
-                .msg => |args| {
-                    // Validate payload size against cached max_payload
-                    if (args.payload_len > self.max_payload) {
-                        reader.toss(consumed);
-                        continue;
-                    }
-
-                    self.stats.msgs_in += 1;
-                    self.stats.bytes_in += args.payload.len;
-                    self.pending_toss = consumed;
-
-                    assert(args.subject.len > 0);
-                    assert(args.sid > 0);
-
-                    return MessageRef{
-                        .subject = args.subject,
-                        .sid = args.sid,
-                        .reply_to = args.reply_to,
-                        .data = args.payload,
-                        .headers = null,
-                    };
-                },
-                .hmsg => |args| {
-                    // Validate total content size against cached max_payload
-                    if (args.total_len > self.max_payload) {
-                        reader.toss(consumed);
-                        continue;
-                    }
-
-                    self.stats.msgs_in += 1;
-                    self.stats.bytes_in +=
-                        args.payload.len + args.headers.len;
-                    self.pending_toss = consumed;
-
-                    assert(args.subject.len > 0);
-                    assert(args.sid > 0);
-
-                    return MessageRef{
-                        .subject = args.subject,
-                        .sid = args.sid,
-                        .reply_to = args.reply_to,
-                        .data = args.payload,
-                        .headers = args.headers,
-                    };
-                },
-            }
-        } else {
-            const buffered_len = reader.buffered().len;
-            if (buffered_len >= self.read_buffer.len) {
-                return error.ProtocolError;
-            }
-            reader.fillMore() catch |err| {
-                switch (err) {
-                    error.EndOfStream, error.ReadFailed => {
-                        self.state = .disconnected;
-                        return null;
-                    },
-                }
-            };
-        }
-    }
 }
 
 /// Sends PONG response.
@@ -1410,6 +1143,59 @@ fn sendPong(self: *Client) !void {
     writer.flush() catch {
         return error.WriteFailed;
     };
+}
+
+/// Sends PING for health check.
+fn sendPing(self: *Client) !void {
+    assert(self.state == .connected);
+    const writer = &self.writer.interface;
+    writer.writeAll("PING\r\n") catch {
+        return error.WriteFailed;
+    };
+    writer.flush() catch {
+        return error.WriteFailed;
+    };
+    self.last_ping_sent_ns = getNowNs() catch self.last_ping_sent_ns;
+    self.pings_outstanding += 1;
+    dbg.pingPong("PING_SENT", self.pings_outstanding);
+}
+
+/// Handles PONG response from server.
+fn handlePong(self: *Client) void {
+    self.last_pong_received_ns = getNowNs() catch self.last_pong_received_ns;
+    self.pings_outstanding = 0;
+    dbg.pingPong("PONG_RECEIVED", 0);
+}
+
+/// Checks connection health and triggers reconnect if stale.
+/// Called from io_task loop.
+fn maybeHealthCheck(self: *Client, allocator: Allocator) !void {
+    _ = allocator;
+
+    if (self.options.ping_interval_ms == 0) return;
+    if (self.state != .connected) return;
+
+    const now_ns = getNowNs() catch return;
+    const interval_ns: u64 = @as(u64, self.options.ping_interval_ms) * 1_000_000;
+
+    // Check if too many PINGs outstanding (connection stale)
+    if (self.pings_outstanding >= self.options.max_pings_outstanding) {
+        dbg.print(
+            "Connection stale: {d} PINGs outstanding",
+            .{self.pings_outstanding},
+        );
+        // TODO: Trigger reconnect when Phase 6 is implemented
+        // For now, just reset state to prevent repeated warnings
+        self.pings_outstanding = 0;
+        return;
+    }
+
+    // Check if it's time to send PING
+    if (now_ns - self.last_ping_sent_ns >= interval_ns) {
+        self.sendPing() catch |err| {
+            dbg.print("Failed to send PING: {s}", .{@errorName(err)});
+        };
+    }
 }
 
 /// Closes all subscription queues (wakes waiters with error).
@@ -1426,42 +1212,371 @@ pub fn closeAllQueues(self: *Client) void {
 /// Arguments:
 ///     alloc: Allocator used at connect() time
 ///
-/// Drains if connected, closes all subscription queues, frees buffers.
+/// Closes connection, stops io_task, frees buffers.
+/// Uses close-then-cancel pattern for reliable shutdown.
 /// Safe to call multiple times.
 pub fn deinit(self: *Client, alloc: Allocator) void {
     assert(self.next_sid >= 1);
 
-    // Drain if connected (drain handles its own mutex)
-    if (self.state == .connected) {
-        _ = self.drain(alloc) catch {};
-    } else {
-        // Not connected - need mutex for queue/sub cleanup
-        self.read_mutex.lockUncancelable(self.io);
-        self.closeAllQueues();
-        for (self.sub_ptrs) |maybe_sub| {
-            if (maybe_sub) |sub| {
-                sub.client_destroyed = true;
-            }
-        }
-        self.read_mutex.unlock(self.io);
+    // CLOSE-THEN-CANCEL PATTERN (see zig-0.16 skill ASYNC.md)
+    // Signal-based cancel has race condition with network I/O.
+    // Close socket first to unblock fillMore(), then cancel completes quickly.
+
+    // 1. Save state and mark as closed (prevents reconnection attempts)
+    const was_open = self.state != .closed;
+    self.state = .closed;
+
+    // 2. Close stream if still open - unblocks any pending fillMore()
+    //    io_task will see error, check state == .closed, exit cleanly
+    if (was_open) {
+        self.stream.close(self.io);
     }
 
-    // Close connection if not already closed by drain
-    if (self.state != .closed) {
-        self.stream.close(self.io);
-        self.state = .closed;
+    // 3. Now cancel completes quickly (io_task already exiting or exited)
+    if (self.io_task_future) |*future| {
+        _ = future.cancel(self.io);
+        self.io_task_future = null;
+    }
+
+    // 4. Cleanup subscriptions (io_task is now gone)
+    self.closeAllQueues();
+    for (self.sub_ptrs) |maybe_sub| {
+        if (maybe_sub) |sub| {
+            sub.client_destroyed = true;
+        }
     }
 
     // Free client resources
     if (self.server_info) |*info| {
         info.deinit(alloc);
     }
-    if (self.tiered_slab) |*ts| {
-        ts.deinit();
-    }
+    self.tiered_slab.deinit();
+
+    // Free pending buffer
+    self.deinitPendingBuffer(alloc);
+
     alloc.free(self.read_buffer);
     alloc.free(self.write_buffer);
     alloc.destroy(self);
+}
+
+// =============================================================================
+// Reconnection Support
+// =============================================================================
+
+/// Backup all active subscriptions for restoration after reconnect.
+/// Stores SID, subject, and queue_group in inline buffers (no allocation).
+pub fn backupSubscriptions(self: *Client) void {
+    self.sub_backup_count = 0;
+
+    for (self.sub_ptrs) |maybe_sub| {
+        if (maybe_sub) |sub| {
+            if (sub.state != .active) continue;
+            if (self.sub_backup_count >= MAX_SUBSCRIPTIONS) break;
+
+            var backup = &self.sub_backups[self.sub_backup_count];
+            backup.sid = sub.sid;
+
+            // Copy subject
+            const subj_len: u8 = @intCast(@min(sub.subject.len, 256));
+            @memcpy(backup.subject_buf[0..subj_len], sub.subject[0..subj_len]);
+            backup.subject_len = subj_len;
+
+            // Copy queue_group if present
+            if (sub.queue_group) |qg| {
+                const qg_len: u8 = @intCast(@min(qg.len, 64));
+                @memcpy(backup.queue_group_buf[0..qg_len], qg[0..qg_len]);
+                backup.queue_group_len = qg_len;
+            } else {
+                backup.queue_group_len = 0;
+            }
+
+            self.sub_backup_count += 1;
+        }
+    }
+}
+
+/// Restore subscriptions after reconnect (preserves original SIDs).
+/// Re-sends SUB commands to server with the same SIDs so existing
+/// subscription pointers continue to work.
+pub fn restoreSubscriptions(self: *Client) !void {
+    if (self.sub_backup_count == 0) return;
+
+    const writer = &self.writer.interface;
+
+    for (self.sub_backups[0..self.sub_backup_count]) |*backup| {
+        if (backup.sid == 0) continue;
+
+        const subject = backup.getSubject();
+        const queue_group = backup.getQueueGroup();
+
+        // Send SUB with SAME SID
+        protocol.Encoder.encodeSub(writer, .{
+            .subject = subject,
+            .queue_group = queue_group,
+            .sid = backup.sid,
+        }) catch return error.RestoreSubscriptionsFailed;
+    }
+
+    writer.flush() catch return error.RestoreSubscriptionsFailed;
+}
+
+/// Initialize pending buffer for publishes during reconnect.
+fn initPendingBuffer(self: *Client, allocator: Allocator) !void {
+    if (self.options.pending_buffer_size == 0) return;
+    if (self.pending_buffer != null) return; // Already initialized
+
+    self.pending_buffer = try allocator.alloc(u8, self.options.pending_buffer_size);
+    self.pending_buffer_capacity = self.options.pending_buffer_size;
+    self.pending_buffer_pos = 0;
+}
+
+/// Free pending buffer.
+fn deinitPendingBuffer(self: *Client, allocator: Allocator) void {
+    if (self.pending_buffer) |buf| {
+        allocator.free(buf);
+        self.pending_buffer = null;
+        self.pending_buffer_pos = 0;
+        self.pending_buffer_capacity = 0;
+    }
+}
+
+/// Buffer a publish during reconnect.
+/// Returns error if buffer is full or not initialized.
+fn bufferPendingPublish(
+    self: *Client,
+    subject: []const u8,
+    payload: []const u8,
+) !void {
+    const buf = self.pending_buffer orelse return error.NotConnected;
+    const remaining = self.pending_buffer_capacity - self.pending_buffer_pos;
+
+    // Estimate encoded size: "PUB subject len\r\npayload\r\n"
+    // PUB + space + subject + space + len(max 10 digits) + \r\n + payload + \r\n
+    const encoded_size = 4 + subject.len + 1 + 10 + 2 + payload.len + 2;
+    if (encoded_size > remaining) {
+        return error.PendingBufferFull;
+    }
+
+    // Encode directly into pending buffer using fixed buffer stream
+    var fbs = std.io.fixedBufferStream(buf[self.pending_buffer_pos..]);
+    const writer = fbs.writer();
+
+    // Write PUB command manually (simpler than using Encoder)
+    try writer.writeAll("PUB ");
+    try writer.writeAll(subject);
+    try writer.writeByte(' ');
+
+    // Write payload length
+    var len_buf: [10]u8 = undefined;
+    const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{payload.len}) catch {
+        return error.EncodingFailed;
+    };
+    try writer.writeAll(len_str);
+    try writer.writeAll("\r\n");
+    try writer.writeAll(payload);
+    try writer.writeAll("\r\n");
+
+    self.pending_buffer_pos += fbs.pos;
+}
+
+/// Flush pending buffer after reconnect.
+fn flushPendingBuffer(self: *Client) !void {
+    if (self.pending_buffer_pos == 0) return;
+
+    const buf = self.pending_buffer orelse return;
+    self.writer.interface.writeAll(buf[0..self.pending_buffer_pos]) catch {
+        return error.WriteFailed;
+    };
+    self.writer.interface.flush() catch return error.WriteFailed;
+    self.pending_buffer_pos = 0;
+    dbg.pendingBuffer("FLUSHED", 0, self.pending_buffer_capacity);
+}
+
+/// Cleanup client state for reconnection.
+/// Closes old stream but preserves subscriptions and pending buffer.
+fn cleanupForReconnect(self: *Client) void {
+    dbg.stateChange("connected", "reconnecting");
+
+    // Close old stream
+    self.stream.close(self.io);
+
+    // Clear server info (will be refreshed on reconnect)
+    // Note: Don't free - we'll get new info from server
+}
+
+/// Attempt connection to a single server.
+/// Returns true on success, error on failure.
+pub fn tryConnect(self: *Client, allocator: Allocator, server: *connection.server_pool.Server) !void {
+    const host = server.getHost();
+    const port = server.port;
+
+    dbg.reconnectEvent("CONNECTING", self.reconnect_attempt + 1, server.getUrl());
+
+    // Parse address
+    const address = net.IpAddress.parse(host, port) catch {
+        return error.InvalidAddress;
+    };
+
+    // Connect
+    self.stream = net.IpAddress.connect(address, self.io, .{
+        .mode = .stream,
+        .protocol = .tcp,
+    }) catch {
+        return error.ConnectionFailed;
+    };
+    errdefer self.stream.close(self.io);
+
+    // Set TCP_NODELAY
+    const enable: u32 = 1;
+    std.posix.setsockopt(
+        self.stream.socket.handle,
+        std.posix.IPPROTO.TCP,
+        std.posix.TCP.NODELAY,
+        std.mem.asBytes(&enable),
+    ) catch {};
+
+    // Reinitialize reader/writer with existing buffers
+    self.reader = self.stream.reader(self.io, self.read_buffer);
+    self.writer = self.stream.writer(self.io, self.write_buffer);
+
+    // Parse URL to get auth info
+    const parsed = parseUrl(server.getUrl()) catch ParsedUrl{
+        .host = host,
+        .port = port,
+        .user = null,
+        .pass = null,
+    };
+
+    // Perform handshake
+    try self.handshake(allocator, self.options, parsed);
+
+    // Initialize health check timestamps
+    const now_ns = getNowNs() catch 0;
+    self.last_ping_sent_ns = now_ns;
+    self.last_pong_received_ns = now_ns;
+    self.pings_outstanding = 0;
+
+    dbg.reconnectEvent("CONNECTED", self.reconnect_attempt + 1, server.getUrl());
+}
+
+/// Wait with exponential backoff + jitter.
+pub fn waitBackoff(self: *Client) void {
+    const opts = self.options;
+    const attempt = @min(self.reconnect_attempt, 10);
+
+    const base: u64 = opts.reconnect_wait_ms;
+    const exp_wait = base << @as(u6, @intCast(attempt));
+    const capped = @min(exp_wait, opts.reconnect_wait_max_ms);
+
+    // Add jitter using Io.random()
+    var rand_buf: [4]u8 = undefined;
+    self.io.random(&rand_buf);
+    const rand = std.mem.readInt(u32, &rand_buf, .little);
+    const jitter_range = capped * opts.reconnect_jitter_percent / 100;
+
+    // Calculate final wait with jitter
+    var final_wait = capped;
+    if (jitter_range > 0) {
+        const jitter_val = rand % (jitter_range * 2 + 1);
+        if (jitter_val > jitter_range) {
+            final_wait = capped + (jitter_val - jitter_range);
+        } else {
+            final_wait = capped -| jitter_range + jitter_val;
+        }
+    }
+    final_wait = @max(100, final_wait);
+
+    dbg.print("Backoff wait: {d}ms (attempt {d})", .{ final_wait, attempt + 1 });
+    self.io.sleep(.fromMilliseconds(final_wait), .awake) catch {};
+}
+
+/// Attempt reconnection with exponential backoff.
+/// Can be called automatically (from io_task) or manually by user.
+pub fn reconnect(self: *Client, allocator: Allocator) !void {
+    // Validate state
+    if (self.state != .disconnected and self.state != .reconnecting) {
+        if (self.state == .connected) return; // Already connected
+        return error.InvalidState;
+    }
+
+    if (!self.options.reconnect) {
+        return error.ReconnectDisabled;
+    }
+
+    // Initialize server pool if not already done
+    if (!self.server_pool_initialized) {
+        const url = self.original_url[0..self.original_url_len];
+        self.server_pool = connection.ServerPool.init(url) catch {
+            return error.InvalidUrl;
+        };
+        self.server_pool_initialized = true;
+    }
+
+    // Backup subscriptions before cleanup
+    self.backupSubscriptions();
+    self.cleanupForReconnect();
+    self.state = .reconnecting;
+
+    const max = self.options.max_reconnect_attempts;
+    const infinite = max == 0;
+
+    dbg.print(
+        "Starting reconnect (max_attempts={d}, infinite={any})",
+        .{ max, infinite },
+    );
+
+    while (infinite or self.reconnect_attempt < max) {
+        // Get next server
+        const now_ns = getNowNs() catch 0;
+        const server = self.server_pool.nextServer(now_ns) orelse {
+            dbg.print("All servers on cooldown, waiting...", .{});
+            self.waitBackoff();
+            continue;
+        };
+
+        dbg.reconnectEvent(
+            "ATTEMPT",
+            self.reconnect_attempt + 1,
+            server.getUrl(),
+        );
+
+        // Attempt connection
+        if (self.tryConnect(allocator, server)) {
+            // SUCCESS!
+            self.restoreSubscriptions() catch |err| {
+                dbg.print("Failed to restore subscriptions: {s}", .{@errorName(err)});
+            };
+            self.flushPendingBuffer() catch |err| {
+                dbg.print("Failed to flush pending buffer: {s}", .{@errorName(err)});
+            };
+
+            self.state = .connected;
+            self.reconnect_attempt = 0;
+            self.stats.reconnects += 1;
+            self.server_pool.resetFailures();
+
+            dbg.stateChange("reconnecting", "connected");
+            dbg.print(
+                "Reconnect successful (total reconnects: {d})",
+                .{self.stats.reconnects},
+            );
+            return;
+        } else |err| {
+            dbg.reconnectEvent("FAILED", self.reconnect_attempt + 1, server.getUrl());
+            dbg.print("Connection attempt failed: {s}", .{@errorName(err)});
+
+            self.server_pool.markCurrentFailed();
+            self.reconnect_attempt += 1;
+            self.waitBackoff();
+        }
+    }
+
+    // All attempts exhausted
+    self.state = .closed;
+    dbg.stateChange("reconnecting", "closed");
+    dbg.print("Reconnect failed: max attempts ({d}) exhausted", .{max});
+    return error.ReconnectFailed;
 }
 
 /// Subscription state.
@@ -1479,14 +1594,14 @@ pub const SubscriptionState = enum {
 /// - Io.Mutex ensures only one reader at a time
 ///
 /// Use next() for blocking receive, nextWithTimeout() for bounded waits,
-/// nextRef() for zero-copy access, or tryNext() for non-blocking poll.
+/// or tryNext() for non-blocking poll.
 pub const Subscription = struct {
     client: *Client,
     sid: u64,
     subject: []const u8,
     queue_group: ?[]const u8,
     queue_buf: []Message,
-    queue: Io.Queue(Message),
+    queue: SpscQueue(Message),
     state: SubscriptionState,
     received_msgs: u64,
     dropped_msgs: u64 = 0,
@@ -1498,213 +1613,101 @@ pub const Subscription = struct {
     /// Arguments:
     ///     allocator: Allocator for owned message copy
     ///     io: Io interface for blocking operations
+    /// Blocks until a message arrives on this subscription.
     ///
-    /// Uses inline routing: acquires read mutex, reads from socket, routes
-    /// other subscriptions' messages to their queues. Returns owned Message
-    /// that caller must free via msg.deinit(client.getMsgAllocator(allocator)).
+    /// The background io_task handles all socket I/O and routes messages
+    /// to subscription queues. This function just blocks on the queue.
+    /// Lock-free spin-wait for message.
+    ///
+    /// Returns owned Message that caller must free via msg.deinit(allocator).
     pub fn next(self: *Subscription, allocator: Allocator, io: Io) !Message {
+        _ = allocator;
+        _ = io;
         assert(self.state == .active or self.state == .draining);
 
-        // Use slab allocator for message buffers if available
-        const msg_allocator = self.client.getMsgAllocator(allocator);
-
-        // 1. Check our queue first (routed by other subscriptions)
-        if (self.tryNext()) |msg| {
-            return msg;
-        }
-
-        // 2. Acquire read mutex (only one reader at a time)
-        try self.client.read_mutex.lock(io);
-        defer self.client.read_mutex.unlock(io);
-
-        // 3. Double-check queue (might have been filled while waiting)
-        if (self.tryNext()) |msg| {
-            return msg;
-        }
-
-        // 4. Read and route until we get our message
+        // Spin-wait on lock-free queue
         while (true) {
-            const ref = try self.client.routeNextMessageRef(allocator) orelse {
+            if (self.queue.pop()) |msg| return msg;
+            if (self.state != .active and self.state != .draining) {
                 return error.Closed;
-            };
-
-            if (ref.sid == self.sid) {
-                // Convert to owned and return
-                const owned = try ref.toOwned(msg_allocator);
-                self.client.tossPending();
-                self.received_msgs += 1;
-                return owned;
             }
-
-            // Route to other subscription's queue
-            if (self.client.getSubscriptionBySid(ref.sid)) |other_sub| {
-                const owned = ref.toOwned(msg_allocator) catch {
-                    self.client.tossPending();
-                    continue;
-                };
-                other_sub.pushMessage(owned) catch {
-                    // Queue full - message dropped
-                    other_sub.dropped_msgs += 1;
-                    owned.deinit(msg_allocator);
-                };
-                other_sub.received_msgs += 1;
-            }
-            self.client.tossPending();
+            std.atomic.spinLoopHint();
         }
     }
 
     /// Try receive without blocking. Returns null if no message available.
     pub fn tryNext(self: *Subscription) ?Message {
-        var buf: [1]Message = undefined;
-        const n = self.queue.get(self.client.io, &buf, 0) catch return null;
-        if (n == 0) return null;
-        return buf[0];
-    }
-
-    /// Returns next message as zero-copy MessageRef.
-    /// Slices borrow from read buffer - valid until next nextRef() call.
-    /// Uses inline routing with mutex protection.
-    /// Use with: while (try sub.nextRef(allocator, io)) |msg| { ... }
-    pub fn nextRef(
-        self: *Subscription,
-        allocator: Allocator,
-        io: Io,
-    ) !?MessageRef {
-        assert(self.state == .active or self.state == .draining);
-
-        // Use slab allocator for message buffers if available
-        const msg_allocator = self.client.getMsgAllocator(allocator);
-
-        // Acquire read mutex (only one reader at a time)
-        try self.client.read_mutex.lock(io);
-        defer self.client.read_mutex.unlock(io);
-
-        while (true) {
-            const ref = try self.client.routeNextMessageRef(allocator) orelse {
-                return null;
-            };
-
-            if (ref.sid == self.sid) {
-                // Zero-copy return! Slices borrow from read buffer.
-                self.received_msgs += 1;
-                return ref;
-            }
-
-            // Message for different subscription - route to its queue
-            if (self.client.getSubscriptionBySid(ref.sid)) |other_sub| {
-                const owned = ref.toOwned(msg_allocator) catch {
-                    self.client.tossPending();
-                    continue;
-                };
-                other_sub.pushMessage(owned) catch {
-                    owned.deinit(msg_allocator);
-                };
-                other_sub.received_msgs += 1;
-            }
-            self.client.tossPending();
-        }
-    }
-
-    /// Returns next message as zero-copy MessageRef, blocking up to timeout_ms.
-    /// Returns null on timeout or connection close.
-    pub fn nextRefBlock(
-        self: *Subscription,
-        allocator: Allocator,
-        io: Io,
-        timeout_ms: u32,
-    ) !?MessageRef {
-        assert(self.state == .active or self.state == .draining);
-        assert(timeout_ms > 0);
-
-        const start = std.time.Instant.now() catch {
-            return try self.nextRef(allocator, io);
-        };
-        const timeout_ns = @as(u64, timeout_ms) * 1_000_000;
-
-        while (true) {
-            // Check for message BEFORE time check - avoids syscall when
-            // messages are buffered
-            if (try self.nextRef(allocator, io)) |ref| {
-                return ref;
-            }
-
-            // Only check timeout when no message available
-            const now = std.time.Instant.now() catch return null;
-            if (now.since(start) >= timeout_ns) {
-                return null;
-            }
-        }
+        return self.queue.pop();
     }
 
     /// Batch receive - waits for at least 1, returns up to buf.len.
     pub fn nextBatch(self: *Subscription, io: Io, buf: []Message) !usize {
+        _ = io;
         assert(self.state == .active or self.state == .draining);
         assert(buf.len > 0);
-        return self.queue.get(io, buf, 1);
+
+        // Spin-wait for at least one message
+        while (true) {
+            const count = self.queue.popBatch(buf);
+            if (count > 0) return count;
+            if (self.state != .active and self.state != .draining) {
+                return error.Closed;
+            }
+            std.atomic.spinLoopHint();
+        }
     }
 
     /// Non-blocking batch receive.
     pub fn tryNextBatch(self: *Subscription, buf: []Message) usize {
-        return self.queue.get(self.client.io, buf, 0) catch 0;
+        return self.queue.popBatch(buf);
     }
 
-    /// Receive with timeout using io.select().
+    /// Receive with timeout using timer-based polling.
     ///
     /// Arguments:
-    ///     allocator: Allocator for message
+    ///     allocator: Allocator for message (unused, kept for API compat)
     ///     timeout_ms: Maximum wait time in milliseconds
     ///
-    /// Returns null on timeout. Uses async select for efficient waiting.
+    /// Returns null on timeout. Uses lock-free polling with timer.
     pub fn nextWithTimeout(
         self: *Subscription,
         allocator: Allocator,
         timeout_ms: u32,
     ) !?Message {
+        _ = allocator;
         assert(self.state == .active or self.state == .draining);
         assert(timeout_ms > 0);
 
-        const io = self.client.io;
-
-        var response_future = io.async(next, .{ self, allocator, io });
-        var timeout_future = io.async(
-            Client.sleepForRequest,
-            .{ io, timeout_ms },
-        );
-
-        const select_result = io.select(.{
-            .response = &response_future,
-            .timeout = &timeout_future,
-        }) catch |err| {
-            timeout_future.cancel(io);
-            if (response_future.cancel(io)) |msg| {
-                msg.deinit(allocator);
-            } else |_| {}
-            if (err == error.Canceled) return null;
-            return err;
+        // Use Instant for timeout check - but only check every N iterations
+        // to avoid syscall overhead
+        const start = std.time.Instant.now() catch {
+            // Fallback to spin-only if timer unavailable
+            return self.queue.pop();
         };
+        const timeout_ns: u64 = @as(u64, timeout_ms) * std.time.ns_per_ms;
+        var check_counter: u32 = 0;
 
-        switch (select_result) {
-            .response => |msg_result| {
-                timeout_future.cancel(io);
-                return msg_result catch |err| {
-                    if (err == error.Canceled or err == error.Closed) {
-                        return null;
-                    }
-                    return err;
-                };
-            },
-            .timeout => {
-                if (response_future.cancel(io)) |msg| {
-                    msg.deinit(allocator);
-                } else |_| {}
-                return null;
-            },
+        while (true) {
+            if (self.queue.pop()) |msg| return msg;
+            if (self.state != .active and self.state != .draining) {
+                return error.Closed;
+            }
+
+            // Check timeout only every 10000 iterations to reduce syscalls
+            check_counter +%= 1;
+            if (check_counter >= 10000) {
+                check_counter = 0;
+                const now = std.time.Instant.now() catch return null;
+                if (now.since(start) >= timeout_ns) return null;
+            }
+
+            std.atomic.spinLoopHint();
         }
     }
 
     /// Returns queue capacity.
-    pub fn capacity(self: *Subscription) usize {
-        return self.queue.capacity();
+    pub fn getCapacity(self: *const Subscription) usize {
+        return self.queue.capacity;
     }
 
     /// Returns count of messages dropped due to queue overflow.
@@ -1719,21 +1722,17 @@ pub const Subscription = struct {
         return self.alloc_failed_msgs;
     }
 
-    /// Push message to queue (called by reader task).
+    /// Push message to queue (called by io_task).
+    /// Lock-free, never blocks.
     pub fn pushMessage(self: *Subscription, msg: Message) !void {
-        const n = self.queue.put(
-            self.client.io,
-            &.{msg},
-            0,
-        ) catch return error.QueueFull;
-        if (n == 0) return error.QueueFull;
+        if (!self.queue.push(msg)) return error.QueueFull;
     }
 
     /// Unsubscribe from the subject.
     pub fn unsubscribe(self: *Subscription) !void {
         if (self.state == .unsubscribed) return;
         self.state = .unsubscribed;
-        self.queue.close(self.client.io);
+        // Note: SpscQueue doesn't need close signaling
         try self.client.unsubscribeSid(self.sid);
     }
 
@@ -1806,9 +1805,8 @@ test "options defaults" {
     try std.testing.expect(!opts.pedantic);
     try std.testing.expect(opts.user == null);
     try std.testing.expect(opts.pass == null);
-    const expected_timeout: u64 = 5_000_000_000;
-    try std.testing.expectEqual(expected_timeout, opts.connect_timeout_ns);
-    try std.testing.expectEqual(DEFAULT_QUEUE_SIZE, opts.async_queue_size);
+    try std.testing.expectEqual(defaults.Connection.timeout_ns, opts.connect_timeout_ns);
+    try std.testing.expectEqual(defaults.Memory.queue_size.value(), opts.sub_queue_size);
 }
 
 test "stats defaults" {

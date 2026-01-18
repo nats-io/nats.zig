@@ -1,7 +1,6 @@
-//! NATS Zero-Copy Subscriber Benchmark
+//! NATS Subscriber Benchmark
 //!
-//! Measures subscribe throughput using Client with zero-copy nextRef().
-//! No allocations in hot path - slices point directly to read buffer.
+//! Measures subscribe throughput using Client.
 //! Usage: bench-sub <subject> [--msgs=N]
 
 const std = @import("std");
@@ -16,6 +15,7 @@ const BenchConfig = struct {
     msgs: u64 = 100_000,
     url: []const u8 = "nats://127.0.0.1:4222",
     progress: bool = true,
+    queue_size: u32 = 8192,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -54,6 +54,11 @@ fn parseArgs(init: std.process.Init) !BenchConfig {
             config.progress = true;
         } else if (std.mem.eql(u8, arg, "--no-progress")) {
             config.progress = false;
+        } else if (std.mem.startsWith(u8, arg, "--queue-size=")) {
+            const val = arg[13..];
+            config.queue_size = std.fmt.parseInt(u32, val, 10) catch {
+                return error.InvalidArgument;
+            };
         } else if (!std.mem.startsWith(u8, arg, "--")) {
             config.subject = arg;
         }
@@ -70,18 +75,27 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     assert(config.subject.len > 0);
     assert(config.msgs > 0);
 
+    // Queue size: explicit, or default: 65536)
+    const queue_size: u32 = if (config.queue_size > 0)
+        config.queue_size
+    else blk: {
+        const auto_size = config.msgs;
+        const clamped = @min(auto_size, std.math.maxInt(u32));
+        break :blk clamped;
+    };
+
     if (bench.TimeOfDay.now()) |tod| {
         var buf: [8]u8 = undefined;
         std.debug.print(
-            "{s} Starting zero-copy subscriber benchmark " ++
-                "[msgs={d}, subject={s}]\n",
-            .{ tod.format(&buf), config.msgs, config.subject },
+            "{s} Starting subscriber benchmark " ++
+                "[msgs={d}, queue={d}, subject={s}]\n",
+            .{ tod.format(&buf), config.msgs, queue_size, config.subject },
         );
     } else {
         std.debug.print(
-            "Starting zero-copy subscriber benchmark " ++
-                "[msgs={d}, subject={s}]\n",
-            .{ config.msgs, config.subject },
+            "Starting subscriber benchmark " ++
+                "[msgs={d}, queue={d}, subject={s}]\n",
+            .{ config.msgs, queue_size, config.subject },
         );
     }
 
@@ -93,6 +107,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     // Connect using Client (inline routing for zero-copy)
     const client = nats.Client.connect(allocator, io, config.url, .{
         .name = "bench-sub",
+        .sub_queue_size = queue_size,
     }) catch |err| {
         std.debug.print("Failed to connect: {}\n", .{err});
         return err;
@@ -107,7 +122,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     defer sub.deinit(allocator);
 
     // Flush subscription registration
-    client.flush() catch |err| {
+    client.flush(allocator) catch |err| {
         std.debug.print("Flush failed: {}\n", .{err});
         return err;
     };
@@ -125,18 +140,52 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     const progress_interval = config.msgs / 10;
     var last_progress: u64 = 0;
 
-    // Zero-copy receive loop using nextRefBlock()
-    // No allocations for our messages - slices point directly to read buffer
-    // Allocator needed for routing to other subscriptions (if any)
-    // 5 second timeout to wait for publisher to start
+    // Receive loop - use fast batch receive with timeout fallback
+    var batch_buf: [64]nats.Client.Message = undefined;
     while (msg_count < config.msgs) {
-        const ref = sub.nextRefBlock(allocator, io, 5000) catch |err| {
+        // Fast path: try batch receive (non-blocking)
+        const batch_count = sub.tryNextBatch(&batch_buf);
+        if (batch_count > 0) {
+            // Start timer on first message
+            if (timer == null) {
+                timer = std.time.Timer.start() catch {
+                    std.debug.print("Timer unavailable\n", .{});
+                    return error.TimerUnavailable;
+                };
+                std.debug.print("First message received, timing...\n", .{});
+            }
+
+            for (batch_buf[0..batch_count]) |*msg| {
+                msg_count += 1;
+                total_bytes += msg.data.len;
+                msg.deinit(allocator);
+            }
+
+            // Progress every 10%
+            if (config.progress and progress_interval > 0) {
+                const current_progress = msg_count / progress_interval;
+                if (current_progress > last_progress) {
+                    last_progress = current_progress;
+                    const pct = msg_count * 100 / config.msgs;
+                    std.debug.print("  {d}% ({d}/{d})\n", .{
+                        pct,
+                        msg_count,
+                        config.msgs,
+                    });
+                }
+            }
+            continue;
+        }
+
+        // Slow path: wait with timeout when queue empty
+        const msg = sub.nextWithTimeout(allocator, 5000) catch |err| {
             std.debug.print("Receive error: {}\n", .{err});
             return err;
         } orelse {
             std.debug.print("Timeout or connection closed\n", .{});
             break;
         };
+        defer msg.deinit(allocator);
 
         // Start timer on first message
         if (timer == null) {
@@ -147,9 +196,8 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
             std.debug.print("First message received, timing...\n", .{});
         }
 
-        // Count message - no deinit needed, buffer managed by client
         msg_count += 1;
-        total_bytes += ref.data.len;
+        total_bytes += msg.data.len;
 
         // Progress every 10%
         if (config.progress and progress_interval > 0) {
@@ -174,7 +222,17 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
             .msg_count = msg_count,
             .total_bytes = total_bytes,
         };
-        stats.print("zero-copy subscriber");
+        stats.print("subscriber");
+
+        // Report dropped messages if any
+        const dropped = sub.getDroppedCount();
+        const alloc_failed = sub.getAllocFailedCount();
+        if (dropped > 0 or alloc_failed > 0) {
+            std.debug.print(
+                "  WARNING: dropped={d}, alloc_failed={d}\n",
+                .{ dropped, alloc_failed },
+            );
+        }
     } else {
         std.debug.print("No messages received\n", .{});
     }
@@ -184,20 +242,21 @@ fn printUsage() void {
     std.debug.print(
         \\Usage: bench-sub <subject> [options]
         \\
-        \\Zero-copy subscriber benchmark using nextRef().
-        \\No allocations in hot path - maximum throughput.
+        \\Subscriber benchmark for measuring throughput.
         \\
         \\Arguments:
         \\  <subject>       Subject to subscribe to (required)
         \\
         \\Options:
         \\  --msgs=N        Number of messages to receive (default: 100000)
+        \\  --queue-size=N  Subscription queue size (default: auto = 1.5x msgs)
         \\  --url=URL       NATS server URL (default: nats://127.0.0.1:4222)
         \\  --[no-]progress Show/hide progress output (default: show)
         \\
         \\Examples:
         \\  bench-sub test.subject
         \\  bench-sub test.subject --msgs=1000000
+        \\  bench-sub test.subject --msgs=100000 --queue-size=200000
         \\
     , .{});
 }

@@ -21,7 +21,7 @@ pub fn testAsyncDoubleUnsubscribe(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("async_double_unsub", false, "connect failed");
         return;
     };
@@ -54,7 +54,7 @@ pub fn testAsyncMessageOrdering(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("async_message_ordering", false, "connect failed");
         return;
     };
@@ -66,7 +66,7 @@ pub fn testAsyncMessageOrdering(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Publish numbered messages
     var pub_buf: [5][8]u8 = undefined;
@@ -74,7 +74,7 @@ pub fn testAsyncMessageOrdering(allocator: std.mem.Allocator) void {
         const payload = std.fmt.bufPrint(&pub_buf[i], "msg-{d}", .{i}) catch "e";
         client.publish("async.order", payload) catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Receive and verify order
     var in_order = true;
@@ -112,7 +112,7 @@ pub fn testAsyncBinaryPayload(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("async_binary_payload", false, "connect failed");
         return;
     };
@@ -131,7 +131,7 @@ pub fn testAsyncBinaryPayload(allocator: std.mem.Allocator) void {
         reportResult("async_binary_payload", false, "pub failed");
         return;
     };
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
@@ -153,7 +153,7 @@ pub fn testLongSubjectName(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("long_subject_name", false, "connect failed");
         return;
     };
@@ -169,13 +169,13 @@ pub fn testLongSubjectName(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     client.publish(long_subject, "test") catch {
         reportResult("long_subject_name", false, "publish failed");
         return;
     };
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);
@@ -192,7 +192,7 @@ pub fn testSubjectWithNumbersHyphens(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("subject_nums_hyphens", false, "connect failed");
         return;
     };
@@ -207,13 +207,13 @@ pub fn testSubjectWithNumbersHyphens(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     client.publish(subject, "test") catch {
         reportResult("subject_nums_hyphens", false, "publish failed");
         return;
     };
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);
@@ -230,22 +230,22 @@ pub fn testDoubleFlush(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("double_flush", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
     // Double flush should be safe
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("double_flush", false, "flush1 failed");
         return;
     };
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("double_flush", false, "flush2 failed");
         return;
     };
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("double_flush", false, "flush3 failed");
         return;
     };
@@ -260,7 +260,7 @@ pub fn testDoubleDrain(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("double_drain", false, "connect failed");
         return;
     };
@@ -290,7 +290,7 @@ pub fn testRapidSubUnsubCycles(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("rapid_sub_unsub", false, "connect failed");
         return;
     };
@@ -351,7 +351,7 @@ pub fn testEmptySubjectFails(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("empty_subject_fails", false, "connect failed");
         return;
     };
@@ -377,7 +377,7 @@ pub fn testSubjectWithSpacesFails(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("subject_spaces_fails", false, "connect failed");
         return;
     };
@@ -399,7 +399,7 @@ pub fn testInterleavedPubSub(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("interleaved_pubsub", false, "connect failed");
         return;
     };
@@ -410,7 +410,7 @@ pub fn testInterleavedPubSub(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Interleave: publish, receive, publish, receive...
     var received: u32 = 0;
@@ -422,7 +422,7 @@ pub fn testInterleavedPubSub(allocator: std.mem.Allocator) void {
             reportResult("interleaved_pubsub", false, "publish failed");
             return;
         };
-        client.flush() catch {};
+        client.flush(allocator) catch {};
 
         const msg = sub.nextWithTimeout(allocator, 500) catch {
             continue;
@@ -453,7 +453,7 @@ pub fn testReceiveOnlyAfterSubscribe(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("receive_after_sub", false, "connect failed");
         return;
     };
@@ -461,7 +461,7 @@ pub fn testReceiveOnlyAfterSubscribe(allocator: std.mem.Allocator) void {
 
     // Publish BEFORE subscribing
     client.publish("timing.test", "before") catch {};
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Small delay
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
@@ -472,11 +472,11 @@ pub fn testReceiveOnlyAfterSubscribe(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Publish AFTER subscribing
     client.publish("timing.test", "after") catch {};
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Should only receive the "after" message
     const msg = sub.nextWithTimeout(allocator, 500) catch {
@@ -503,7 +503,7 @@ pub fn testDataIntegrityPattern(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("data_integrity", false, "connect failed");
         return;
     };
@@ -514,7 +514,7 @@ pub fn testDataIntegrityPattern(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Create pattern payload
     var payload: [256]u8 = undefined;
@@ -526,7 +526,7 @@ pub fn testDataIntegrityPattern(allocator: std.mem.Allocator) void {
         reportResult("data_integrity", false, "publish failed");
         return;
     };
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     const msg = sub.nextWithTimeout(allocator, 500) catch {
         reportResult("data_integrity", false, "receive failed");
@@ -558,7 +558,7 @@ pub fn testCompletePubSubRoundTrip(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("complete_roundtrip", false, "connect failed");
         return;
     };
@@ -576,7 +576,7 @@ pub fn testCompletePubSubRoundTrip(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Get stats before
     const before = client.getStats();
@@ -587,7 +587,7 @@ pub fn testCompletePubSubRoundTrip(allocator: std.mem.Allocator) void {
         reportResult("complete_roundtrip", false, "publish failed");
         return;
     };
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Receive
     const msg = sub.nextWithTimeout(allocator, 1000) catch {
@@ -642,7 +642,8 @@ pub fn testQueueExactCapacity(allocator: std.mem.Allocator) void {
     // Queue size exactly matches message count
     const QUEUE_SIZE = 64;
     const client = nats.Client.connect(allocator, io.io(), url, .{
-        .async_queue_size = QUEUE_SIZE,
+        .sub_queue_size = QUEUE_SIZE,
+        .reconnect = false,
     }) catch {
         reportResult("queue_exact_cap", false, "connect failed");
         return;
@@ -654,7 +655,7 @@ pub fn testQueueExactCapacity(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("queue_exact_cap", false, "flush failed");
         return;
     };
@@ -666,7 +667,7 @@ pub fn testQueueExactCapacity(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("queue_exact_cap", false, "pub flush failed");
         return;
     };
@@ -705,7 +706,8 @@ pub fn testQueueOverflow(allocator: std.mem.Allocator) void {
     const PUBLISH_COUNT = 64;
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
-        .async_queue_size = QUEUE_SIZE,
+        .sub_queue_size = QUEUE_SIZE,
+        .reconnect = false,
     }) catch {
         reportResult("queue_overflow", false, "connect failed");
         return;
@@ -726,7 +728,7 @@ pub fn testQueueOverflow(allocator: std.mem.Allocator) void {
     };
     defer sub_target.deinit(allocator);
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("queue_overflow", false, "flush failed");
         return;
     };
@@ -744,7 +746,7 @@ pub fn testQueueOverflow(allocator: std.mem.Allocator) void {
         reportResult("queue_overflow", false, "publish reader failed");
         return;
     };
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("queue_overflow", false, "pub flush failed");
         return;
     };
@@ -788,7 +790,7 @@ pub fn testMaxSubscriptions(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("max_subscriptions", false, "connect failed");
         return;
     };
@@ -836,7 +838,7 @@ pub fn testLargePayloadHandling(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("large_payload_handling", false, "connect failed");
         return;
     };
@@ -848,7 +850,7 @@ pub fn testLargePayloadHandling(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("large_payload_handling", false, "flush failed");
         return;
     };
@@ -866,7 +868,7 @@ pub fn testLargePayloadHandling(allocator: std.mem.Allocator) void {
         reportResult("large_payload_handling", false, "publish failed");
         return;
     };
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("large_payload_handling", false, "pub flush failed");
         return;
     };
@@ -898,7 +900,7 @@ pub fn testSubjectLengthBoundary(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("subject_len_boundary", false, "connect failed");
         return;
     };
@@ -922,7 +924,7 @@ pub fn testSubjectLengthBoundary(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("subject_len_boundary", false, "flush failed");
         return;
     };
@@ -931,7 +933,7 @@ pub fn testSubjectLengthBoundary(allocator: std.mem.Allocator) void {
         reportResult("subject_len_boundary", false, "publish failed");
         return;
     };
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);
@@ -950,7 +952,7 @@ pub fn testZeroLengthPayload(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("zero_len_payload", false, "connect failed");
         return;
     };
@@ -962,14 +964,14 @@ pub fn testZeroLengthPayload(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Empty payload
     client.publish("zero.payload", "") catch {
         reportResult("zero_len_payload", false, "publish failed");
         return;
     };
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         defer m.deinit(allocator);
@@ -992,7 +994,7 @@ pub fn testSingleBytePayload(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("single_byte_payload", false, "connect failed");
         return;
     };
@@ -1004,14 +1006,14 @@ pub fn testSingleBytePayload(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Single byte
     client.publish("single.byte", "X") catch {
         reportResult("single_byte_payload", false, "publish failed");
         return;
     };
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         defer m.deinit(allocator);
@@ -1034,7 +1036,7 @@ pub fn testSidBoundaries(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("sid_boundaries", false, "connect failed");
         return;
     };
@@ -1080,7 +1082,7 @@ pub fn testMaxSubscriptionsExceeded(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("max_subs_exceeded", false, "connect failed");
         return;
     };

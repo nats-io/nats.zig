@@ -6,7 +6,6 @@ Production-grade NATS client for Zig 0.16+.
 
 - Native Zig implementation (zero C dependencies)
 - Built on `std.Io` for async-aware I/O
-- Zero-copy message handling with `MessageRef`
 - Inline routing architecture for optimal performance
 - Full cancellation support via `std.Io.Future`
 - Go-inspired API design
@@ -51,7 +50,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Setup Io
-    var threaded: std.Io.Threaded = .init(allocator, .{});
+    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer threaded.deinit();
     const io = threaded.io();
 
@@ -63,9 +62,9 @@ pub fn main() !void {
     const sub = try client.subscribe(allocator, "greet.*");
     defer sub.deinit(allocator);
 
-    // Publish
+    // Publish (buffered)
     try client.publish("greet.hello", "Hello, NATS!");
-    try client.flush();
+    try client.flush(allocator);  // Send to network
 
     // Receive message
     const msg = try sub.next(allocator, io);
@@ -74,161 +73,253 @@ pub fn main() !void {
 }
 ```
 
-## Connection
+## API Quick Reference
 
-```zig
-const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
-    .name = "my-app",              // Client name for identification
-    .user = "user",                // Username for auth
-    .pass = "pass",                // Password for auth
-    .auth_token = "token",         // Auth token
-    .connect_timeout_ns = 5_000_000_000,  // 5 second timeout
-    .async_queue_size = 256,       // Per-subscription queue size
-    .buffer_size = 2 * 1024 * 1024,  // Read/write buffer (2MB)
-    .tcp_rcvbuf = 256 * 1024,      // TCP receive buffer hint
-});
-defer client.deinit(allocator);
+| Want to... | Method | Returns |
+|------------|--------|---------|
+| Publish message | `client.publish(subject, data)` | `!void` |
+| Publish with reply-to | `client.publishRequest(subject, reply_to, data)` | `!void` |
+| Flush to network | `client.flush(allocator)` | `!void` |
+| Subscribe | `client.subscribe(allocator, subject)` | `!*Sub` |
+| Queue subscribe | `client.subscribeQueue(allocator, subject, group)` | `!*Sub` |
+| Request/reply | `client.request(allocator, subject, data, timeout_ms)` | `!?Message` |
+| Receive (blocking) | `sub.next(allocator, io)` | `!Message` |
+| Receive (non-blocking) | `sub.tryNext()` | `?Message` |
+| Receive (with timeout) | `sub.nextWithTimeout(allocator, timeout_ms)` | `!?Message` |
+| Batch receive | `sub.nextBatch(io, buf)` | `!usize` |
+| Check drops | `sub.getDroppedCount()` | `u64` |
 
-// Check connection
-if (client.isConnected()) { ... }
-const info = client.getServerInfo();
-```
+---
 
 ## Publishing
 
+### Buffered Writes
+
+Messages are buffered in memory. They do NOT hit the network until you flush:
+
 ```zig
-// Simple publish
-try client.publish("subject", "payload");
+// Writes to buffer (fast, does not block on network)
+try client.publish("events.click", "button1");
+try client.publish("events.click", "button2");
+try client.publish("events.click", "button3");
 
-// Publish with reply-to
-try client.publishRequest("subject", "reply.inbox", "payload");
-
-// Flush pending writes
-try client.flush();
-
-// Ping server
-try client.ping();
+// Now send all buffered messages to server
+try client.flush(allocator);  // Blocks until server confirms receipt
 ```
+
+### Fire-and-Forget Pattern
+
+For high-throughput scenarios, batch multiple publishes before flushing:
+
+```zig
+for (events) |event| {
+    try client.publish("events", event);
+}
+try client.flush(allocator);  // Single network round-trip
+```
+
+### Publish with Reply-To
+
+For request/reply patterns where you manage the inbox:
+
+```zig
+try client.publishRequest("service.echo", "my.inbox", "ping");
+try client.flush(allocator);
+```
+
+### When Does Data Hit the Network?
+
+| Method | Network I/O |
+|--------|-------------|
+| `publish()` | No - writes to buffer |
+| `publishRequest()` | No - writes to buffer |
+| `flush()` | Yes - sends buffer + PING, waits for PONG |
+| `request()` | Yes - flushes, waits for response |
+
+---
 
 ## Subscribing
 
+### Simple Subscription
+
 ```zig
-// Simple subscription
 const sub = try client.subscribe(allocator, "events.>");
 defer sub.deinit(allocator);
 
-// Queue subscription (load balancing)
-const qsub = try client.subscribeQueue(allocator, "tasks.*", "workers");
-defer qsub.deinit(allocator);
-
-// Unsubscribe
-try sub.unsubscribe();
+// Wildcards:
+// * matches single token: "events.*" matches "events.click" but not "events.user.login"
+// > matches remainder: "events.>" matches "events.click" and "events.user.login"
 ```
+
+### Queue Groups (Load Balancing)
+
+Distribute messages across workers - only one subscriber in the group receives each message:
+
+```zig
+// Worker 1
+const sub1 = try client.subscribeQueue(allocator, "tasks.*", "workers");
+
+// Worker 2 (different process)
+const sub2 = try client.subscribeQueue(allocator, "tasks.*", "workers");
+
+// Message goes to either sub1 OR sub2, not both
+```
+
+---
 
 ## Receiving Messages
 
-### Blocking Receive
+### Blocking Receive: `next()`
+
+Blocks until a message arrives. Use in dedicated receiver loops:
 
 ```zig
-// Blocks until message available
-const msg = try sub.next(allocator, io);
-defer msg.deinit(allocator);
-std.debug.print("Subject: {s}, Data: {s}\n", .{ msg.subject, msg.data });
+while (true) {
+    const msg = try sub.next(allocator, io);
+    defer msg.deinit(allocator);  // ALWAYS defer deinit
+
+    std.debug.print("Subject: {s}\n", .{msg.subject});
+    std.debug.print("Data: {s}\n", .{msg.data});
+    if (msg.reply_to) |rt| {
+        std.debug.print("Reply-to: {s}\n", .{rt});
+    }
+}
 ```
 
-### With Timeout
+### Non-Blocking Poll: `tryNext()`
+
+Returns immediately. Use for event loops or polling:
+
+```zig
+// Process all available messages without waiting
+while (sub.tryNext()) |msg| {
+    defer msg.deinit(allocator);
+    processMessage(msg);
+}
+// No more messages - continue with other work
+```
+
+### Receive with Timeout: `nextWithTimeout()`
+
+Returns `null` on timeout. Uses `io.select()` internally:
+
+```zig
+if (try sub.nextWithTimeout(allocator, 5000)) |msg| {
+    defer msg.deinit(allocator);
+    std.debug.print("Got: {s}\n", .{msg.data});
+} else {
+    std.debug.print("No message within 5 seconds\n", .{});
+}
+```
+
+### Batch Receive: `nextBatch()` / `tryNextBatch()`
+
+Receive multiple messages at once for efficiency:
+
+```zig
+var buf: [64]Message = undefined;
+
+// Blocking - waits for at least 1 message, returns up to 64
+const count = try sub.nextBatch(io, &buf);
+for (buf[0..count]) |*msg| {
+    defer msg.deinit(allocator);
+    processMessage(msg.*);
+}
+
+// Non-blocking - returns immediately with available messages
+const available = sub.tryNextBatch(&buf);
+for (buf[0..available]) |*msg| {
+    defer msg.deinit(allocator);
+    processMessage(msg.*);
+}
+```
+
+### Receive Method Comparison
+
+| Method | Blocks | Returns | Use Case |
+|--------|--------|---------|----------|
+| `next()` | Yes | `!Message` | Dedicated receiver loop |
+| `tryNext()` | No | `?Message` | Polling, event loops |
+| `nextWithTimeout()` | Yes (bounded) | `!?Message` | Request/reply, timed waits |
+| `nextBatch()` | Yes | `!usize` | High-throughput batching |
+| `tryNextBatch()` | No | `usize` | Drain queue without blocking |
+
+---
+
+## Request/Reply
+
+### Using `request()` (Recommended)
+
+The simplest way - handles inbox creation, subscription, and timeout:
 
 ```zig
 // Returns null on timeout
-if (try sub.nextWithTimeout(allocator, 5000)) |msg| {
-    defer msg.deinit(allocator);
-    std.debug.print("Received: {s}\n", .{msg.data});
+if (try client.request(allocator, "math.double", "21", 5000)) |reply| {
+    defer reply.deinit(allocator);
+    std.debug.print("Result: {s}\n", .{reply.data});  // "42"
 } else {
-    std.debug.print("Timeout\n", .{});
+    std.debug.print("Service did not respond\n", .{});
 }
 ```
 
-### Zero-Copy (Advanced)
+### Building a Service
+
+Respond to requests by publishing to the `reply_to` subject:
 
 ```zig
-// Returns MessageRef - slices borrow from read buffer
-// Valid only until next read operation
-if (try sub.nextRef(allocator, io)) |ref| {
-    std.debug.print("Data: {s}\n", .{ref.data});
-    // Convert to owned if needed
-    const owned = try ref.toOwned(allocator);
-    defer owned.deinit(allocator);
+const service = try client.subscribe(allocator, "math.double");
+defer service.deinit(allocator);
+
+while (true) {
+    const req = try service.next(allocator, io);
+    defer req.deinit(allocator);
+
+    // Parse request
+    const num = std.fmt.parseInt(i32, req.data, 10) catch 0;
+
+    // Build response
+    var buf: [32]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "{d}", .{num * 2}) catch "error";
+
+    // Send reply
+    if (req.reply_to) |reply_to| {
+        try client.publish(reply_to, result);
+        try client.flush(allocator);
+    }
 }
 ```
 
-### Non-Blocking Check
+### Manual Request/Reply Pattern
+
+For more control, manage the inbox yourself:
 
 ```zig
-// Returns immediately, null if no message
-if (sub.tryNext()) |msg| {
-    defer msg.deinit(allocator);
-    std.debug.print("Got: {s}\n", .{msg.data});
+// Create inbox subscription
+const inbox = try nats.newInbox(allocator, io);
+defer allocator.free(inbox);
+
+const reply_sub = try client.subscribe(allocator, inbox);
+defer reply_sub.deinit(allocator);
+try client.flush(allocator);  // Ensure subscription is active
+
+// Send request with reply-to
+try client.publishRequest("service", inbox, "request data");
+try client.flush(allocator);
+
+// Wait for response with timeout
+if (try reply_sub.nextWithTimeout(allocator, 5000)) |reply| {
+    defer reply.deinit(allocator);
+    // Process reply
+} else {
+    // Timeout
 }
 ```
 
-## Message Delivery Semantics
-
-### Inline Routing Architecture
-
-This client uses **inline routing** for optimal performance. When a subscription
-calls `next()`, it becomes the reader and routes messages to other subscriptions:
-
-```
-sub1.next(io)
-      |
-      +---> acquire read_mutex
-      |
-      +---> read from socket
-      |
-      +---> if msg.sid == sub1.sid:
-      |         return message (zero-copy!)
-      |
-      +---> else:
-                route to other_sub.queue
-                continue reading
-```
-
-### Queue Behavior
-
-| Scenario | Behavior |
-|----------|----------|
-| Reading subscription | Direct from socket (zero-copy, queue bypassed) |
-| Other subscriptions | Messages routed to their `Io.Queue` |
-| Queue full | Message dropped, `getDroppedCount()` incremented |
-
-### Monitoring Dropped Messages
-
-```zig
-// Check if messages were dropped due to queue overflow
-const dropped = sub.getDroppedCount();
-if (dropped > 0) {
-    std.debug.print("Warning: {d} messages dropped\n", .{dropped});
-}
-```
-
-### Slow Consumer Handling
-
-1. **TCP receive buffer** - Kernel buffers incoming data (configurable via `tcp_rcvbuf`)
-2. **Subscription queues** - Messages for inactive subscriptions queue up to `async_queue_size`
-3. **Server detection** - NATS server has slow-consumer detection and will disconnect
-
-For high-throughput scenarios, increase `tcp_rcvbuf` and `async_queue_size`:
-
-```zig
-const client = try nats.Client.connect(allocator, io, url, .{
-    .async_queue_size = 1024,      // Larger subscription queues
-    .tcp_rcvbuf = 512 * 1024,      // 512KB TCP buffer
-});
-```
+---
 
 ## Async Patterns with std.Io
 
-### The Golden Pattern
+### The Golden Rule
 
 Always defer cancel when using `io.async()`:
 
@@ -238,38 +329,55 @@ defer future.cancel(io) catch {};  // ALWAYS defer cancel
 const result = try future.await(io);
 ```
 
-### Wrapping sub.next() in a Future
+### Concurrent Subscription Handlers
+
+Run multiple subscriptions in parallel:
 
 ```zig
-var future = io.async(nats.Subscription.next, .{ sub, allocator, io });
-defer if (future.cancel(io)) |msg| msg.deinit(allocator) else |_| {};
+fn handleEvents(io_ctx: std.Io, sub: *nats.Client.Sub, alloc: Allocator) void {
+    while (true) {
+        const msg = sub.next(alloc, io_ctx) catch break;
+        defer msg.deinit(alloc);
+        // Process message...
+    }
+}
 
-const msg = try future.await(io);
-std.debug.print("Received: {s}\n", .{msg.data});
+// Spawn concurrent handlers
+var task1 = try io.concurrent(handleEvents, .{ io, events_sub, allocator });
+defer task1.cancel(io) catch {};
+
+var task2 = try io.concurrent(handleEvents, .{ io, orders_sub, allocator });
+defer task2.cancel(io) catch {};
+
+// Wait for both to complete
+_ = task1.await(io);
+_ = task2.await(io);
 ```
 
-### Timeout with io.select()
+### Racing Operations with `io.select()`
+
+Wait for the first of multiple operations to complete:
 
 ```zig
 fn sleepMs(io_ctx: std.Io, ms: u32) void {
     io_ctx.sleep(.fromMilliseconds(ms), .awake) catch {};
 }
 
-var recv_future = io.async(nats.Subscription.next, .{ sub, allocator, io });
+var recv_future = io.async(nats.Client.Subscription.next, .{ sub, allocator, io });
 var timeout_future = io.async(sleepMs, .{ io, 5000 });
 
 const result = io.select(.{
     .message = &recv_future,
     .timeout = &timeout_future,
 }) catch |err| {
-    _ = timeout_future.cancel(io);
+    timeout_future.cancel(io);
     if (recv_future.cancel(io)) |m| m.deinit(allocator) else |_| {}
     return err;
 };
 
 switch (result) {
     .message => |msg_result| {
-        _ = timeout_future.cancel(io);
+        timeout_future.cancel(io);
         const msg = try msg_result;
         defer msg.deinit(allocator);
         std.debug.print("Received: {s}\n", .{msg.data});
@@ -281,35 +389,113 @@ switch (result) {
 }
 ```
 
-### Concurrent Subscriptions
+---
+
+## Connection Options
 
 ```zig
-fn processEvents(io_ctx: std.Io, sub: *nats.Subscription, alloc: Allocator) void {
-    while (true) {
-        const msg = sub.next(alloc, io_ctx) catch break;
-        defer msg.deinit(alloc);
-        // Process message...
-    }
-}
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    // Identity
+    .name = "my-app",              // Client name (visible in server logs)
 
-// Spawn concurrent handlers
-var task1 = try io.concurrent(processEvents, .{ io, sub1, allocator });
-defer task1.cancel(io) catch {};
+    // Authentication
+    .user = "user",                // Username
+    .pass = "pass",                // Password
+    .auth_token = "token",         // Token auth (alternative to user/pass)
 
-var task2 = try io.concurrent(processEvents, .{ io, sub2, allocator });
-defer task2.cancel(io) catch {};
+    // Buffers
+    .buffer_size = 256 * 1024,     // Read/write buffer (default 256KB)
+    .async_queue_size = 256,       // Per-subscription queue size
+    .tcp_rcvbuf = 256 * 1024,      // TCP receive buffer hint
 
-// Wait for both
-_ = task1.await(io);
-_ = task2.await(io);
+    // Timeouts
+    .connect_timeout_ns = 5_000_000_000,  // 5 second connect timeout
+
+    // Reconnection
+    .reconnect = true,             // Enable auto-reconnect
+    .max_reconnect_attempts = 60,  // Max attempts (0 = infinite)
+    .reconnect_wait_ms = 2000,     // Initial backoff
+
+    // Keepalive
+    .ping_interval_ms = 120_000,   // PING every 2 minutes
+    .max_pings_outstanding = 2,    // Disconnect after 2 missed PONGs
+});
 ```
+
+---
+
+## Message Lifecycle
+
+### Memory Ownership
+
+Messages returned by `next()`, `tryNext()`, and `nextWithTimeout()` are **owned**.
+You **must** call `deinit()` to free memory:
+
+```zig
+const msg = try sub.next(allocator, io);
+defer msg.deinit(allocator);  // ALWAYS do this
+
+// Access message fields (valid until deinit)
+std.debug.print("Subject: {s}\n", .{msg.subject});
+std.debug.print("Data: {s}\n", .{msg.data});
+```
+
+### Message Structure
+
+```zig
+pub const Message = struct {
+    subject: []const u8,       // Message subject
+    sid: u64,                  // Subscription ID
+    reply_to: ?[]const u8,     // Reply-to address (for request/reply)
+    data: []const u8,          // Message payload
+    headers: ?[]const u8,      // NATS headers (if enabled)
+};
+```
+
+---
+
+## Handling Slow Consumers
+
+### Queue Overflow Detection
+
+When messages arrive faster than you process them, the queue fills up and messages are dropped:
+
+```zig
+while (true) {
+    const msg = try sub.next(allocator, io);
+    defer msg.deinit(allocator);
+
+    // Check for dropped messages periodically
+    const dropped = sub.getDroppedCount();
+    if (dropped > 0) {
+        std.log.warn("Dropped {d} messages - consumer too slow", .{dropped});
+    }
+
+    processMessage(msg);
+}
+```
+
+### Tuning for High Throughput
+
+```zig
+const client = try nats.Client.connect(allocator, io, url, .{
+    .async_queue_size = 1024,      // Larger per-subscription queue
+    .tcp_rcvbuf = 512 * 1024,      // 512KB TCP buffer
+    .buffer_size = 1024 * 1024,    // 1MB read/write buffer
+});
+```
+
+---
 
 ## Error Handling
 
 ```zig
 client.publish(subject, data) catch |err| switch (err) {
     error.NotConnected => {
-        // Connection lost
+        // Connection lost - wait for reconnect or handle
+    },
+    error.PayloadTooLarge => {
+        // Message exceeds server max_payload (usually 1MB)
     },
     error.EncodingFailed => {
         // Protocol encoding error
@@ -318,14 +504,20 @@ client.publish(subject, data) catch |err| switch (err) {
 };
 ```
 
-Common errors:
-- `error.NotConnected` - Not connected to server
-- `error.ConnectionFailed` - Failed to connect
-- `error.AuthorizationViolation` - Auth failed
-- `error.ProtocolError` - Protocol parse error
-- `error.TooManySubscriptions` - Subscription limit reached (256 max)
-- `error.Closed` - Connection closed
-- `error.Canceled` - Operation was cancelled
+### Common Errors
+
+| Error | Meaning |
+|-------|---------|
+| `NotConnected` | Not connected to server |
+| `ConnectionFailed` | Failed to establish connection |
+| `AuthorizationViolation` | Authentication failed |
+| `PayloadTooLarge` | Message exceeds max_payload |
+| `TooManySubscriptions` | Subscription limit reached (256) |
+| `Closed` | Connection was closed |
+| `Canceled` | Operation was cancelled |
+| `Timeout` | Operation timed out |
+
+---
 
 ## Building
 
@@ -365,6 +557,8 @@ nats bench pub test.subject --msgs=100000 --size=128
 nats bench sub test.subject --msgs=100000
 ```
 
+---
+
 ## Status
 
 | Component | Status |
@@ -372,7 +566,7 @@ nats bench sub test.subject --msgs=100000
 | Core Protocol | Complete |
 | Pub/Sub | Complete |
 | Request/Reply | Complete |
-| Client | Complete |
+| Reconnection | Complete |
 | JetStream | Planned |
 | Key-Value | Planned |
 | Object Store | Planned |

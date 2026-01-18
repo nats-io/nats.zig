@@ -21,7 +21,7 @@ pub fn testClientAsyncStats(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("client_async_stats", false, "connect failed");
         return;
     };
@@ -34,7 +34,7 @@ pub fn testClientAsyncStats(allocator: std.mem.Allocator) void {
     }
 
     client.publish("async.stats", "test") catch {};
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     const stats = client.getStats();
     if (stats.msgs_out >= 1) {
@@ -53,7 +53,7 @@ pub fn testAsyncStatsIncrement(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("async_stats_increment", false, "connect failed");
         return;
     };
@@ -65,7 +65,7 @@ pub fn testAsyncStatsIncrement(allocator: std.mem.Allocator) void {
     for (0..10) |_| {
         client.publish("async.stats.inc", "msg") catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     const after = client.getStats();
 
@@ -85,7 +85,7 @@ pub fn testAsyncStatsBytesAccuracy(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("async_stats_bytes", false, "connect failed");
         return;
     };
@@ -96,7 +96,7 @@ pub fn testAsyncStatsBytesAccuracy(allocator: std.mem.Allocator) void {
     // Publish 100 bytes
     const payload = "0123456789" ** 10; // 100 bytes
     client.publish("async.stats.bytes", payload) catch {};
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     const after = client.getStats();
 
@@ -115,7 +115,7 @@ pub fn testStatsMsgsIn(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("stats_msgs_in", false, "connect failed");
         return;
     };
@@ -126,7 +126,7 @@ pub fn testStatsMsgsIn(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     const before = client.getStats();
 
@@ -134,7 +134,7 @@ pub fn testStatsMsgsIn(allocator: std.mem.Allocator) void {
     for (0..25) |_| {
         client.publish("msgsin.test", "data") catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Receive all
     var received: u32 = 0;
@@ -169,7 +169,7 @@ pub fn testStatsBytesIn(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("stats_bytes_in", false, "connect failed");
         return;
     };
@@ -180,7 +180,7 @@ pub fn testStatsBytesIn(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     const before = client.getStats();
 
@@ -189,7 +189,7 @@ pub fn testStatsBytesIn(allocator: std.mem.Allocator) void {
     for (0..10) |_| {
         client.publish("bytesin.test", payload) catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Receive all
     for (0..15) |_| {

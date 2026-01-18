@@ -21,7 +21,7 @@ pub fn testAsyncDrainOperation(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("async_drain_operation", false, "connect failed");
         return;
     };
@@ -40,7 +40,7 @@ pub fn testAsyncDrainOperation(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit(allocator);
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Drain should clean up everything
     _ = client.drain(allocator) catch {
@@ -64,7 +64,7 @@ pub fn testAsyncDrainCleansUp(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("async_drain_cleanup", false, "connect failed");
         return;
     };
@@ -85,7 +85,7 @@ pub fn testAsyncDrainCleansUp(allocator: std.mem.Allocator) void {
 
     client.publish("drain.cleanup.1", "msg1") catch {};
     client.publish("drain.cleanup.2", "msg2") catch {};
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Small delay for messages to arrive
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
@@ -111,7 +111,7 @@ pub fn testDrainTwice(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("drain_twice", false, "connect failed");
         return;
     };
@@ -136,7 +136,7 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("drain_many_subs", false, "connect failed");
         return;
     };
@@ -160,7 +160,7 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
         created += 1;
     }
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     _ = client.drain(allocator) catch {
         reportResult("drain_many_subs", false, "drain failed");

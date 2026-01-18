@@ -21,14 +21,15 @@ pub fn testAsyncStress500Messages(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const publisher = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const publisher = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("async_stress_500", false, "pub connect failed");
         return;
     };
     defer publisher.deinit(allocator);
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
-        .async_queue_size = 512,
+        .sub_queue_size = 512,
+        .reconnect = false,
     }) catch {
         reportResult("async_stress_500", false, "connect failed");
         return;
@@ -41,7 +42,7 @@ pub fn testAsyncStress500Messages(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("async_stress_500", false, "flush failed");
         return;
     };
@@ -55,7 +56,7 @@ pub fn testAsyncStress500Messages(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    publisher.flush() catch {
+    publisher.flush(allocator) catch {
         reportResult("async_stress_500", false, "pub flush failed");
         return;
     };
@@ -91,7 +92,8 @@ pub fn testAsyncStress1000Messages(allocator: std.mem.Allocator) void {
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
-        .async_queue_size = 1024,
+        .sub_queue_size = 1024,
+        .reconnect = false,
     }) catch {
         reportResult("async_stress_1000", false, "connect failed");
         return;
@@ -103,7 +105,7 @@ pub fn testAsyncStress1000Messages(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("async_stress_1000", false, "flush failed");
         return;
     };
@@ -116,7 +118,7 @@ pub fn testAsyncStress1000Messages(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("async_stress_1000", false, "pub flush failed");
         return;
     };
@@ -148,7 +150,8 @@ pub fn testAsyncStress2000Messages(allocator: std.mem.Allocator) void {
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
-        .async_queue_size = 2048,
+        .sub_queue_size = 2048,
+        .reconnect = false,
     }) catch {
         reportResult("async_stress_2000", false, "connect failed");
         return;
@@ -160,7 +163,7 @@ pub fn testAsyncStress2000Messages(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("async_stress_2000", false, "flush failed");
         return;
     };
@@ -174,7 +177,7 @@ pub fn testAsyncStress2000Messages(allocator: std.mem.Allocator) void {
                 return;
             };
         }
-        client.flush() catch {
+        client.flush(allocator) catch {
             reportResult("async_stress_2000", false, "batch flush failed");
             return;
         };
@@ -206,7 +209,7 @@ pub fn testPayload30KB(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("payload_30kb", false, "connect failed");
         return;
     };
@@ -217,7 +220,7 @@ pub fn testPayload30KB(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // 30KB payload
     const payload = allocator.alloc(u8, 30 * 1024) catch {
@@ -231,7 +234,7 @@ pub fn testPayload30KB(allocator: std.mem.Allocator) void {
         reportResult("payload_30kb", false, "publish failed");
         return;
     };
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     if (sub.nextWithTimeout(allocator, 3000) catch null) |m| {
         defer m.deinit(allocator);
@@ -252,7 +255,7 @@ pub fn testManySubscriptions(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("many_subscriptions", false, "connect failed");
         return;
     };
@@ -295,7 +298,7 @@ pub fn testPayloadBoundary(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("payload_boundary", false, "connect failed");
         return;
     };
@@ -306,7 +309,7 @@ pub fn testPayloadBoundary(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Test exact sizes: 1KB, 4KB, 8KB, 15KB
     const sizes = [_]usize{ 1024, 4096, 8192, 15360 };
@@ -324,7 +327,7 @@ pub fn testPayloadBoundary(allocator: std.mem.Allocator) void {
             all_passed = false;
             break;
         };
-        client.flush() catch {};
+        client.flush(allocator) catch {};
 
         const msg = sub.nextWithTimeout(allocator, 2000) catch {
             all_passed = false;
@@ -367,7 +370,7 @@ pub fn testFiveConcurrentClients(allocator: std.mem.Allocator) void {
 
     for (0..5) |i| {
         ios[i] = .init(allocator, .{ .environ = .empty });
-        clients[i] = nats.Client.connect(allocator, ios[i].io(), url, .{}) catch {
+        clients[i] = nats.Client.connect(allocator, ios[i].io(), url, .{ .reconnect = false }) catch {
             reportResult("five_concurrent", false, "connect failed");
             return;
         };

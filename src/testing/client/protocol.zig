@@ -24,7 +24,7 @@ pub fn testServerInfoParsing(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("server_info_parsing", false, "connect failed");
         return;
     };
@@ -74,7 +74,7 @@ pub fn testPingPongKeepAlive(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("ping_pong_keep_alive", false, "connect failed");
         return;
     };
@@ -94,7 +94,7 @@ pub fn testPingPongKeepAlive(allocator: std.mem.Allocator) void {
             reportResult("ping_pong_keep_alive", false, "publish failed");
             return;
         };
-        client.flush() catch {
+        client.flush(allocator) catch {
             reportResult("ping_pong_keep_alive", false, "flush failed");
             return;
         };
@@ -136,7 +136,7 @@ pub fn testProtocolAuthError(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const result = nats.Client.connect(allocator, io.io(), url, .{});
+    const result = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false });
 
     if (result) |client| {
         // Should have failed with auth error
@@ -161,7 +161,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("unknown_sid_handling", false, "connect failed");
         return;
     };
@@ -173,7 +173,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
         return;
     };
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         sub1.deinit(allocator);
         reportResult("unknown_sid_handling", false, "flush1 failed");
         return;
@@ -187,7 +187,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
     };
     sub1.deinit(allocator);
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("unknown_sid_handling", false, "flush2 failed");
         return;
     };
@@ -199,7 +199,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit(allocator);
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("unknown_sid_handling", false, "flush3 failed");
         return;
     };
@@ -209,7 +209,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
         reportResult("unknown_sid_handling", false, "publish failed");
         return;
     };
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("unknown_sid_handling", false, "flush4 failed");
         return;
     };
@@ -401,7 +401,7 @@ pub fn testMaxPayloadLimit(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("max_payload_limit", false, "connect failed");
         return;
     };
@@ -469,7 +469,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("protocol_stability", false, "connect failed");
         return;
     };
@@ -490,7 +490,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
         };
     }
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("protocol_stability", false, "flush1 failed");
         return;
     };
@@ -505,7 +505,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
         };
     }
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("protocol_stability", false, "flush2 failed");
         return;
     };

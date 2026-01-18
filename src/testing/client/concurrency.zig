@@ -24,7 +24,7 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("concurrent_subscribe", false, "connect failed");
         return;
     };
@@ -93,7 +93,7 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("rapid_publish", false, "connect failed");
         return;
     };
@@ -105,7 +105,7 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("rapid_publish", false, "flush1 failed");
         return;
     };
@@ -120,7 +120,7 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
         published += 1;
     }
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("rapid_publish", false, "flush2 failed");
         return;
     };
@@ -160,7 +160,7 @@ pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("concurrent_sub_unsub", false, "connect failed");
         return;
     };
@@ -214,14 +214,14 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     defer io.deinit();
 
     // Publisher client
-    const publisher = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const publisher = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("race_sub_delivery", false, "pub connect failed");
         return;
     };
     defer publisher.deinit(allocator);
 
     // Subscriber client
-    const subscriber = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const subscriber = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("race_sub_delivery", false, "sub connect failed");
         return;
     };
@@ -235,14 +235,14 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     defer sub.deinit(allocator);
 
     // Flush immediately (subscribe is in flight)
-    subscriber.flush() catch {};
+    subscriber.flush(allocator) catch {};
 
     // Publish immediately (before subscribe may be registered)
     publisher.publish("race.delivery", "race-msg-1") catch {
         reportResult("race_sub_delivery", false, "publish1 failed");
         return;
     };
-    publisher.flush() catch {};
+    publisher.flush(allocator) catch {};
 
     // Small delay
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
@@ -252,7 +252,7 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
         reportResult("race_sub_delivery", false, "publish2 failed");
         return;
     };
-    publisher.flush() catch {};
+    publisher.flush(allocator) catch {};
 
     // We should receive at least the second message
     var received: u32 = 0;
@@ -281,7 +281,8 @@ pub fn testRaceUnsubscribeVsDelivery(allocator: std.mem.Allocator) void {
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
-        .async_queue_size = 64,
+        .sub_queue_size = 64,
+        .reconnect = false,
     }) catch {
         reportResult("race_unsub_delivery", false, "connect failed");
         return;
@@ -294,7 +295,7 @@ pub fn testRaceUnsubscribeVsDelivery(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("race_unsub_delivery", false, "flush1 failed");
         return;
     };
@@ -303,7 +304,7 @@ pub fn testRaceUnsubscribeVsDelivery(allocator: std.mem.Allocator) void {
     for (0..50) |_| {
         client.publish("race.unsub", "msg") catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Unsubscribe while messages are likely in flight
     sub.unsubscribe() catch {};
@@ -312,7 +313,7 @@ pub fn testRaceUnsubscribeVsDelivery(allocator: std.mem.Allocator) void {
     for (0..50) |_| {
         client.publish("race.unsub", "msg") catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Connection should still be healthy
     if (client.isConnected()) {
@@ -331,7 +332,7 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("sid_allocation_recycle", false, "connect failed");
         return;
     };
@@ -397,19 +398,19 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     defer io.deinit();
 
     // Create 3 clients sharing the same Io
-    const client1 = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client1 = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("multi_client_shared_io", false, "client1 failed");
         return;
     };
     defer client1.deinit(allocator);
 
-    const client2 = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client2 = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("multi_client_shared_io", false, "client2 failed");
         return;
     };
     defer client2.deinit(allocator);
 
-    const client3 = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client3 = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("multi_client_shared_io", false, "client3 failed");
         return;
     };
@@ -422,7 +423,7 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client1.flush() catch {};
+    client1.flush(allocator) catch {};
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Publish from client2 and client3
@@ -435,8 +436,8 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
         return;
     };
 
-    client2.flush() catch {};
-    client3.flush() catch {};
+    client2.flush(allocator) catch {};
+    client3.flush(allocator) catch {};
 
     // Should receive both messages
     var received: u32 = 0;
@@ -465,7 +466,7 @@ pub fn testParallelAsyncReceive(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("parallel_async_recv", false, "connect failed");
         return;
     };
@@ -490,7 +491,7 @@ pub fn testParallelAsyncReceive(allocator: std.mem.Allocator) void {
     };
     defer sub3.deinit(allocator);
 
-    client.flush() catch {
+    client.flush(allocator) catch {
         reportResult("parallel_async_recv", false, "flush1 failed");
         return;
     };
@@ -499,7 +500,7 @@ pub fn testParallelAsyncReceive(allocator: std.mem.Allocator) void {
     client.publish("parallel.1", "msg1") catch {};
     client.publish("parallel.2", "msg2") catch {};
     client.publish("parallel.3", "msg3") catch {};
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Receive using async/await pattern
     var received: u32 = 0;
@@ -540,7 +541,7 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("rapid_flush", false, "connect failed");
         return;
     };
@@ -549,7 +550,7 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
     // Many rapid flushes (even without data)
     var success: u32 = 0;
     for (0..50) |_| {
-        client.flush() catch {
+        client.flush(allocator) catch {
             continue;
         };
         success += 1;
@@ -565,7 +566,7 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
     // Interleave publish and flush
     for (0..50) |_| {
         client.publish("flush.test", "x") catch {};
-        client.flush() catch {};
+        client.flush(allocator) catch {};
     }
 
     if (client.isConnected()) {
@@ -584,7 +585,7 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("stats_concurrency", false, "connect failed");
         return;
     };
@@ -596,7 +597,7 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     const before = client.getStats();
 
@@ -605,7 +606,7 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
     for (0..NUM_MSGS) |_| {
         client.publish("stats.test", "stat-msg") catch {};
     }
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     // Receive all
     for (0..NUM_MSGS) |_| {

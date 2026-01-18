@@ -44,14 +44,14 @@ pub fn main() !void {
 
     const sub = try client.subscribe(allocator, "demo.select");
     defer sub.deinit(allocator);
-    try client.flush();
+    try client.flush(allocator);
 
     std.debug.print("Subscribed to 'demo.select'\n", .{});
     std.debug.print("\nPublishing 3 messages with 200ms gaps...\n", .{});
     std.debug.print("Using 500ms timeout - should receive all 3.\n\n", .{});
 
     // Spawn publisher in background
-    var publisher = io.async(publishMessages, .{ client, io });
+    var publisher = io.async(publishMessages, .{ client, io, allocator });
     defer publisher.cancel(io);
 
     // Receive with timeout using io.select()
@@ -105,14 +105,18 @@ pub fn main() !void {
     std.debug.print("Done!\n", .{});
 }
 
-fn publishMessages(client: *nats.Client, io: Io) void {
+fn publishMessages(
+    client: *nats.Client,
+    io: Io,
+    alloc: std.mem.Allocator,
+) void {
     io.sleep(.fromMilliseconds(100), .awake) catch {};
 
     for (1..4) |i| {
         var buf: [32]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Message {d}", .{i}) catch "Msg";
         client.publish("demo.select", msg) catch return;
-        client.flush() catch return;
+        client.flush(alloc) catch return;
         io.sleep(.fromMilliseconds(200), .awake) catch {};
     }
 }

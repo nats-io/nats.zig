@@ -76,9 +76,9 @@ pub fn FixedSubscription(
         client: *ClientType,
         sid: u64,
         subject_buf: [config.max_subject_len]u8,
-        subject_len: u8,
+        subject_len: u16,
         queue_group_buf: [config.max_queue_group_len]u8,
-        queue_group_len: u8,
+        queue_group_len: u16,
         messages: FixedQueue(MessageType, config.queue_capacity),
         state: State,
         max_msgs: u64,
@@ -104,6 +104,13 @@ pub fn FixedSubscription(
             };
         }
 
+        /// Activation errors.
+        pub const ActivateError = error{
+            EmptySubject,
+            SubjectTooLong,
+            QueueGroupTooLong,
+        };
+
         /// Activate slot with subscription data.
         pub fn activate(
             self: *Self,
@@ -111,11 +118,13 @@ pub fn FixedSubscription(
             sid_val: u64,
             subj: []const u8,
             queue_grp: ?[]const u8,
-        ) error{SubjectTooLong}!void {
-            assert(subj.len > 0);
+        ) ActivateError!void {
+            if (subj.len == 0) return error.EmptySubject;
             if (subj.len > config.max_subject_len) {
                 return error.SubjectTooLong;
             }
+            assert(subj.len > 0);
+            assert(subj.len <= config.max_subject_len);
 
             self.client = client_ptr;
             self.sid = sid_val;
@@ -124,7 +133,7 @@ pub fn FixedSubscription(
 
             if (queue_grp) |qg| {
                 if (qg.len > config.max_queue_group_len) {
-                    return error.SubjectTooLong;
+                    return error.QueueGroupTooLong;
                 }
                 self.queue_group_len = @intCast(qg.len);
                 @memcpy(self.queue_group_buf[0..qg.len], qg);
@@ -181,28 +190,6 @@ pub fn FixedSubscription(
     };
 }
 
-test "fixed queue basic" {
-    var q: FixedQueue(u32, 4) = .{};
-
-    try q.push(1);
-    try q.push(2);
-    try q.push(3);
-
-    try std.testing.expectEqual(@as(u16, 3), q.count);
-    try std.testing.expectEqual(@as(?u32, 1), q.tryPop());
-    try std.testing.expectEqual(@as(?u32, 2), q.tryPop());
-    try std.testing.expectEqual(@as(u16, 1), q.count);
-}
-
-test "fixed queue full" {
-    var q: FixedQueue(u32, 2) = .{};
-
-    try q.push(1);
-    try q.push(2);
-    try std.testing.expectError(error.QueueFull, q.push(3));
-}
-
-test "subscription state" {
-    try std.testing.expect(State.active != State.draining);
-    try std.testing.expect(State.active != State.unsubscribed);
+test {
+    _ = @import("subscription_test.zig");
 }

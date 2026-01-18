@@ -21,7 +21,7 @@ pub fn testAsyncAuthentication(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("async_authentication", false, "auth connect failed");
         return;
     };
@@ -42,7 +42,7 @@ pub fn testAsyncAuthenticationFailure(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const result = nats.Client.connect(allocator, io.io(), url, .{});
+    const result = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false });
 
     if (result) |client| {
         client.deinit(allocator);
@@ -59,7 +59,7 @@ pub fn testAuthenticatedPubSub(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("auth_pubsub", false, "connect failed");
         return;
     };
@@ -70,13 +70,13 @@ pub fn testAuthenticatedPubSub(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     client.publish("auth.test.subject", "auth message") catch {
         reportResult("auth_pubsub", false, "publish failed");
         return;
     };
-    client.flush() catch {};
+    client.flush(allocator) catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);
@@ -96,7 +96,7 @@ pub fn testEmptyToken(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const result = nats.Client.connect(allocator, io.io(), url, .{});
+    const result = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false });
 
     if (result) |client| {
         // Empty token might connect but fail auth
@@ -124,7 +124,7 @@ pub fn testTokenSpecialChars(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("token_special_chars", false, "connect failed");
         return;
     };
@@ -147,7 +147,7 @@ pub fn testAuthRejectionRecovery(allocator: std.mem.Allocator) void {
     var bad_url_buf: [128]u8 = undefined;
     const bad_url = formatAuthUrl(&bad_url_buf, auth_port, "wrong-token");
 
-    const bad_result = nats.Client.connect(allocator, io.io(), bad_url, .{});
+    const bad_result = nats.Client.connect(allocator, io.io(), bad_url, .{ .reconnect = false });
     if (bad_result) |client| {
         client.deinit(allocator);
         // If it connected, that's unexpected but not a failure of this test
@@ -159,7 +159,7 @@ pub fn testAuthRejectionRecovery(allocator: std.mem.Allocator) void {
     var good_url_buf: [128]u8 = undefined;
     const good_url = formatAuthUrl(&good_url_buf, auth_port, test_token);
 
-    const good_result = nats.Client.connect(allocator, io.io(), good_url, .{});
+    const good_result = nats.Client.connect(allocator, io.io(), good_url, .{ .reconnect = false });
     if (good_result) |client| {
         defer client.deinit(allocator);
         if (client.isConnected()) {
@@ -186,7 +186,7 @@ pub fn testMultipleAuthAttempts(allocator: std.mem.Allocator) void {
     // Try 5 times with wrong token
     var failures: u32 = 0;
     for (0..5) |_| {
-        const result = nats.Client.connect(allocator, io.io(), bad_url, .{});
+        const result = nats.Client.connect(allocator, io.io(), bad_url, .{ .reconnect = false });
         if (result) |client| {
             client.deinit(allocator);
         } else |_| {
@@ -213,7 +213,7 @@ pub fn testAuthRequiredDetection(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{}) catch {
+    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("auth_required_detect", false, "connect failed");
         return;
     };
