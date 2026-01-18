@@ -62,11 +62,12 @@ pub const Message = struct {
     pub fn deinit(self: *const Message, allocator: Allocator) void {
         if (!self.owned) return;
         if (self.backing_buf) |buf| {
-            if (self.return_queue) |rq| {
-                // Push to return queue - reader thread will free to slab
-                _ = rq.push(buf);
-            } else {
-                allocator.free(buf);
+            // backing_buf always comes from slab, return_queue must be set
+            assert(self.return_queue != null);
+            const rq = self.return_queue.?;
+            // Yield-wait until push succeeds - buffer MUST return to slab
+            while (!rq.push(buf)) {
+                std.Thread.yield() catch {};
             }
             return;
         }
@@ -401,8 +402,9 @@ pub fn connect(
     };
 
     // Initialize return queue for cross-thread buffer deallocation
-    // Size matches sub_queue_size to handle max in-flight messages
-    const rq_size = opts.sub_queue_size;
+    // Size must exceed slab tier capacity to avoid blocking when buffers
+    // are split between sub_queue, processing, and return_queue
+    const rq_size = opts.sub_queue_size * 2;
     client.return_queue_buf = allocator.alloc([]u8, rq_size) catch |err| {
         client.tiered_slab.deinit();
         allocator.destroy(client);

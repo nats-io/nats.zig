@@ -32,13 +32,6 @@ fn getNowNs() error{TimerUnavailable}!u64 {
 /// Drain return queue - free returned buffers back to slab.
 /// Called periodically from read loop to reclaim memory.
 inline fn drainReturnQueue(client: *Client) void {
-    // Quick check with monotonic ordering - skip if queue empty
-    // This is the main perf optimization (avoids atomics when nothing to drain)
-    if (client.return_queue.head.load(.monotonic) ==
-        client.return_queue.tail.load(.monotonic)) return;
-
-    // Drain ALL available buffers - no limit
-    // Limiting to 64 caused queue to fill faster than drain → memory leaks
     const slab = &client.tiered_slab;
     while (client.return_queue.pop()) |buf| {
         slab.free(buf);
@@ -63,6 +56,9 @@ pub fn run(client: *Client, allocator: Allocator) void {
         var made_progress = true;
         while (made_progress) {
             made_progress = false;
+
+            // Drain return queue each iteration (prevents queue overflow)
+            drainReturnQueue(client);
 
             // 1. FIRST: Route buffered messages (no I/O)
             const route_result = tryRouteBufferedMessages(client, allocator);
