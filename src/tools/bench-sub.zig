@@ -104,7 +104,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     defer threaded.deinit();
     const io = threaded.io();
 
-    // Connect using Client (inline routing for zero-copy)
+    // Connect
     const client = nats.Client.connect(allocator, io, config.url, .{
         .name = "bench-sub",
         .sub_queue_size = queue_size,

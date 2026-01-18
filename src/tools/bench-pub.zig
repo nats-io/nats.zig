@@ -1,7 +1,7 @@
-//! NATS Async Publisher Benchmark
+//! NATS Publisher Benchmark
 //!
 //! Measures publish throughput using Client.
-//! Usage: bench-pub-async <subject> [--msgs=N] [--size=NB]
+//! Usage: bench-pub <subject> [--msgs=N] [--size=NB]
 
 const std = @import("std");
 const nats = @import("nats");
@@ -74,13 +74,13 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     if (bench.TimeOfDay.now()) |tod| {
         var buf: [8]u8 = undefined;
         std.debug.print(
-            "{s} Starting async publisher benchmark " ++
+            "{s} Starting publisher benchmark " ++
                 "[msgs={d}, size={d}B, subject={s}]\n",
             .{ tod.format(&buf), config.msgs, config.size, config.subject },
         );
     } else {
         std.debug.print(
-            "Starting async publisher benchmark " ++
+            "Starting publisher benchmark " ++
                 "[msgs={d}, size={d}B, subject={s}]\n",
             .{ config.msgs, config.size, config.subject },
         );
@@ -93,7 +93,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
 
     // Connect using Client
     const client = nats.Client.connect(allocator, io, config.url, .{
-        .name = "bench-pub-async",
+        .name = "bench-pub",
     }) catch |err| {
         std.debug.print("Failed to connect: {}\n", .{err});
         return err;
@@ -133,14 +133,14 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         .msg_count = config.msgs,
         .total_bytes = config.msgs * config.size,
     };
-    stats.print("async publisher");
+    stats.print("publisher");
 }
 
 fn printUsage() void {
     std.debug.print(
-        \\Usage: bench-pub-async <subject> [options]
+        \\Usage: bench-pub <subject> [options]
         \\
-        \\Async publisher benchmark using ClientAsync.
+        \\Publisher benchmark.
         \\
         \\Arguments:
         \\  <subject>       Subject to publish to (required)
@@ -152,9 +152,9 @@ fn printUsage() void {
         \\  --url=URL       NATS server URL (default: nats://127.0.0.1:4222)
         \\
         \\Examples:
-        \\  bench-pub-async test.subject
-        \\  bench-pub-async test.subject --msgs=1000000 --size=256B
-        \\  bench-pub-async test.subject --size=1K
+        \\  bench-pubtest.subject
+        \\  bench-pubtest.subject --msgs=1000000 --size=256B
+        \\  bench-pubtest.subject --size=1K
         \\
     , .{});
 }
