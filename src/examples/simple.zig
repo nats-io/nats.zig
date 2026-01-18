@@ -10,11 +10,12 @@
 const std = @import("std");
 const nats = @import("nats");
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+/// Main entry point using Zig 0.16's std.process.Init.
+/// Init provides: gpa (allocator), io (async I/O), arena, args, environ.
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
+    // Create async I/O runtime (same pattern as bench tools)
     var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer threaded.deinit();
     const io = threaded.io();

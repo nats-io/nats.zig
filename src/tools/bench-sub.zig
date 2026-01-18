@@ -155,6 +155,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
                 std.debug.print("First message received, timing...\n", .{});
             }
 
+            // Count messages and bytes, then deinit each message
             for (batch_buf[0..batch_count]) |*msg| {
                 msg_count += 1;
                 total_bytes += msg.data.len;

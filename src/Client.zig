@@ -45,7 +45,7 @@ fn getNowNs() error{TimerUnavailable}!u64 {
 /// Message received on a subscription.
 ///
 /// All slices point into a single backing buffer for cache efficiency.
-/// Messages are owned and must be freed via deinit(allocator).
+/// Call deinit() to free - allocator param kept for API compat but ignored.
 pub const Message = struct {
     subject: []const u8,
     sid: u64,
@@ -55,12 +55,19 @@ pub const Message = struct {
     owned: bool = true,
     /// Single backing buffer (all slices point into this).
     backing_buf: ?[]u8 = null,
+    /// Return queue for thread-safe deallocation (reader thread frees).
+    return_queue: ?*SpscQueue([]u8) = null,
 
-    /// Frees message data.
+    /// Frees message data. Pushes to return queue for slab-allocated msgs.
     pub fn deinit(self: *const Message, allocator: Allocator) void {
         if (!self.owned) return;
         if (self.backing_buf) |buf| {
-            allocator.free(buf);
+            if (self.return_queue) |rq| {
+                // Push to return queue - reader thread will free to slab
+                _ = rq.push(buf);
+            } else {
+                allocator.free(buf);
+            }
             return;
         }
         // Separate allocations (legacy path)
@@ -306,6 +313,11 @@ max_payload: usize = 1024 * 1024,
 // Slab allocator for message buffers (~26 MB pre-allocated)
 tiered_slab: TieredSlab = undefined,
 
+// Return queue for cross-thread buffer deallocation (main -> reader thread)
+// Main thread pushes used buffers here, io_task drains and frees to slab
+return_queue: SpscQueue([]u8) = undefined,
+return_queue_buf: [][]u8 = undefined,
+
 // Reconnection state
 server_pool: connection.ServerPool = undefined,
 server_pool_initialized: bool = false,
@@ -388,7 +400,18 @@ pub fn connect(
         return err;
     };
 
+    // Initialize return queue for cross-thread buffer deallocation
+    // Size matches sub_queue_size to handle max in-flight messages
+    const rq_size = opts.sub_queue_size;
+    client.return_queue_buf = allocator.alloc([]u8, rq_size) catch |err| {
+        client.tiered_slab.deinit();
+        allocator.destroy(client);
+        return err;
+    };
+    client.return_queue = SpscQueue([]u8).init(client.return_queue_buf);
+
     errdefer {
+        allocator.free(client.return_queue_buf);
         client.tiered_slab.deinit();
         if (client.server_info) |*info| {
             info.deinit(allocator);
@@ -1250,6 +1273,12 @@ pub fn deinit(self: *Client, alloc: Allocator) void {
     if (self.server_info) |*info| {
         info.deinit(alloc);
     }
+
+    // Drain return queue before destroying slab (free any pending buffers)
+    while (self.return_queue.pop()) |buf| {
+        self.tiered_slab.free(buf);
+    }
+    alloc.free(self.return_queue_buf);
     self.tiered_slab.deinit();
 
     // Free pending buffer

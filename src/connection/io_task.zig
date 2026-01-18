@@ -29,6 +29,22 @@ fn getNowNs() error{TimerUnavailable}!u64 {
     return secs * std.time.ns_per_s + nsecs;
 }
 
+/// Drain return queue - free returned buffers back to slab.
+/// Called periodically from read loop to reclaim memory.
+inline fn drainReturnQueue(client: *Client) void {
+    // Quick check with monotonic ordering - skip if queue empty
+    // This is the main perf optimization (avoids atomics when nothing to drain)
+    if (client.return_queue.head.load(.monotonic) ==
+        client.return_queue.tail.load(.monotonic)) return;
+
+    // Drain ALL available buffers - no limit
+    // Limiting to 64 caused queue to fill faster than drain → memory leaks
+    const slab = &client.tiered_slab;
+    while (client.return_queue.pop()) |buf| {
+        slab.free(buf);
+    }
+}
+
 /// Main I/O task entry point. Called via io.async() from connect().
 /// Pure reader: reads socket, routes MSG, responds to PING with PONG.
 /// Exits cleanly when stream is closed (close-then-cancel pattern).
@@ -39,6 +55,9 @@ pub fn run(client: *Client, allocator: Allocator) void {
         if (dbg.enabled) loop_count += 1;
         // Exit immediately if client is closing
         if (client.state == .closed) break :outer;
+
+        // Drain return queue at start of each iteration (reclaim memory)
+        drainReturnQueue(client);
 
         // Made-progress loop: process all available data without blocking
         var made_progress = true;
@@ -272,6 +291,7 @@ inline fn routeMessageToSub(
         .headers = null,
         .owned = true,
         .backing_buf = buf,
+        .return_queue = &client.return_queue,
     };
 
     // Push to subscription queue
@@ -326,6 +346,7 @@ inline fn routeHMessageToSub(
         .headers = headers,
         .owned = true,
         .backing_buf = buf,
+        .return_queue = &client.return_queue,
     };
 
     // Push to subscription queue
