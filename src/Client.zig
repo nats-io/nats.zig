@@ -31,6 +31,9 @@ const TieredSlab = memory.TieredSlab;
 const SpscQueue = @import("sync/spsc_queue.zig").SpscQueue;
 const dbg = @import("dbg.zig");
 const defaults = @import("defaults.zig");
+const events_mod = @import("events.zig");
+pub const Event = events_mod.Event;
+pub const EventHandler = events_mod.EventHandler;
 
 const Client = @This();
 
@@ -124,7 +127,7 @@ pub const Options = struct {
     /// Set to 0 to use system default.
     tcp_rcvbuf: u32 = defaults.Connection.tcp_rcvbuf,
 
-    // === RECONNECTION OPTIONS ===
+    // RECONNECTION OPTIONS
 
     /// Enable automatic reconnection on disconnect.
     reconnect: bool = defaults.Reconnection.enabled,
@@ -142,12 +145,18 @@ pub const Options = struct {
     /// Set to 0 to disable buffering (publish returns error during reconnect).
     pending_buffer_size: usize = defaults.Reconnection.pending_buffer_size,
 
-    // === PING/PONG HEALTH CHECK ===
+    // PING/PONG HEALTH CHECK
 
     /// Interval between client-initiated PINGs (ms). 0 = disable.
     ping_interval_ms: u32 = defaults.Connection.ping_interval_ms,
     /// Max outstanding PINGs before connection is considered stale.
     max_pings_outstanding: u8 = defaults.Connection.max_pings_outstanding,
+
+    // EVENT CALLBACKS
+
+    /// Event handler for connection lifecycle callbacks (optional).
+    /// Use EventHandler.init(T, &handler) to create from a handler struct.
+    event_handler: ?EventHandler = null,
 };
 
 /// Connection statistics (Go client parity).
@@ -343,6 +352,18 @@ write_mutex: Io.Mutex = .init,
 /// Future for background I/O task (for proper cancellation in deinit).
 io_task_future: ?Io.Future(void) = null,
 
+// Event callback infrastructure
+/// Event queue for io_task -> callback_task communication.
+event_queue: ?*SpscQueue(Event) = null,
+/// Buffer backing the event queue.
+event_queue_buf: ?[]Event = null,
+/// Future for callback task (dispatches events to user handler).
+callback_task_future: ?Io.Future(void) = null,
+/// Event handler (copied from options for callback_task access).
+event_handler: ?EventHandler = null,
+/// Flag to track if lame duck event has been fired.
+lame_duck_notified: bool = false,
+
 /// Connects to a NATS server.
 ///
 /// Arguments:
@@ -394,6 +415,13 @@ pub fn connect(
 
     // Initialize background I/O task infrastructure
     client.write_mutex = .init;
+
+    // Initialize event callback infrastructure
+    client.event_queue = null;
+    client.event_queue_buf = null;
+    client.callback_task_future = null;
+    client.event_handler = opts.event_handler;
+    client.lame_duck_notified = false;
 
     // Initialize slab allocator (critical for O(1) message allocation)
     client.tiered_slab = TieredSlab.init(allocator) catch |err| {
@@ -534,9 +562,90 @@ pub fn connect(
         break :blk io.async(connection.io_task.run, .{ client, allocator });
     };
 
+    // Spawn callback task if event handler provided
+    if (opts.event_handler != null) {
+        // Allocate event queue buffer (256 events is plenty for lifecycle)
+        const eq_buf = allocator.alloc(Event, 256) catch |err| {
+            // Non-fatal: client works without callbacks
+            dbg.print("Failed to allocate event queue: {s}", .{@errorName(err)});
+            client.event_handler = null;
+            assert(client.next_sid >= 1);
+            assert(client.state == .connected);
+            return client;
+        };
+        client.event_queue_buf = eq_buf;
+
+        // Create event queue
+        const eq = allocator.create(SpscQueue(Event)) catch |err| {
+            allocator.free(eq_buf);
+            client.event_queue_buf = null;
+            dbg.print("Failed to create event queue: {s}", .{@errorName(err)});
+            client.event_handler = null;
+            assert(client.next_sid >= 1);
+            assert(client.state == .connected);
+            return client;
+        };
+        eq.* = SpscQueue(Event).init(eq_buf);
+        client.event_queue = eq;
+
+        // Spawn callback task
+        client.callback_task_future = io.concurrent(
+            callbackTaskFn,
+            .{client},
+        ) catch blk: {
+            dbg.print("WARNING: callback concurrent() failed, using async()", .{});
+            break :blk io.async(callbackTaskFn, .{client});
+        };
+
+        // Push initial connected event
+        _ = eq.push(.{ .connected = {} });
+    }
+
     assert(client.next_sid >= 1);
     assert(client.state == .connected);
     return client;
+}
+
+/// Push event to callback queue (called by io_task).
+/// Non-blocking, drops event if queue is full.
+pub fn pushEvent(self: *Client, event: Event) void {
+    if (self.event_queue) |q| {
+        _ = q.push(event);
+    }
+}
+
+/// Callback task: drains event queue and dispatches to user handler.
+/// Runs concurrently, exits when client state is .closed.
+fn callbackTaskFn(client: *Client) void {
+    dbg.print("callback_task: STARTED", .{});
+
+    const handler = client.event_handler orelse return;
+    const queue = client.event_queue orelse return;
+
+    while (State.atomicLoad(&client.state) != .closed) {
+        // Drain all pending events
+        while (queue.pop()) |event| {
+            switch (event) {
+                .connected => handler.dispatchConnect(),
+                .disconnected => |e| handler.dispatchDisconnect(e.err),
+                .reconnected => handler.dispatchReconnect(),
+                .closed => {
+                    handler.dispatchClose();
+                    dbg.print("callback_task: EXITED (closed event)", .{});
+                    return;
+                },
+                .slow_consumer => handler.dispatchError(events_mod.Error.SlowConsumer),
+                .err => |e| handler.dispatchError(e.err),
+                .lame_duck => handler.dispatchLameDuck(),
+            }
+        }
+        // Yield to avoid busy-wait
+        std.Thread.yield() catch {};
+    }
+
+    // Dispatch final close event if not already done
+    handler.dispatchClose();
+    dbg.print("callback_task: EXITED (state closed)", .{});
 }
 
 /// Performs NATS handshake (INFO/CONNECT exchange).
@@ -546,7 +655,8 @@ fn handshake(
     opts: Options,
     parsed: ParsedUrl,
 ) !void {
-    assert(self.state == .connecting);
+    // Allow both initial connect and reconnection states
+    assert(self.state == .connecting or self.state == .reconnecting);
     assert(parsed.host.len > 0);
 
     const reader = &self.reader.interface;
@@ -568,6 +678,10 @@ fn handshake(
     if (cmd) |c| {
         switch (c) {
             .info => |parsed_info| {
+                // Free old server_info if reconnecting
+                if (self.server_info) |*old| {
+                    old.deinit(allocator);
+                }
                 self.server_info = parsed_info;
                 self.max_payload = parsed_info.max_payload;
                 self.state = .connected;
@@ -1046,7 +1160,8 @@ pub fn drain(self: *Client, alloc: Allocator) !DrainResult {
 /// Returns true if connected.
 pub fn isConnected(self: *const Client) bool {
     assert(self.next_sid >= 1);
-    return self.state == .connected;
+    // Use atomic load for cross-thread visibility (io_task may update state)
+    return @atomicLoad(State, &self.state, .acquire) == .connected;
 }
 
 /// Returns connection statistics.
@@ -1192,35 +1307,38 @@ fn handlePong(self: *Client) void {
     dbg.pingPong("PONG_RECEIVED", 0);
 }
 
-/// Checks connection health and triggers reconnect if stale.
-/// Called from io_task loop.
-fn maybeHealthCheck(self: *Client, allocator: Allocator) !void {
-    _ = allocator;
+/// Checks connection health, sends PING if needed.
+/// Returns true if connection is stale (should trigger disconnect).
+/// Called from io_task loop with throttling.
+pub fn checkHealthAndDetectStale(self: *Client) bool {
+    if (self.options.ping_interval_ms == 0) return false;
+    if (self.state != .connected) return false;
 
-    if (self.options.ping_interval_ms == 0) return;
-    if (self.state != .connected) return;
-
-    const now_ns = getNowNs() catch return;
+    const now_ns = getNowNs() catch return false;
     const interval_ns: u64 = @as(u64, self.options.ping_interval_ms) * 1_000_000;
 
     // Check if too many PINGs outstanding (connection stale)
     if (self.pings_outstanding >= self.options.max_pings_outstanding) {
-        dbg.print(
-            "Connection stale: {d} PINGs outstanding",
-            .{self.pings_outstanding},
+        std.debug.print(
+            "[HEALTH] STALE: pings_outstanding={d} >= max={d}\n",
+            .{ self.pings_outstanding, self.options.max_pings_outstanding },
         );
-        // TODO: Trigger reconnect when Phase 6 is implemented
-        // For now, just reset state to prevent repeated warnings
-        self.pings_outstanding = 0;
-        return;
+        return true; // Stale - caller should trigger disconnect
     }
 
     // Check if it's time to send PING
     if (now_ns - self.last_ping_sent_ns >= interval_ns) {
+        std.debug.print("[HEALTH] Sending PING, pings_outstanding={d}\n", .{self.pings_outstanding});
         self.sendPing() catch |err| {
-            dbg.print("Failed to send PING: {s}", .{@errorName(err)});
+            std.debug.print("[HEALTH] PING failed: {s}\n", .{@errorName(err)});
+            // Write failure indicates disconnection
+            if (err == error.BrokenPipe or err == error.ConnectionResetByPeer) {
+                return true;
+            }
         };
     }
+
+    return false;
 }
 
 /// Closes all subscription queues (wakes waiters with error).
@@ -1263,7 +1381,25 @@ pub fn deinit(self: *Client, alloc: Allocator) void {
         self.io_task_future = null;
     }
 
-    // 4. Cleanup subscriptions (io_task is now gone)
+    // 4. Cancel callback task and free event queue
+    if (self.event_queue) |eq| {
+        // Push closed event so callback_task can dispatch final onClose
+        _ = eq.push(.{ .closed = {} });
+    }
+    if (self.callback_task_future) |*future| {
+        _ = future.cancel(self.io);
+        self.callback_task_future = null;
+    }
+    if (self.event_queue) |eq| {
+        alloc.destroy(eq);
+        self.event_queue = null;
+    }
+    if (self.event_queue_buf) |buf| {
+        alloc.free(buf);
+        self.event_queue_buf = null;
+    }
+
+    // 5. Cleanup subscriptions (io_task is now gone)
     self.closeAllQueues();
     for (self.sub_ptrs) |maybe_sub| {
         if (maybe_sub) |sub| {
@@ -1291,9 +1427,7 @@ pub fn deinit(self: *Client, alloc: Allocator) void {
     alloc.destroy(self);
 }
 
-// =============================================================================
-// Reconnection Support
-// =============================================================================
+// -- Reconnection Support
 
 /// Backup all active subscriptions for restoration after reconnect.
 /// Stores SID, subject, and queue_group in inline buffers (no allocation).
@@ -1357,7 +1491,10 @@ fn initPendingBuffer(self: *Client, allocator: Allocator) !void {
     if (self.options.pending_buffer_size == 0) return;
     if (self.pending_buffer != null) return; // Already initialized
 
-    self.pending_buffer = try allocator.alloc(u8, self.options.pending_buffer_size);
+    self.pending_buffer = try allocator.alloc(
+        u8,
+        self.options.pending_buffer_size,
+    );
     self.pending_buffer_capacity = self.options.pending_buffer_size;
     self.pending_buffer_pos = 0;
 }
@@ -1438,11 +1575,25 @@ fn cleanupForReconnect(self: *Client) void {
 
 /// Attempt connection to a single server.
 /// Returns true on success, error on failure.
-pub fn tryConnect(self: *Client, allocator: Allocator, server: *connection.server_pool.Server) !void {
-    const host = server.getHost();
+pub fn tryConnect(
+    self: *Client,
+    allocator: Allocator,
+    server: *connection.server_pool.Server,
+) !void {
+    const raw_host = server.getHost();
     const port = server.port;
 
-    dbg.reconnectEvent("CONNECTING", self.reconnect_attempt + 1, server.getUrl());
+    dbg.reconnectEvent(
+        "CONNECTING",
+        self.reconnect_attempt + 1,
+        server.getUrl(),
+    );
+
+    // Convert "localhost" to IP (IpAddress.parse only handles numeric IPs)
+    const host = if (std.mem.eql(u8, raw_host, "localhost"))
+        "127.0.0.1"
+    else
+        raw_host;
 
     // Parse address
     const address = net.IpAddress.parse(host, port) catch {
@@ -1488,7 +1639,11 @@ pub fn tryConnect(self: *Client, allocator: Allocator, server: *connection.serve
     self.last_pong_received_ns = now_ns;
     self.pings_outstanding = 0;
 
-    dbg.reconnectEvent("CONNECTED", self.reconnect_attempt + 1, server.getUrl());
+    dbg.reconnectEvent(
+        "CONNECTED",
+        self.reconnect_attempt + 1,
+        server.getUrl(),
+    );
 }
 
 /// Wait with exponential backoff + jitter.
@@ -1518,7 +1673,10 @@ pub fn waitBackoff(self: *Client) void {
     }
     final_wait = @max(100, final_wait);
 
-    dbg.print("Backoff wait: {d}ms (attempt {d})", .{ final_wait, attempt + 1 });
+    dbg.print(
+        "Backoff wait: {d}ms (attempt {d})",
+        .{ final_wait, attempt + 1 },
+    );
     self.io.sleep(.fromMilliseconds(final_wait), .awake) catch {};
 }
 
@@ -1576,10 +1734,16 @@ pub fn reconnect(self: *Client, allocator: Allocator) !void {
         if (self.tryConnect(allocator, server)) {
             // SUCCESS!
             self.restoreSubscriptions() catch |err| {
-                dbg.print("Failed to restore subscriptions: {s}", .{@errorName(err)});
+                dbg.print(
+                    "Failed to restore subscriptions: {s}",
+                    .{@errorName(err)},
+                );
             };
             self.flushPendingBuffer() catch |err| {
-                dbg.print("Failed to flush pending buffer: {s}", .{@errorName(err)});
+                dbg.print(
+                    "Failed to flush pending buffer: {s}",
+                    .{@errorName(err)},
+                );
             };
 
             self.state = .connected;
@@ -1594,7 +1758,11 @@ pub fn reconnect(self: *Client, allocator: Allocator) !void {
             );
             return;
         } else |err| {
-            dbg.reconnectEvent("FAILED", self.reconnect_attempt + 1, server.getUrl());
+            dbg.reconnectEvent(
+                "FAILED",
+                self.reconnect_attempt + 1,
+                server.getUrl(),
+            );
             dbg.print("Connection attempt failed: {s}", .{@errorName(err)});
 
             self.server_pool.markCurrentFailed();
@@ -1653,16 +1821,28 @@ pub const Subscription = struct {
     /// Returns owned Message that caller must free via msg.deinit(allocator).
     pub fn next(self: *Subscription, allocator: Allocator, io: Io) !Message {
         _ = allocator;
-        _ = io;
         assert(self.state == .active or self.state == .draining);
 
-        // Spin-wait on lock-free queue
+        // Hybrid spin-yield: spin for fast path, yield for cancellation support
+        var spin_count: u32 = 0;
+        const max_spins: u32 = 4096;
+
         while (true) {
             if (self.queue.pop()) |msg| return msg;
             if (self.state != .active and self.state != .draining) {
                 return error.Closed;
             }
-            std.atomic.spinLoopHint();
+
+            spin_count += 1;
+            if (spin_count < max_spins) {
+                std.atomic.spinLoopHint();
+            } else {
+                // Yield to I/O runtime - enables cancellation
+                io.sleep(.fromNanoseconds(0), .awake) catch |err| {
+                    if (err == error.Canceled) return error.Canceled;
+                };
+                spin_count = 0;
+            }
         }
     }
 
@@ -1673,18 +1853,30 @@ pub const Subscription = struct {
 
     /// Batch receive - waits for at least 1, returns up to buf.len.
     pub fn nextBatch(self: *Subscription, io: Io, buf: []Message) !usize {
-        _ = io;
         assert(self.state == .active or self.state == .draining);
         assert(buf.len > 0);
 
-        // Spin-wait for at least one message
+        // Hybrid spin-yield: spin for fast path, yield for cancellation support
+        var spin_count: u32 = 0;
+        const max_spins: u32 = 4096;
+
         while (true) {
             const count = self.queue.popBatch(buf);
             if (count > 0) return count;
             if (self.state != .active and self.state != .draining) {
                 return error.Closed;
             }
-            std.atomic.spinLoopHint();
+
+            spin_count += 1;
+            if (spin_count < max_spins) {
+                std.atomic.spinLoopHint();
+            } else {
+                // Yield to I/O runtime - enables cancellation
+                io.sleep(.fromNanoseconds(0), .awake) catch |err| {
+                    if (err == error.Canceled) return error.Canceled;
+                };
+                spin_count = 0;
+            }
         }
     }
 
@@ -1836,8 +2028,14 @@ test "options defaults" {
     try std.testing.expect(!opts.pedantic);
     try std.testing.expect(opts.user == null);
     try std.testing.expect(opts.pass == null);
-    try std.testing.expectEqual(defaults.Connection.timeout_ns, opts.connect_timeout_ns);
-    try std.testing.expectEqual(defaults.Memory.queue_size.value(), opts.sub_queue_size);
+    try std.testing.expectEqual(
+        defaults.Connection.timeout_ns,
+        opts.connect_timeout_ns,
+    );
+    try std.testing.expectEqual(
+        defaults.Memory.queue_size.value(),
+        opts.sub_queue_size,
+    );
 }
 
 test "stats defaults" {

@@ -138,8 +138,8 @@ fn testSubscriptionRestored(allocator: std.mem.Allocator, manager: *ServerManage
     };
     std.debug.print("[TEST reconnect_sub_restored] Flush done, checking message...\n", .{});
 
-    // Try to receive the message
-    if (sub.tryNext()) |msg| {
+    // Try to receive the message with timeout (blocking)
+    if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
         defer msg.deinit(allocator);
         if (std.mem.eql(u8, msg.data, "after-reconnect")) {
             reportResult("reconnect_sub_restored", true, "");
@@ -210,17 +210,17 @@ fn testMultipleSubscriptionsRestored(
 
     var received: u8 = 0;
 
-    if (sub1.tryNext()) |msg| {
+    if (sub1.nextWithTimeout(allocator, 500) catch null) |msg| {
         msg.deinit(allocator);
         received += 1;
     }
 
-    if (sub2.tryNext()) |msg| {
+    if (sub2.nextWithTimeout(allocator, 500) catch null) |msg| {
         msg.deinit(allocator);
         received += 1;
     }
 
-    if (sub3.tryNext()) |msg| {
+    if (sub3.nextWithTimeout(allocator, 500) catch null) |msg| {
         msg.deinit(allocator);
         received += 1;
     }
@@ -255,17 +255,26 @@ fn testReconnectMaxAttempts(allocator: std.mem.Allocator, manager: *ServerManage
         .max_reconnect_attempts = 2, // Only 2 attempts
         .reconnect_wait_ms = 50,
         .reconnect_wait_max_ms = 100,
+        .ping_interval_ms = 100, // Fast health check to detect killed server
+        .max_pings_outstanding = 1, // Detect stale quickly
     }) catch {
         reportResult("reconnect_max_attempts", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
-    // Stop server and DON'T restart - let reconnect attempts exhaust
-    manager.stopServer(0, io.io());
+    // Stop ALL servers - not just index 0 (startServer appends, so index grows)
+    std.debug.print("[TEST max_attempts] Stopping server...\n", .{});
+    manager.stopAll(io.io());
 
     // Wait for reconnect attempts to exhaust (2 attempts * ~100ms each)
+    std.debug.print("[TEST max_attempts] Sleeping 1000ms...\n", .{});
     io.io().sleep(.fromMilliseconds(1000), .awake) catch {};
+
+    std.debug.print("[TEST max_attempts] Checking state...\n", .{});
+    // Check BEFORE restarting server - client should be disconnected
+    const is_disconnected = !client.isConnected();
+    std.debug.print("[TEST max_attempts] isDisconnected={}\n", .{is_disconnected});
 
     // Start server again for other tests
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
@@ -273,8 +282,8 @@ fn testReconnectMaxAttempts(allocator: std.mem.Allocator, manager: *ServerManage
         return;
     };
 
-    // Client should be in closed state after exhausting attempts
-    if (!client.isConnected()) {
+    // Client should have been in closed state after exhausting attempts
+    if (is_disconnected) {
         reportResult("reconnect_max_attempts", true, "");
     } else {
         reportResult("reconnect_max_attempts", false, "should be disconnected");
@@ -291,29 +300,33 @@ fn testReconnectDisabled(allocator: std.mem.Allocator, manager: *ServerManager) 
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .reconnect = false, // DISABLED
+        .ping_interval_ms = 100, // Fast health check to detect killed server
+        .max_pings_outstanding = 1, // Detect stale quickly
     }) catch {
         reportResult("reconnect_disabled", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
-    // Stop server
-    manager.stopServer(0, io.io());
+    // Stop ALL servers (startServer appends, so index grows)
+    manager.stopAll(io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
-    // Restart server
+    // Try to flush - this triggers I/O which should fail because socket is dead
+    // and reconnect is disabled
+    const flush_result = client.flush(allocator);
+
+    // Restart server for other tests
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("reconnect_disabled", false, "restart failed");
         return;
     };
 
-    // Client should NOT automatically reconnect
     io.io().sleep(.fromMilliseconds(300), .awake) catch {};
 
-    // Try publish - should fail since reconnect is disabled
-    const pub_result = client.publish("test.disabled", "msg");
-    if (pub_result) |_| {
-        reportResult("reconnect_disabled", false, "publish should fail");
+    // Flush should have failed since reconnect is disabled
+    if (flush_result) |_| {
+        reportResult("reconnect_disabled", false, "flush should fail");
     } else |_| {
         reportResult("reconnect_disabled", true, "");
     }
@@ -466,8 +479,10 @@ fn testReconnectStatsIncrement(
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .reconnect = true,
-        .max_reconnect_attempts = 10,
+        .max_reconnect_attempts = 30, // Enough time for server restart (~1.5s)
         .reconnect_wait_ms = 100,
+        .ping_interval_ms = 100, // Fast health check to detect killed server
+        .max_pings_outstanding = 1, // Detect stale quickly
     }) catch {
         reportResult("reconnect_stats", false, "connect failed");
         return;
@@ -476,9 +491,8 @@ fn testReconnectStatsIncrement(
 
     const initial_reconnects = client.getStats().reconnects;
 
-    // Stop and restart server
-    manager.stopServer(0, io.io());
-    io.io().sleep(.fromMilliseconds(200), .awake) catch {};
+    // Stop ALL servers (startServer appends, so index grows)
+    manager.stopAll(io.io());
 
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("reconnect_stats", false, "restart failed");
@@ -489,6 +503,9 @@ fn testReconnectStatsIncrement(
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
     client.publish("stats.test", "trigger") catch {};
     client.flush(allocator) catch {};
+
+    // Allow time for stats to be updated after reconnect
+    io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
     const final_reconnects = client.getStats().reconnects;
 
@@ -549,7 +566,7 @@ fn testReconnectWithQueueGroup(
     };
     client.flush(allocator) catch {};
 
-    if (sub.tryNext()) |msg| {
+    if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
         msg.deinit(allocator);
         reportResult("reconnect_queue_group", true, "");
     } else {
@@ -714,7 +731,7 @@ fn testReconnectWildcardSub(allocator: std.mem.Allocator, manager: *ServerManage
     };
     client.flush(allocator) catch {};
 
-    if (sub.tryNext()) |msg| {
+    if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
         msg.deinit(allocator);
         reportResult("reconnect_wildcard", true, "");
     } else {

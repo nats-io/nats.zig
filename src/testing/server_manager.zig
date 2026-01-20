@@ -97,8 +97,16 @@ pub const ServerInstance = struct {
     /// Stops the server process.
     pub fn stop(self: *ServerInstance, io: Io) void {
         if (self.process) |*proc| {
+            std.debug.print("[SERVER] Killing server on port {d}...\n", .{self.config.port});
+            // kill() sends SIGKILL and cleans up, but process may still
+            // be running briefly. Wait a bit for full termination.
             proc.kill(io);
             self.process = null;
+            // Give OS time to fully terminate the process and close sockets
+            io.sleep(.fromMilliseconds(100), .awake) catch {};
+            std.debug.print("[SERVER] Server killed, waited 100ms\n", .{});
+        } else {
+            std.debug.print("[SERVER] No process to kill!\n", .{});
         }
         assert(self.process == null);
     }
@@ -136,6 +144,9 @@ pub const ServerManager = struct {
         try instance.start(allocator, io);
         try instance.waitReady(io, 5000);
 
+        // Give server extra time to fully initialize after port is open
+        io.sleep(.fromMilliseconds(500), .awake) catch {};
+
         try self.servers.append(allocator, instance);
         return &self.servers.items[self.servers.items.len - 1];
     }
@@ -145,6 +156,8 @@ pub const ServerManager = struct {
         for (self.servers.items) |*server| {
             server.stop(io);
         }
+        // Extra wait for TCP connections to fully close
+        io.sleep(.fromMilliseconds(500), .awake) catch {};
     }
 
     /// Stops a specific server by index.

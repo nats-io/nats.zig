@@ -113,7 +113,10 @@ test "new inbox buf too small" {
     defer io.deinit();
 
     var buf: [10]u8 = undefined;
-    try std.testing.expectError(error.BufferTooSmall, newInboxBuf(io.io(), &buf));
+    try std.testing.expectError(
+        error.BufferTooSmall,
+        newInboxBuf(io.io(), &buf),
+    );
 }
 
 test "inbox uniqueness" {

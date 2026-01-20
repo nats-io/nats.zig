@@ -28,6 +28,16 @@ pub const State = enum {
     /// Permanently closed.
     closed,
 
+    /// Thread-safe state read (use from io_task/callback_task).
+    pub inline fn atomicLoad(state_ptr: *const State) State {
+        return @atomicLoad(State, state_ptr, .acquire);
+    }
+
+    /// Thread-safe state write (use from io_task).
+    pub inline fn atomicStore(state_ptr: *State, new_state: State) void {
+        @atomicStore(State, state_ptr, new_state, .release);
+    }
+
     /// Returns true if the connection can send messages.
     pub fn canSend(self: State) bool {
         return self == .connected or self == .draining;

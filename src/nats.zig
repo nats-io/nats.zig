@@ -47,6 +47,10 @@ pub const Message = Client.Message;
 pub const Options = Client.Options;
 pub const Stats = Client.Stats;
 
+// Event callback types (nested in Client)
+pub const Event = Client.Event;
+pub const EventHandler = Client.EventHandler;
+
 // Convenience exports
 pub const newInbox = pubsub.newInbox;
 pub const validateSubject = pubsub.validatePublish;

@@ -16,7 +16,10 @@ const HMsgArgs = commands.HMsgArgs;
 
 /// Fast decimal parser for u64. Inlined for hot path performance.
 /// Uses wrapping math with length guard to prevent overflow.
-pub inline fn parseU64Fast(s: []const u8) error{ InvalidCharacter, Overflow }!u64 {
+pub inline fn parseU64Fast(s: []const u8) error{
+    InvalidCharacter,
+    Overflow,
+}!u64 {
     assert(s.len > 0);
     if (s.len > 20) return error.Overflow; // u64 max is 20 digits
     var v: u64 = 0;
@@ -29,7 +32,10 @@ pub inline fn parseU64Fast(s: []const u8) error{ InvalidCharacter, Overflow }!u6
 
 /// Fast decimal parser for usize. Inlined for hot path performance.
 /// Uses wrapping math with length guard to prevent overflow.
-pub inline fn parseUsizeFast(s: []const u8) error{ InvalidCharacter, Overflow }!usize {
+pub inline fn parseUsizeFast(s: []const u8) error{
+    InvalidCharacter,
+    Overflow,
+}!usize {
     assert(s.len > 0);
     if (s.len > 20) return error.Overflow; // usize max is 20 digits (64-bit)
     var v: usize = 0;
@@ -324,7 +330,8 @@ inline fn parseFullHMsgFast(
         if (sid_digits > 20) return Parser.Error.InvalidArguments; // overflow guard
         sid = sid *% 10 +% @as(u64, c - '0');
     }
-    if (sid_digits == 0 or sid == 0 or i >= args_line.len) return Parser.Error.InvalidArguments;
+    if (sid_digits == 0 or sid == 0 or i >= args_line.len)
+        return Parser.Error.InvalidArguments;
     i += 1; // skip space
 
     // Collect remaining tokens (2 or 3: [reply-to] hdr_len total_len)

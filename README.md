@@ -424,6 +424,104 @@ const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .
 
 ---
 
+## Event Callbacks
+
+Handle connection lifecycle events using the `EventHandler` pattern - a type-safe,
+Zig-idiomatic approach similar to `std.mem.Allocator`.
+
+### Basic Usage
+
+```zig
+const MyHandler = struct {
+    pub fn onConnect(self: *@This()) void {
+        _ = self;
+        std.log.info("Connected!", .{});
+    }
+
+    pub fn onDisconnect(self: *@This(), err: ?anyerror) void {
+        _ = self;
+        std.log.warn("Disconnected: {any}", .{err});
+    }
+
+    pub fn onReconnect(self: *@This()) void {
+        _ = self;
+        std.log.info("Reconnected!", .{});
+    }
+};
+
+var handler = MyHandler{};
+const client = try nats.Client.connect(allocator, io, url, .{
+    .event_handler = nats.EventHandler.init(MyHandler, &handler),
+});
+```
+
+### Accessing External State (Powerful Pattern)
+
+Handlers can reference external application state - no closures needed:
+
+```zig
+// Your application state
+const AppState = struct {
+    is_online: bool = false,
+    reconnect_count: u32 = 0,
+    last_error: ?anyerror = null,
+};
+
+// Handler with reference to external state
+const MyHandler = struct {
+    app: *AppState,  // Reference to your app state!
+
+    pub fn onConnect(self: *@This()) void {
+        self.app.is_online = true;
+    }
+
+    pub fn onDisconnect(self: *@This(), err: ?anyerror) void {
+        self.app.is_online = false;
+        self.app.last_error = err;
+    }
+
+    pub fn onReconnect(self: *@This()) void {
+        self.app.is_online = true;
+        self.app.reconnect_count += 1;
+    }
+};
+
+// Wire it up
+var app_state = AppState{};
+var handler = MyHandler{ .app = &app_state };
+
+const client = try nats.Client.connect(allocator, io, url, .{
+    .event_handler = nats.EventHandler.init(MyHandler, &handler),
+});
+
+// Now your main loop can check app_state.is_online, etc.
+```
+
+### Available Callbacks
+
+| Method | When Fired |
+|--------|------------|
+| `onConnect()` | Initial connection established |
+| `onDisconnect(?anyerror)` | Connection lost (error or clean close) |
+| `onReconnect()` | Reconnection successful |
+| `onClose()` | Connection permanently closed |
+| `onError(anyerror)` | Async error (slow consumer, etc.) |
+| `onLameDuck()` | Server entering shutdown mode |
+
+All callbacks are **optional** - only implement the ones you need. Unimplemented
+callbacks are simply not called.
+
+### Disabling Auto-Reconnect
+
+```zig
+const client = try nats.Client.connect(allocator, io, url, .{
+    .reconnect = false,  // Disable auto-reconnect
+});
+// On disconnect: onDisconnect() called, then onClose(), no reconnect attempts
+```
+
+---
+
 ## Message Lifecycle
 
 ### Memory Ownership
@@ -587,6 +685,7 @@ nats bench sub test.subject --msgs=100000
 | Pub/Sub | Complete |
 | Request/Reply | Complete |
 | Reconnection | Complete |
+| Event Callbacks | Complete |
 | JetStream | Planned |
 | Key-Value | Planned |
 | Object Store | Planned |

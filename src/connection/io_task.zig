@@ -10,6 +10,7 @@ const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
 const Client = @import("../Client.zig");
+const State = @import("state.zig").State;
 const protocol = @import("../protocol.zig");
 const dbg = @import("../dbg.zig");
 const memory = @import("../memory.zig");
@@ -40,17 +41,48 @@ inline fn drainReturnQueue(client: *Client) void {
 
 /// Main I/O task entry point. Called via io.async() from connect().
 /// Pure reader: reads socket, routes MSG, responds to PING with PONG.
-/// Exits cleanly when stream is closed (close-then-cancel pattern).
+/// Exits cleanly when stream is closed (close then cancel).
 pub fn run(client: *Client, allocator: Allocator) void {
     dbg.print("io_task: STARTED", .{});
     var loop_count: u64 = 0;
+
+    // Health check throttling (100ms interval to avoid hot-loop impact)
+    // Use iteration counter to avoid syscall every loop (~10ms at 1M loops/sec)
+    const health_check_interval_ns: u64 = 100_000_000;
+    var last_health_check_ns: u64 = 0;
+    var health_check_counter: u32 = 0;
+    const health_check_iterations: u32 = 10000;
+
     outer: while (true) {
         if (dbg.enabled) loop_count += 1;
         // Exit immediately if client is closing
+        // Non-atomic read OK - close-then-cancel pattern ensures exit via
+        // stream error or cancellation even if we see stale value briefly
         if (client.state == .closed) break :outer;
 
-        // Drain return queue at start of each iteration (reclaim memory)
-        drainReturnQueue(client);
+        // Periodic health check (detects stale connections when server killed)
+        // Only check timestamp every N iterations to avoid syscall overhead
+        health_check_counter +%= 1;
+        if (health_check_counter >= health_check_iterations) {
+            health_check_counter = 0;
+
+            const now_ns = getNowNs() catch 0;
+            if (now_ns - last_health_check_ns >= health_check_interval_ns) {
+                last_health_check_ns = now_ns;
+                if (client.checkHealthAndDetectStale()) {
+                    // Connection stale - trigger disconnect/reconnect
+                    const state = State.atomicLoad(&client.state);
+                    if (client.options.reconnect and state != .closed) {
+                        if (!handleDisconnect(client, allocator)) break :outer;
+                        continue :outer;
+                    }
+                    // Reconnect disabled - set closed state before exiting
+                    @atomicStore(State, &client.state, .closed, .release);
+                    client.pushEvent(.{ .closed = {} });
+                    break :outer;
+                }
+            }
+        }
 
         // Made-progress loop: process all available data without blocking
         var made_progress = true;
@@ -60,26 +92,34 @@ pub fn run(client: *Client, allocator: Allocator) void {
             // Drain return queue each iteration (prevents queue overflow)
             drainReturnQueue(client);
 
-            // 1. FIRST: Route buffered messages (no I/O)
+            // Route buffered messages (no I/O)
             const route_result = tryRouteBufferedMessages(client, allocator);
             if (route_result == .progress) made_progress = true;
             if (route_result == .disconnected) {
-                if (client.options.reconnect and client.state != .closed) {
+                const state = State.atomicLoad(&client.state);
+                if (client.options.reconnect and state != .closed) {
                     if (!handleDisconnect(client, allocator)) break :outer;
                     continue :outer;
                 }
+                // Reconnect disabled - set closed state before exiting
+                @atomicStore(State, &client.state, .closed, .release);
+                client.pushEvent(.{ .closed = {} });
                 break :outer;
             }
 
-            // 2. THEN: Only read if routing made no progress (empty/partial)
+            // Only read if routing made no progress (empty/partial)
             if (!made_progress) {
                 const read_result = tryFillBuffer(client);
                 if (read_result == .canceled) break :outer;
                 if (read_result == .disconnected) {
-                    if (client.options.reconnect and client.state != .closed) {
+                    const state = State.atomicLoad(&client.state);
+                    if (client.options.reconnect and state != .closed) {
                         if (!handleDisconnect(client, allocator)) break :outer;
                         continue :outer;
                     }
+                    // Reconnect disabled - set closed state before exiting
+                    @atomicStore(State, &client.state, .closed, .release);
+                    client.pushEvent(.{ .closed = {} });
                     break :outer;
                 }
                 if (read_result == .progress) made_progress = true;
@@ -115,15 +155,41 @@ const ReadResult = enum {
     canceled,
 };
 
+/// Result of poll() operation for disconnect detection.
+const PollResult = enum {
+    has_data,
+    no_data,
+    disconnected,
+};
+
 /// Poll socket for readable data with timeout (cross-platform).
-fn pollForData(fd: posix.fd_t, timeout_ms: i32) bool {
+/// Also detects disconnect via POLLHUP/POLLERR.
+/// NOTE: On Linux, POLLIN and POLLHUP can both be set when there's
+/// buffered data AND the connection is closing. We prioritize POLLHUP
+/// to detect dead connections even with buffered data.
+fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
     var fds = [_]posix.pollfd{.{
         .fd = fd,
         .events = posix.POLL.IN,
         .revents = 0,
     }};
-    const ready = posix.poll(&fds, timeout_ms) catch return false;
-    return ready > 0 and (fds[0].revents & posix.POLL.IN) != 0;
+    const ready = posix.poll(&fds, timeout_ms) catch return .no_data;
+    if (ready == 0) return .no_data; // Timeout
+
+    const has_hup = (fds[0].revents & posix.POLL.HUP) != 0;
+    const has_err = (fds[0].revents & posix.POLL.ERR) != 0;
+    const has_in = (fds[0].revents & posix.POLL.IN) != 0;
+
+    // POLLHUP/POLLERR means connection is dead - even if POLLIN is also set
+    // (buffered data from before server died), we should disconnect
+    if (has_hup or has_err) {
+        return .disconnected;
+    }
+
+    // Only return has_data if no hangup/error
+    if (has_in) return .has_data;
+
+    return .no_data;
 }
 
 /// Debug counters for tryFillBuffer
@@ -136,13 +202,19 @@ var fill_read_success: u64 = 0;
 /// Uses poll() to check for data, then fillMore() to read.
 fn tryFillBuffer(client: *Client) ReadResult {
     if (dbg.enabled) fill_calls += 1;
+    // Non-atomic read OK - just for faster exit, stream close handles it
     if (client.state == .closed) return .canceled;
 
     const reader = &client.reader.interface;
 
-    // Cross-platform poll to check if socket has data
+    // Cross-platform poll to check if socket has data or disconnect
     const fd = client.stream.socket.handle;
-    if (!pollForData(fd, POLL_TIMEOUT_MS)) {
+    const poll_result = pollForData(fd, POLL_TIMEOUT_MS);
+
+    if (poll_result == .disconnected) {
+        return .disconnected; // POLLHUP/POLLERR - server killed
+    }
+    if (poll_result == .no_data) {
         if (dbg.enabled) fill_poll_timeouts += 1;
         return .no_progress; // Timeout or no data
     }
@@ -150,6 +222,10 @@ fn tryFillBuffer(client: *Client) ReadResult {
     // Track buffer size before read
     const before = reader.buffered().len;
     if (dbg.enabled) fill_buffered_hits += before;
+
+    // Re-check state before read (race with deinit closing socket)
+    // Non-atomic read OK - just for faster exit
+    if (client.state == .closed) return .canceled;
 
     // Socket has data → fillMore() will return immediately
     reader.fillMore() catch |err| {
@@ -180,6 +256,7 @@ fn tryRouteBufferedMessages(client: *Client, allocator: Allocator) ReadResult {
     const reader = &client.reader.interface;
     const slab = &client.tiered_slab;
 
+    // Non-atomic read OK - just for faster exit, stream close handles it
     if (client.state == .closed) return .canceled;
 
     // Check what's already buffered (no I/O)
@@ -220,6 +297,7 @@ fn tryRouteBufferedMessages(client: *Client, allocator: Allocator) ReadResult {
                 },
                 .pong => {
                     // Server responded to our PING (keepalive)
+                    dbg.print("Got PONG, resetting pings_outstanding", .{});
                     client.pings_outstanding = 0;
                     client.last_pong_received_ns = getNowNs() catch 0;
                 },
@@ -229,6 +307,11 @@ fn tryRouteBufferedMessages(client: *Client, allocator: Allocator) ReadResult {
                     }
                     client.server_info = info;
                     client.max_payload = info.max_payload;
+                    // TODO: Check for lame duck mode when ServerInfo parses ldm
+                    // if (info.lame_duck_mode and !client.lame_duck_notified) {
+                    //     client.lame_duck_notified = true;
+                    //     client.pushEvent(.{ .lame_duck = {} });
+                    // }
                 },
                 .ok => {},
                 .err => {},
@@ -294,6 +377,10 @@ inline fn routeMessageToSub(
     sub.pushMessage(msg) catch {
         sub.dropped_msgs += 1;
         slab.free(buf);
+        // Push slow_consumer event (only on first drop to avoid flood)
+        if (sub.dropped_msgs == 1) {
+            client.pushEvent(.{ .slow_consumer = .{ .sid = args.sid } });
+        }
     };
     sub.received_msgs += 1;
 }
@@ -349,6 +436,10 @@ inline fn routeHMessageToSub(
     sub.pushMessage(msg) catch {
         sub.dropped_msgs += 1;
         slab.free(buf);
+        // Push slow_consumer event (only on first drop to avoid flood)
+        if (sub.dropped_msgs == 1) {
+            client.pushEvent(.{ .slow_consumer = .{ .sid = args.sid } });
+        }
     };
     sub.received_msgs += 1;
 }
@@ -356,7 +447,10 @@ inline fn routeHMessageToSub(
 /// Handle disconnect - backup subs, attempt reconnection, restore subs.
 /// Returns true if reconnected successfully, false if should exit task.
 fn handleDisconnect(client: *Client, allocator: Allocator) bool {
-    client.state = .disconnected;
+    @atomicStore(State, &client.state, .disconnected, .release);
+
+    // Push disconnected event (no specific error captured at this level)
+    client.pushEvent(.{ .disconnected = .{ .err = null } });
 
     // Backup subscriptions before reconnect
     client.backupSubscriptions();
@@ -367,10 +461,14 @@ fn handleDisconnect(client: *Client, allocator: Allocator) bool {
         client.restoreSubscriptions() catch {
             dbg.print("Failed to restore subscriptions after reconnect", .{});
         };
+
+        // Push reconnected event
+        client.pushEvent(.{ .reconnected = {} });
         return true;
     } else {
         // Reconnection failed or canceled
-        client.state = .closed;
+        @atomicStore(State, &client.state, .closed, .release);
+        client.pushEvent(.{ .closed = {} });
         return false;
     }
 }
@@ -378,7 +476,7 @@ fn handleDisconnect(client: *Client, allocator: Allocator) bool {
 /// Attempt reconnection loop with backoff.
 /// Returns true if reconnected, false if failed or canceled.
 fn tryReconnectLoop(client: *Client, allocator: Allocator) bool {
-    client.state = .reconnecting;
+    @atomicStore(State, &client.state, .reconnecting, .release);
     const max_attempts = if (client.options.max_reconnect_attempts == 0)
         std.math.maxInt(u32)
     else
@@ -402,7 +500,7 @@ fn tryReconnectLoop(client: *Client, allocator: Allocator) bool {
         // Try each server in pool
         for (client.server_pool.servers[0..client.server_pool.count]) |*server| {
             client.tryConnect(allocator, server) catch continue;
-            client.state = .connected;
+            @atomicStore(State, &client.state, .connected, .release);
             client.stats.reconnects += 1;
             client.reconnect_attempt = 0;
             return true;

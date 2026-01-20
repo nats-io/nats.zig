@@ -202,6 +202,28 @@ pub fn build(b: *std.Build) void {
     run_polling.dependOn(&polling_cmd.step);
     polling_cmd.step.dependOn(b.getInstallStep());
 
+    // 9. Event Callbacks example (connection lifecycle)
+    const events_exe = b.addExecutable(.{
+        .name = "example-events",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/examples/events.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(events_exe);
+
+    const run_events = b.step(
+        "run-events",
+        "Run event callbacks (connection lifecycle) example",
+    );
+    const events_cmd = b.addRunArtifact(events_exe);
+    run_events.dependOn(&events_cmd.step);
+    events_cmd.step.dependOn(b.getInstallStep());
+
     const fmt = b.addFmt(.{
         .paths = &.{ "src", "build.zig" },
         .check = false,
