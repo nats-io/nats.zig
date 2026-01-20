@@ -116,3 +116,16 @@ pub const Protocol = struct {
     /// Client version string.
     pub const version: []const u8 = "0.1.0";
 };
+
+/// Spin/yield loop tuning constants.
+pub const Spin = struct {
+    /// Spin iterations before yielding in subscription next() loop.
+    /// After this many spins, yields to I/O runtime for cancellation support.
+    pub const max_spins: u32 = 4096;
+    /// Loop iterations between health check timestamp reads in io_task.
+    /// Avoids syscall overhead by only checking time periodically.
+    pub const health_check_iterations: u32 = 10000;
+    /// Loop iterations between timeout checks in nextWithTimeout().
+    /// Reduces syscalls while maintaining reasonable timeout granularity.
+    pub const timeout_check_iterations: u32 = 10000;
+};

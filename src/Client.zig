@@ -68,7 +68,11 @@ pub const Message = struct {
             // backing_buf always comes from slab, return_queue must be set
             assert(self.return_queue != null);
             const rq = self.return_queue.?;
-            // Yield-wait until push succeeds - buffer MUST return to slab
+            // Return buffer to slab via return_queue. The io_task drains this
+            // queue on every iteration (io_task.zig:93), so push almost always
+            // succeeds immediately. The while loop is a safety net for the rare
+            // case where the queue is momentarily full - yield allows io_task
+            // to drain before retry.
             while (!rq.push(buf)) {
                 std.Thread.yield() catch {};
             }
@@ -160,17 +164,34 @@ pub const Options = struct {
 };
 
 /// Connection statistics (Go client parity).
+/// Thread ownership: io_task exclusively writes msgs_in/bytes_in,
+/// main thread exclusively writes msgs_out/bytes_out. No concurrent
+/// modifications to same counter, so atomics are not needed.
 pub const Stats = struct {
-    /// Total messages received.
+    /// Total messages received (written by io_task only).
     msgs_in: u64 = 0,
-    /// Total messages sent.
+    /// Total messages sent (written by main thread only).
     msgs_out: u64 = 0,
-    /// Total bytes received.
+    /// Total bytes received (written by io_task only).
     bytes_in: u64 = 0,
-    /// Total bytes sent.
+    /// Total bytes sent (written by main thread only).
     bytes_out: u64 = 0,
-    /// Number of reconnects.
+    /// Number of reconnects (written by io_task only).
     reconnects: u32 = 0,
+};
+
+/// Debug counters for io_task buffer operations.
+/// Only incremented when dbg.enabled (debug builds).
+/// Written exclusively by io_task thread, safe to read after deinit.
+pub const IoTaskStats = struct {
+    /// Number of tryFillBuffer() calls.
+    fill_calls: u64 = 0,
+    /// Cumulative bytes already buffered (before read).
+    fill_buffered_hits: u64 = 0,
+    /// Poll timeouts (no data available).
+    fill_poll_timeouts: u64 = 0,
+    /// Successful socket reads.
+    fill_read_success: u64 = 0,
 };
 
 /// Subscription backup for restoration after reconnect.
@@ -342,10 +363,15 @@ pending_buffer: ?[]u8 = null,
 pending_buffer_pos: usize = 0,
 pending_buffer_capacity: usize = 0,
 
-// PING/PONG health check state
-last_ping_sent_ns: u64 = 0,
-last_pong_received_ns: u64 = 0,
-pings_outstanding: u8 = 0,
+// PING/PONG health check state (atomics for cross-thread access)
+// Main thread reads during health check (~100ms), io_task writes on PONG.
+// Uses monotonic ordering - exact timing not critical, just eventual visibility.
+last_ping_sent_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+last_pong_received_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+pings_outstanding: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
+
+// Debug counters for io_task (only used when dbg.enabled)
+io_task_stats: IoTaskStats = .{},
 
 // Background I/O task infrastructure
 write_mutex: Io.Mutex = .init,
@@ -408,10 +434,11 @@ pub fn connect(
     client.pending_buffer_pos = 0;
     client.pending_buffer_capacity = 0;
 
-    // Initialize health check state
-    client.last_ping_sent_ns = 0;
-    client.last_pong_received_ns = 0;
-    client.pings_outstanding = 0;
+    // Initialize health check state (atomics)
+    client.last_ping_sent_ns.raw = 0;
+    client.last_pong_received_ns.raw = 0;
+    client.pings_outstanding.raw = 0;
+    client.io_task_stats = .{};
 
     // Initialize background I/O task infrastructure
     client.write_mutex = .init;
@@ -546,10 +573,10 @@ pub fn connect(
     // Initialize pending buffer for reconnect
     try client.initPendingBuffer(allocator);
 
-    // Initialize health check timestamps
+    // Initialize health check timestamps (atomics)
     const now_ns = getNowNs() catch 0;
-    client.last_ping_sent_ns = now_ns;
-    client.last_pong_received_ns = now_ns;
+    client.last_ping_sent_ns.store(now_ns, .monotonic);
+    client.last_pong_received_ns.store(now_ns, .monotonic);
 
     // Start background I/O task for message routing and keepalive
     // MUST use concurrent() for true parallelism - async() may not schedule
@@ -662,10 +689,8 @@ fn handshake(
     const reader = &self.reader.interface;
     const writer = &self.writer.interface;
 
-    // Read INFO from server
-    const info_data = reader.peekGreedy(1) catch {
-        return error.ConnectionFailed;
-    };
+    // Read INFO from server with connection timeout
+    const info_data = try self.peekWithTimeout(reader, opts.connect_timeout_ns);
 
     var consumed: usize = 0;
     const cmd = self.parser.parse(allocator, info_data, &consumed) catch {
@@ -761,6 +786,54 @@ fn checkAuthRejection(self: *Client) !void {
         self.state = .closed;
         return error.AuthorizationViolation;
     }
+}
+
+/// Reads from socket with connection timeout using io.select().
+/// Returns data or error.ConnectionTimeout if timeout expires.
+fn peekWithTimeout(
+    self: *Client,
+    reader: *Io.Reader,
+    timeout_ns: u64,
+) ![]u8 {
+    assert(timeout_ns > 0);
+
+    // Race read against timeout using io.select()
+    var read_future = self.io.async(peekGreedyAsync, .{ reader, self.io });
+    var timeout_future = self.io.async(sleepNs, .{ self.io, timeout_ns });
+
+    // Winner-tracking pattern to avoid double-free
+    var winner: enum { none, read, timeout } = .none;
+
+    defer if (winner != .read) {
+        if (read_future.cancel(self.io)) |_| {} else |_| {}
+    };
+    defer if (winner != .timeout) {
+        timeout_future.cancel(self.io);
+    };
+
+    const result = self.io.select(.{
+        .read = &read_future,
+        .timeout = &timeout_future,
+    }) catch {
+        return error.ConnectionFailed;
+    };
+
+    switch (result) {
+        .read => |read_result| {
+            winner = .read;
+            return read_result catch error.ConnectionFailed;
+        },
+        .timeout => {
+            winner = .timeout;
+            return error.ConnectionTimeout;
+        },
+    }
+}
+
+/// Async wrapper for peekGreedy (used with io.async).
+fn peekGreedyAsync(reader: *Io.Reader, io: Io) ![]u8 {
+    _ = io;
+    return reader.peekGreedy(1);
 }
 
 /// Cleanup subscription resources after failed registration.
@@ -1040,7 +1113,7 @@ pub fn request(
         .{ sub, allocator, self.io },
     );
     var timeout_future = self.io.async(
-        sleepForRequest,
+        sleepMs,
         .{ self.io, timeout_ms },
     );
 
@@ -1081,9 +1154,14 @@ pub fn request(
     }
 }
 
-/// Helper for request timeout.
-fn sleepForRequest(io: Io, timeout_ms: u32) void {
+/// Sleep helper for timeouts (milliseconds).
+fn sleepMs(io: Io, timeout_ms: u32) void {
     io.sleep(.fromMilliseconds(timeout_ms), .awake) catch {};
+}
+
+/// Helper for connection timeout (nanoseconds).
+fn sleepNs(io: Io, timeout_ns: u64) void {
+    io.sleep(.fromNanoseconds(timeout_ns), .awake) catch {};
 }
 
 /// Gracefully drains subscriptions and closes the connection.
@@ -1295,15 +1373,17 @@ fn sendPing(self: *Client) !void {
     writer.flush() catch {
         return error.WriteFailed;
     };
-    self.last_ping_sent_ns = getNowNs() catch self.last_ping_sent_ns;
-    self.pings_outstanding += 1;
-    dbg.pingPong("PING_SENT", self.pings_outstanding);
+    const now = getNowNs() catch self.last_ping_sent_ns.load(.monotonic);
+    self.last_ping_sent_ns.store(now, .monotonic);
+    const new_outstanding = self.pings_outstanding.fetchAdd(1, .monotonic) + 1;
+    dbg.pingPong("PING_SENT", new_outstanding);
 }
 
 /// Handles PONG response from server.
 fn handlePong(self: *Client) void {
-    self.last_pong_received_ns = getNowNs() catch self.last_pong_received_ns;
-    self.pings_outstanding = 0;
+    const now = getNowNs() catch self.last_pong_received_ns.load(.monotonic);
+    self.last_pong_received_ns.store(now, .monotonic);
+    self.pings_outstanding.store(0, .monotonic);
     dbg.pingPong("PONG_RECEIVED", 0);
 }
 
@@ -1318,19 +1398,21 @@ pub fn checkHealthAndDetectStale(self: *Client) bool {
     const interval_ns: u64 = @as(u64, self.options.ping_interval_ms) * 1_000_000;
 
     // Check if too many PINGs outstanding (connection stale)
-    if (self.pings_outstanding >= self.options.max_pings_outstanding) {
-        std.debug.print(
-            "[HEALTH] STALE: pings_outstanding={d} >= max={d}\n",
-            .{ self.pings_outstanding, self.options.max_pings_outstanding },
+    const outstanding = self.pings_outstanding.load(.monotonic);
+    if (outstanding >= self.options.max_pings_outstanding) {
+        dbg.print(
+            "[HEALTH] STALE: pings_outstanding={d} >= max={d}",
+            .{ outstanding, self.options.max_pings_outstanding },
         );
         return true; // Stale - caller should trigger disconnect
     }
 
     // Check if it's time to send PING
-    if (now_ns - self.last_ping_sent_ns >= interval_ns) {
-        std.debug.print("[HEALTH] Sending PING, pings_outstanding={d}\n", .{self.pings_outstanding});
+    const last_ping = self.last_ping_sent_ns.load(.monotonic);
+    if (now_ns - last_ping >= interval_ns) {
+        dbg.print("[HEALTH] Sending PING, pings_outstanding={d}", .{outstanding});
         self.sendPing() catch |err| {
-            std.debug.print("[HEALTH] PING failed: {s}\n", .{@errorName(err)});
+            dbg.print("[HEALTH] PING failed: {s}", .{@errorName(err)});
             // Write failure indicates disconnection
             if (err == error.BrokenPipe or err == error.ConnectionResetByPeer) {
                 return true;
@@ -1633,11 +1715,11 @@ pub fn tryConnect(
     // Perform handshake
     try self.handshake(allocator, self.options, parsed);
 
-    // Initialize health check timestamps
+    // Initialize health check timestamps (atomics)
     const now_ns = getNowNs() catch 0;
-    self.last_ping_sent_ns = now_ns;
-    self.last_pong_received_ns = now_ns;
-    self.pings_outstanding = 0;
+    self.last_ping_sent_ns.store(now_ns, .monotonic);
+    self.last_pong_received_ns.store(now_ns, .monotonic);
+    self.pings_outstanding.store(0, .monotonic);
 
     dbg.reconnectEvent(
         "CONNECTED",
@@ -1825,7 +1907,6 @@ pub const Subscription = struct {
 
         // Hybrid spin-yield: spin for fast path, yield for cancellation support
         var spin_count: u32 = 0;
-        const max_spins: u32 = 4096;
 
         while (true) {
             if (self.queue.pop()) |msg| return msg;
@@ -1834,7 +1915,7 @@ pub const Subscription = struct {
             }
 
             spin_count += 1;
-            if (spin_count < max_spins) {
+            if (spin_count < defaults.Spin.max_spins) {
                 std.atomic.spinLoopHint();
             } else {
                 // Yield to I/O runtime - enables cancellation
@@ -1858,7 +1939,6 @@ pub const Subscription = struct {
 
         // Hybrid spin-yield: spin for fast path, yield for cancellation support
         var spin_count: u32 = 0;
-        const max_spins: u32 = 4096;
 
         while (true) {
             const count = self.queue.popBatch(buf);
@@ -1868,7 +1948,7 @@ pub const Subscription = struct {
             }
 
             spin_count += 1;
-            if (spin_count < max_spins) {
+            if (spin_count < defaults.Spin.max_spins) {
                 std.atomic.spinLoopHint();
             } else {
                 // Yield to I/O runtime - enables cancellation
@@ -1916,9 +1996,9 @@ pub const Subscription = struct {
                 return error.Closed;
             }
 
-            // Check timeout only every 10000 iterations to reduce syscalls
+            // Check timeout only periodically to reduce syscalls
             check_counter +%= 1;
-            if (check_counter >= 10000) {
+            if (check_counter >= defaults.Spin.timeout_check_iterations) {
                 check_counter = 0;
                 const now = std.time.Instant.now() catch return null;
                 if (now.since(start) >= timeout_ns) return null;

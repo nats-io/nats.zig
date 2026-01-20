@@ -5,6 +5,7 @@
 //! Falls back to provided allocator for oversized allocations.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const defaults = @import("../defaults.zig");
@@ -96,14 +97,31 @@ pub const Slab = struct {
     }
 
     /// O(1) deallocation - push to embedded free list.
+    /// Debug builds detect double-free by walking the free list.
     pub inline fn free(self: *Slab, ptr: [*]u8) void {
         const idx = self.ptrToIndex(ptr);
         assert(idx < self.slice_count);
+
+        // Debug: detect double-free by checking if already in free list
+        if (builtin.mode == .Debug) {
+            assert(!self.isInFreeList(idx));
+        }
 
         // Write current head into slice, update head
         @as(*u32, @ptrCast(@alignCast(ptr))).* = self.free_head;
         self.free_head = idx;
         self.alloc_count -= 1;
+    }
+
+    /// Debug helper: check if index is already in free list (O(n)).
+    fn isInFreeList(self: *Slab, target_idx: u32) bool {
+        var current = self.free_head;
+        while (current != NONE) {
+            if (current == target_idx) return true;
+            const slice = self.getSliceByIndex(current);
+            current = @as(*u32, @ptrCast(@alignCast(slice.ptr))).*;
+        }
+        return false;
     }
 
     inline fn getSliceByIndex(self: *Slab, idx: u32) []u8 {

@@ -15,6 +15,7 @@ const protocol = @import("../protocol.zig");
 const dbg = @import("../dbg.zig");
 const memory = @import("../memory.zig");
 const TieredSlab = memory.TieredSlab;
+const defaults = @import("../defaults.zig");
 
 const Message = Client.Message;
 
@@ -51,7 +52,6 @@ pub fn run(client: *Client, allocator: Allocator) void {
     const health_check_interval_ns: u64 = 100_000_000;
     var last_health_check_ns: u64 = 0;
     var health_check_counter: u32 = 0;
-    const health_check_iterations: u32 = 10000;
 
     outer: while (true) {
         if (dbg.enabled) loop_count += 1;
@@ -63,7 +63,7 @@ pub fn run(client: *Client, allocator: Allocator) void {
         // Periodic health check (detects stale connections when server killed)
         // Only check timestamp every N iterations to avoid syscall overhead
         health_check_counter +%= 1;
-        if (health_check_counter >= health_check_iterations) {
+        if (health_check_counter >= defaults.Spin.health_check_iterations) {
             health_check_counter = 0;
 
             const now_ns = getNowNs() catch 0;
@@ -133,15 +133,16 @@ pub fn run(client: *Client, allocator: Allocator) void {
         };
     }
     if (dbg.enabled) {
+        const stats = &client.io_task_stats;
         dbg.print(
             "io_task: EXITED loops={d} fill_calls={d} buffered_hits={d} " ++
                 "poll_timeouts={d} read_ok={d}",
             .{
                 loop_count,
-                fill_calls,
-                fill_buffered_hits,
-                fill_poll_timeouts,
-                fill_read_success,
+                stats.fill_calls,
+                stats.fill_buffered_hits,
+                stats.fill_poll_timeouts,
+                stats.fill_read_success,
             },
         );
     }
@@ -184,16 +185,11 @@ inline fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
     return .no_data;
 }
 
-/// Debug counters for tryFillBuffer
-var fill_calls: u64 = 0;
-var fill_buffered_hits: u64 = 0;
-var fill_poll_timeouts: u64 = 0;
-var fill_read_success: u64 = 0;
 
 /// Try to fill buffer without blocking forever (cross-platform).
 /// Uses poll() to check for data, then fillMore() to read.
 inline fn tryFillBuffer(client: *Client) ReadResult {
-    if (dbg.enabled) fill_calls += 1;
+    if (dbg.enabled) client.io_task_stats.fill_calls += 1;
     // Non-atomic read OK - just for faster exit, stream close handles it
     if (client.state == .closed) return .canceled;
 
@@ -207,13 +203,13 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
         return .disconnected; // POLLHUP/POLLERR - server killed
     }
     if (poll_result == .no_data) {
-        if (dbg.enabled) fill_poll_timeouts += 1;
+        if (dbg.enabled) client.io_task_stats.fill_poll_timeouts += 1;
         return .no_progress; // Timeout or no data
     }
 
     // Track buffer size before read
     const before = reader.buffered().len;
-    if (dbg.enabled) fill_buffered_hits += before;
+    if (dbg.enabled) client.io_task_stats.fill_buffered_hits += before;
 
     // Re-check state before read (race with deinit closing socket)
     // Non-atomic read OK - just for faster exit
@@ -235,7 +231,7 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
     // Only report progress if we actually read new data
     const after = reader.buffered().len;
     if (after > before) {
-        if (dbg.enabled) fill_read_success += 1;
+        if (dbg.enabled) client.io_task_stats.fill_read_success += 1;
         return .progress;
     }
     return .no_progress;
@@ -267,7 +263,13 @@ inline fn tryRouteBufferedMessages(
             data[offset..],
             &consumed,
         ) catch {
-            offset += 1;
+            // Scan to next CRLF for recovery (skip corrupted data)
+            // Uses SIMD on supported platforms - faster than byte-by-byte
+            if (std.mem.indexOf(u8, data[offset..], "\r\n")) |crlf_pos| {
+                offset += crlf_pos + 2;
+            } else {
+                break; // No CRLF found, need more data
+            }
             continue;
         };
 
@@ -293,8 +295,9 @@ inline fn tryRouteBufferedMessages(
                 .pong => {
                     // Server responded to our PING (keepalive)
                     dbg.print("Got PONG, resetting pings_outstanding", .{});
-                    client.pings_outstanding = 0;
-                    client.last_pong_received_ns = getNowNs() catch 0;
+                    client.pings_outstanding.store(0, .monotonic);
+                    const now = getNowNs() catch 0;
+                    client.last_pong_received_ns.store(now, .monotonic);
                 },
                 .info => |info| {
                     if (client.server_info) |*old| {

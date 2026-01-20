@@ -211,7 +211,8 @@ inline fn parseFullMsgFast(
         const c = args_line[i];
         if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
         sid_digits += 1;
-        if (sid_digits > 20) return Parser.Error.InvalidArguments;
+        // u64 max is 20 digits; reject at >= 20 to prevent overflow
+        if (sid_digits >= 20) return Parser.Error.InvalidArguments;
         sid = sid *% 10 +% @as(u64, c - '0');
     }
     if (sid_digits == 0 or sid == 0) return Parser.Error.InvalidArguments;
@@ -317,7 +318,8 @@ inline fn parseFullHMsgFast(
         const c = args_line[i];
         if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
         sid_digits += 1;
-        if (sid_digits > 20) return Parser.Error.InvalidArguments;
+        // u64 max is 20 digits; reject at >= 20 to prevent overflow
+        if (sid_digits >= 20) return Parser.Error.InvalidArguments;
         sid = sid *% 10 +% @as(u64, c - '0');
     }
     if (sid_digits == 0 or sid == 0 or i >= args_line.len)
