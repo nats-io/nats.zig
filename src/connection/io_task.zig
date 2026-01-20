@@ -89,8 +89,8 @@ pub fn run(client: *Client, allocator: Allocator) void {
         while (made_progress) {
             made_progress = false;
 
-            // Drain return queue each iteration (prevents queue overflow)
-            drainReturnQueue(client);
+            // Drain return queue only if non-empty (prevents queue overflow)
+            if (client.return_queue.len() > 0) drainReturnQueue(client);
 
             // Route buffered messages (no I/O)
             const route_result = tryRouteBufferedMessages(client, allocator);
@@ -167,7 +167,7 @@ const PollResult = enum {
 /// NOTE: On Linux, POLLIN and POLLHUP can both be set when there's
 /// buffered data AND the connection is closing. We prioritize POLLHUP
 /// to detect dead connections even with buffered data.
-fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
+inline fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
     var fds = [_]posix.pollfd{.{
         .fd = fd,
         .events = posix.POLL.IN,
@@ -176,19 +176,11 @@ fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
     const ready = posix.poll(&fds, timeout_ms) catch return .no_data;
     if (ready == 0) return .no_data; // Timeout
 
-    const has_hup = (fds[0].revents & posix.POLL.HUP) != 0;
-    const has_err = (fds[0].revents & posix.POLL.ERR) != 0;
-    const has_in = (fds[0].revents & posix.POLL.IN) != 0;
-
+    // Single load, combined checks (avoid 3 separate loads)
+    const revents = fds[0].revents;
     // POLLHUP/POLLERR means connection is dead - even if POLLIN is also set
-    // (buffered data from before server died), we should disconnect
-    if (has_hup or has_err) {
-        return .disconnected;
-    }
-
-    // Only return has_data if no hangup/error
-    if (has_in) return .has_data;
-
+    if ((revents & (posix.POLL.HUP | posix.POLL.ERR)) != 0) return .disconnected;
+    if ((revents & posix.POLL.IN) != 0) return .has_data;
     return .no_data;
 }
 
@@ -200,7 +192,7 @@ var fill_read_success: u64 = 0;
 
 /// Try to fill buffer without blocking forever (cross-platform).
 /// Uses poll() to check for data, then fillMore() to read.
-fn tryFillBuffer(client: *Client) ReadResult {
+inline fn tryFillBuffer(client: *Client) ReadResult {
     if (dbg.enabled) fill_calls += 1;
     // Non-atomic read OK - just for faster exit, stream close handles it
     if (client.state == .closed) return .canceled;
@@ -252,7 +244,10 @@ fn tryFillBuffer(client: *Client) ReadResult {
 /// Route buffered messages (NO I/O - just process buffer).
 /// Handles: MSG → route to queue, PING → write PONG.
 /// Uses lock-free SpscQueue - no yields needed.
-fn tryRouteBufferedMessages(client: *Client, allocator: Allocator) ReadResult {
+inline fn tryRouteBufferedMessages(
+    client: *Client,
+    allocator: Allocator,
+) ReadResult {
     const reader = &client.reader.interface;
     const slab = &client.tiered_slab;
 
@@ -347,20 +342,24 @@ inline fn routeMessageToSub(
         return;
     };
 
-    // Copy data into backing buffer
-    var offset: usize = 0;
-    @memcpy(buf[offset..][0..args.subject.len], args.subject);
-    const subject = buf[offset..][0..args.subject.len];
-    offset += args.subject.len;
+    // Copy all data into backing buffer first (better CPU pipelining)
+    const subj_len = args.subject.len;
+    const payload_len = args.payload.len;
+    const reply_len = if (args.reply_to) |rt| rt.len else 0;
 
-    @memcpy(buf[offset..][0..args.payload.len], args.payload);
-    const data_slice = buf[offset..][0..args.payload.len];
-    offset += args.payload.len;
+    @memcpy(buf[0..subj_len], args.subject);
+    @memcpy(buf[subj_len..][0..payload_len], args.payload);
+    if (args.reply_to) |rt| {
+        @memcpy(buf[subj_len + payload_len ..][0..reply_len], rt);
+    }
 
-    const reply_to: ?[]const u8 = if (args.reply_to) |rt| blk: {
-        @memcpy(buf[offset..][0..rt.len], rt);
-        break :blk buf[offset..][0..rt.len];
-    } else null;
+    // Create slices after all copies complete
+    const subject = buf[0..subj_len];
+    const data_slice = buf[subj_len..][0..payload_len];
+    const reply_to: ?[]const u8 = if (reply_len > 0)
+        buf[subj_len + payload_len ..][0..reply_len]
+    else
+        null;
 
     const msg = Message{
         .subject = subject,
@@ -402,24 +401,27 @@ inline fn routeHMessageToSub(
         return;
     };
 
-    // Copy data into backing buffer
-    var offset: usize = 0;
-    @memcpy(buf[offset..][0..args.subject.len], args.subject);
-    const subject = buf[offset..][0..args.subject.len];
-    offset += args.subject.len;
+    // Copy all data into backing buffer first (better CPU pipelining)
+    const subj_len = args.subject.len;
+    const data_len = args.payload.len;
+    const hdr_len = args.headers.len;
+    const reply_len = if (args.reply_to) |rt| rt.len else 0;
 
-    @memcpy(buf[offset..][0..args.payload.len], args.payload);
-    const data_slice = buf[offset..][0..args.payload.len];
-    offset += args.payload.len;
+    @memcpy(buf[0..subj_len], args.subject);
+    @memcpy(buf[subj_len..][0..data_len], args.payload);
+    @memcpy(buf[subj_len + data_len ..][0..hdr_len], args.headers);
+    if (args.reply_to) |rt| {
+        @memcpy(buf[subj_len + data_len + hdr_len ..][0..reply_len], rt);
+    }
 
-    @memcpy(buf[offset..][0..args.headers.len], args.headers);
-    const headers = buf[offset..][0..args.headers.len];
-    offset += args.headers.len;
-
-    const reply_to: ?[]const u8 = if (args.reply_to) |rt| blk: {
-        @memcpy(buf[offset..][0..rt.len], rt);
-        break :blk buf[offset..][0..rt.len];
-    } else null;
+    // Create slices after all copies complete
+    const subject = buf[0..subj_len];
+    const data_slice = buf[subj_len..][0..data_len];
+    const headers = buf[subj_len + data_len ..][0..hdr_len];
+    const reply_to: ?[]const u8 = if (reply_len > 0)
+        buf[subj_len + data_len + hdr_len ..][0..reply_len]
+    else
+        null;
 
     const msg = Message{
         .subject = subject,

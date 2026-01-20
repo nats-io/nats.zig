@@ -18,8 +18,10 @@ pub fn SpscQueue(comptime T: type) type {
         const Self = @This();
 
         /// Initialize queue with pre-allocated buffer.
+        /// Buffer length MUST be a power of 2 for bitwise AND optimization.
         pub fn init(buffer: []T) Self {
             assert(buffer.len > 0);
+            assert(std.math.isPowerOfTwo(buffer.len));
             return .{
                 .buffer = buffer,
                 .capacity = buffer.len,
@@ -37,7 +39,9 @@ pub fn SpscQueue(comptime T: type) type {
             // Full check: head has wrapped around to tail
             if (head -% tail >= self.capacity) return false;
 
-            self.buffer[head % self.capacity] = item;
+            // Bitwise AND is faster than modulo (power-of-2 capacity)
+            const mask = self.capacity - 1;
+            self.buffer[head & mask] = item;
             // Release ensures item write is visible before head increment
             self.head.store(head +% 1, .release);
             return true;
@@ -52,7 +56,9 @@ pub fn SpscQueue(comptime T: type) type {
             // Empty check
             if (tail == head) return null;
 
-            const item = self.buffer[tail % self.capacity];
+            // Bitwise AND is faster than modulo (power-of-2 capacity)
+            const mask = self.capacity - 1;
+            const item = self.buffer[tail & mask];
             // Release ensures item read completes before tail increment
             self.tail.store(tail +% 1, .release);
             return item;
@@ -67,9 +73,11 @@ pub fn SpscQueue(comptime T: type) type {
             const available = head -% tail;
             if (available == 0) return 0;
 
+            // Bitwise AND is faster than modulo (power-of-2 capacity)
+            const mask = self.capacity - 1;
             const count = @min(available, out.len);
             for (0..count) |i| {
-                out[i] = self.buffer[(tail +% i) % self.capacity];
+                out[i] = self.buffer[(tail +% i) & mask];
             }
             self.tail.store(tail +% count, .release);
             return count;

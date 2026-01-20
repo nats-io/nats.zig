@@ -92,96 +92,74 @@ pub const Parser = struct {
 
         assert(line.len > 0);
 
-        // First-byte dispatch for fast command detection
-        switch (line[0]) {
-            'M' => {
-                // MSG <subject> <sid> [reply-to] <size>
-                if (line.len >= 4 and line[1] == 'S' and
-                    line[2] == 'G' and line[3] == ' ')
-                {
-                    return parseFullMsgFast(
-                        data,
-                        line[4..],
-                        header_len,
-                        consumed,
-                    );
-                }
-                return Error.InvalidCommand;
-            },
-            'H' => {
-                // HMSG <subject> <sid> [reply-to] <hdr_len> <total_len>
-                if (line.len >= 5 and line[1] == 'M' and line[2] == 'S' and
-                    line[3] == 'G' and line[4] == ' ')
-                {
-                    return parseFullHMsgFast(
-                        data,
-                        line[5..],
-                        header_len,
-                        consumed,
-                    );
-                }
-                return Error.InvalidCommand;
-            },
-            'P' => {
-                // PING or PONG
-                if (line.len == 4) {
-                    if (line[1] == 'I' and line[2] == 'N' and line[3] == 'G') {
-                        consumed.* = header_len;
-                        return .ping;
-                    }
-                    if (line[1] == 'O' and line[2] == 'N' and line[3] == 'G') {
-                        consumed.* = header_len;
-                        return .pong;
-                    }
-                }
-                return Error.InvalidCommand;
-            },
-            '+' => {
-                // +OK
-                if (line.len == 3 and line[1] == 'O' and line[2] == 'K') {
-                    consumed.* = header_len;
-                    return .ok;
-                }
-                return Error.InvalidCommand;
-            },
-            '-' => {
-                // -ERR <message>
-                if (line.len >= 5 and line[1] == 'E' and line[2] == 'R' and
-                    line[3] == 'R' and line[4] == ' ')
-                {
-                    consumed.* = header_len;
-                    return .{ .err = line[5..] };
-                }
-                return Error.InvalidCommand;
-            },
-            'I' => {
-                // INFO <json>
-                if (line.len >= 5 and line[1] == 'N' and line[2] == 'F' and
-                    line[3] == 'O' and line[4] == ' ')
-                {
-                    const json_data = line[5..];
-                    var parsed = std.json.parseFromSlice(
-                        RawServerInfo,
-                        allocator,
-                        json_data,
-                        .{ .ignore_unknown_fields = true },
-                    ) catch return Error.InvalidJson;
-                    defer parsed.deinit();
+        // u32 word comparison for command dispatch (single load, single compare)
+        // Little-endian u32 constants for each command
+        const CMD_MSG: u32 = 0x2047534D; // "MSG " in little-endian
+        const CMD_PING: u32 = 0x474E4950; // "PING" in little-endian
+        const CMD_PONG: u32 = 0x474E4F50; // "PONG" in little-endian
+        const CMD_INFO: u32 = 0x4F464E49; // "INFO" in little-endian
+        const CMD_HMSG: u32 = 0x47534D48; // "HMSG" in little-endian
+        const CMD_ERR: u32 = 0x5252452D; // "-ERR" in little-endian
 
-                    const owned = ServerInfo.fromParsed(
-                        allocator,
-                        parsed,
-                    ) catch |err| return switch (err) {
-                        error.OutOfMemory => error.OutOfMemory,
-                        error.InvalidServerInfo => Error.InvalidServerInfo,
-                    };
-                    consumed.* = header_len;
-                    return .{ .info = owned };
-                }
-                return Error.InvalidCommand;
-            },
-            else => return Error.InvalidCommand,
+        // Fast path: most commands are 4+ chars, read u32 once
+        if (line.len >= 4) {
+            const cmd = std.mem.readInt(u32, line[0..4], .little);
+
+            // MSG <subject> <sid> [reply-to] <size>
+            if (cmd == CMD_MSG) {
+                return parseFullMsgFast(data, line[4..], header_len, consumed);
+            }
+            // PING (exact 4 chars)
+            if (cmd == CMD_PING and line.len == 4) {
+                consumed.* = header_len;
+                return .ping;
+            }
+            // PONG (exact 4 chars)
+            if (cmd == CMD_PONG and line.len == 4) {
+                consumed.* = header_len;
+                return .pong;
+            }
+            // INFO <json> (need 5th char to be space)
+            if (cmd == CMD_INFO and line.len >= 5 and line[4] == ' ') {
+                const json_data = line[5..];
+                var parsed = std.json.parseFromSlice(
+                    RawServerInfo,
+                    allocator,
+                    json_data,
+                    .{ .ignore_unknown_fields = true },
+                ) catch return Error.InvalidJson;
+                defer parsed.deinit();
+
+                const owned = ServerInfo.fromParsed(
+                    allocator,
+                    parsed,
+                ) catch |err| return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    error.InvalidServerInfo => Error.InvalidServerInfo,
+                };
+                consumed.* = header_len;
+                return .{ .info = owned };
+            }
+            // HMSG <subject> <sid> [reply-to] <hdr_len> <total_len>
+            if (cmd == CMD_HMSG and line.len >= 5 and line[4] == ' ') {
+                return parseFullHMsgFast(data, line[5..], header_len, consumed);
+            }
+            // -ERR <message>
+            if (cmd == CMD_ERR and line.len >= 5 and line[4] == ' ') {
+                consumed.* = header_len;
+                return .{ .err = line[5..] };
+            }
         }
+
+        // Slow path: +OK (3 chars only)
+        if (line.len == 3 and line[0] == '+' and line[1] == 'O' and
+            line[2] == 'K')
+        {
+            consumed.* = header_len;
+            return .ok;
+        }
+
+        return Error.InvalidCommand;
     }
 };
 
@@ -221,7 +199,7 @@ inline fn parseFullMsgFast(
         const c = args_line[i];
         if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
         sid_digits += 1;
-        if (sid_digits > 20) return Parser.Error.InvalidArguments; // overflow guard
+        if (sid_digits > 20) return Parser.Error.InvalidArguments;
         sid = sid *% 10 +% @as(u64, c - '0');
     }
     if (sid_digits == 0 or sid == 0) return Parser.Error.InvalidArguments;
@@ -327,7 +305,7 @@ inline fn parseFullHMsgFast(
         const c = args_line[i];
         if (c < '0' or c > '9') return Parser.Error.InvalidArguments;
         sid_digits += 1;
-        if (sid_digits > 20) return Parser.Error.InvalidArguments; // overflow guard
+        if (sid_digits > 20) return Parser.Error.InvalidArguments;
         sid = sid *% 10 +% @as(u64, c - '0');
     }
     if (sid_digits == 0 or sid == 0 or i >= args_line.len)
