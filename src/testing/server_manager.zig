@@ -165,6 +165,8 @@ pub const ServerManager = struct {
         if (index < self.servers.items.len) {
             self.servers.items[index].stop(io);
         }
+        // Extra wait for TCP connections to fully close
+        io.sleep(.fromMilliseconds(500), .awake) catch {};
     }
 
     /// Returns the number of managed servers.
