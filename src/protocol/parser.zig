@@ -46,6 +46,18 @@ pub inline fn parseUsizeFast(s: []const u8) error{
     return v;
 }
 
+/// Fast \r\n finder optimized for short NATS lines (~30 bytes).
+/// Scans for '\r' then checks next byte, avoiding 2-byte pattern overhead.
+inline fn findCRLF(data: []const u8) ?usize {
+    if (data.len < 2) return null;
+    const end = data.len - 1;
+    var i: usize = 0;
+    while (i < end) : (i += 1) {
+        if (data[i] == '\r' and data[i + 1] == '\n') return i;
+    }
+    return null;
+}
+
 /// Protocol parser for NATS server commands.
 ///
 /// Stateless single-pass parser - no multi-stage state machine needed.
@@ -85,8 +97,8 @@ pub const Parser = struct {
 
         if (data.len == 0) return null;
 
-        // Find end of first line
-        const line_end = std.mem.indexOf(u8, data, "\r\n") orelse return null;
+        // Find end of first line (fast inline scan)
+        const line_end = findCRLF(data) orelse return null;
         const line = data[0..line_end];
         const header_len = line_end + 2;
 

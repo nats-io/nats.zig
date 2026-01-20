@@ -197,20 +197,17 @@ pub const TieredSlab = struct {
     }
 
     /// Free to appropriate tier or fallback.
+    /// Uses size-based tier selection (O(1)) instead of scanning all tiers.
     pub fn free(self: *TieredSlab, buf: []u8) void {
         assert(buf.len > 0);
 
-        const ptr = buf.ptr;
-
-        // Check each tier (inlined for predictable branches)
-        inline for (&self.tiers) |*tier| {
-            if (tier.contains(ptr)) {
-                tier.free(ptr);
-                return;
-            }
+        // Use size to select tier directly - same logic as alloc()
+        if (selectTier(buf.len)) |tier_idx| {
+            self.tiers[tier_idx].free(buf.ptr);
+            return;
         }
 
-        // Not from slab - must be fallback allocation
+        // Size > max tier = must be fallback allocation
         self.fallback_count -= 1;
         self.fallback.free(buf);
     }
