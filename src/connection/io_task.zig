@@ -185,7 +185,6 @@ inline fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
     return .no_data;
 }
 
-
 /// Try to fill buffer without blocking forever (cross-platform).
 /// Uses poll() to check for data, then fillMore() to read.
 inline fn tryFillBuffer(client: *Client) ReadResult {
@@ -287,10 +286,13 @@ inline fn tryRouteBufferedMessages(
                 },
                 .ping => {
                     // Respond to server PING with PONG (with mutex)
-                    client.write_mutex.lock(client.io) catch {};
+                    // Write failure = broken connection, trigger reconnect
+                    client.write_mutex.lock(client.io) catch return .disconnected;
                     defer client.write_mutex.unlock(client.io);
-                    client.writer.interface.writeAll("PONG\r\n") catch {};
-                    client.writer.interface.flush() catch {};
+                    client.writer.interface.writeAll("PONG\r\n") catch {
+                        return .disconnected;
+                    };
+                    client.writer.interface.flush() catch return .disconnected;
                 },
                 .pong => {
                     // Server responded to our PING (keepalive)
@@ -312,7 +314,11 @@ inline fn tryRouteBufferedMessages(
                     // }
                 },
                 .ok => {},
-                .err => {},
+                .err => |err_msg| {
+                    if (handleServerError(client, err_msg)) {
+                        return .disconnected;
+                    }
+                },
             }
             offset += consumed;
         } else {
@@ -512,5 +518,57 @@ fn tryReconnectLoop(client: *Client, allocator: Allocator) bool {
         }
     }
 
+    return false;
+}
+
+/// Handle server -ERR message. Categorizes error and pushes event.
+/// Returns true if error is fatal (should disconnect), false otherwise.
+fn handleServerError(client: *Client, msg: []const u8) bool {
+    const events = @import("../events.zig");
+
+    // Categorize error (case-insensitive matching like Go/C clients)
+    const err_type: anyerror = blk: {
+        if (containsIgnoreCase(msg, "authorization")) {
+            break :blk events.Error.AuthorizationViolation;
+        }
+        if (containsIgnoreCase(msg, "permissions violation")) {
+            break :blk events.Error.PermissionViolation;
+        }
+        if (containsIgnoreCase(msg, "stale connection")) {
+            break :blk events.Error.StaleConnection;
+        }
+        if (containsIgnoreCase(msg, "maximum connections")) {
+            break :blk events.Error.MaxConnectionsExceeded;
+        }
+        break :blk events.Error.ServerError;
+    };
+
+    // Push error event to user
+    client.pushEvent(.{ .err = .{ .err = err_type, .msg = msg } });
+
+    // Fatal errors trigger disconnect/reconnect
+    return err_type == events.Error.AuthorizationViolation or
+        err_type == events.Error.StaleConnection or
+        err_type == events.Error.MaxConnectionsExceeded;
+}
+
+/// Case-insensitive substring search (no allocations).
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len > haystack.len) return false;
+    var i: usize = 0;
+    while (i <= haystack.len - needle.len) : (i += 1) {
+        var match = true;
+        for (0..needle.len) |j| {
+            const h = haystack[i + j];
+            const n = needle[j];
+            const hl = if (h >= 'A' and h <= 'Z') h + 32 else h;
+            const nl = if (n >= 'A' and n <= 'Z') n + 32 else n;
+            if (hl != nl) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
     return false;
 }

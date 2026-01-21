@@ -380,6 +380,7 @@ io_task_future: ?Io.Future(void) = null,
 
 // Event callback infrastructure
 /// Event queue for io_task -> callback_task communication.
+/// SpscQueue for non-blocking push from io_task hot path.
 event_queue: ?*SpscQueue(Event) = null,
 /// Buffer backing the event queue.
 event_queue_buf: ?[]Event = null,
@@ -592,28 +593,21 @@ pub fn connect(
     // Spawn callback task if event handler provided
     if (opts.event_handler != null) {
         // Allocate event queue buffer (256 events is plenty for lifecycle)
-        const eq_buf = allocator.alloc(Event, 256) catch |err| {
-            // Non-fatal: client works without callbacks
-            dbg.print("Failed to allocate event queue: {s}", .{@errorName(err)});
-            client.event_handler = null;
-            assert(client.next_sid >= 1);
-            assert(client.state == .connected);
-            return client;
-        };
+        const eq_buf = try allocator.alloc(Event, 256);
         client.event_queue_buf = eq_buf;
-
-        // Create event queue
-        const eq = allocator.create(SpscQueue(Event)) catch |err| {
+        errdefer {
             allocator.free(eq_buf);
             client.event_queue_buf = null;
-            dbg.print("Failed to create event queue: {s}", .{@errorName(err)});
-            client.event_handler = null;
-            assert(client.next_sid >= 1);
-            assert(client.state == .connected);
-            return client;
-        };
+        }
+
+        // Create event queue (SpscQueue for non-blocking push from io_task)
+        const eq = try allocator.create(SpscQueue(Event));
         eq.* = SpscQueue(Event).init(eq_buf);
         client.event_queue = eq;
+        errdefer {
+            allocator.destroy(eq);
+            client.event_queue = null;
+        }
 
         // Spawn callback task
         client.callback_task_future = io.concurrent(
@@ -642,7 +636,8 @@ pub fn pushEvent(self: *Client, event: Event) void {
 }
 
 /// Callback task: drains event queue and dispatches to user handler.
-/// Runs concurrently, exits when client state is .closed.
+/// Runs concurrently, uses io.sleep(0) for async-aware yield with cancellation.
+/// Exits on .closed event or when canceled during shutdown.
 fn callbackTaskFn(client: *Client) void {
     dbg.print("callback_task: STARTED", .{});
 
@@ -666,8 +661,10 @@ fn callbackTaskFn(client: *Client) void {
                 .lame_duck => handler.dispatchLameDuck(),
             }
         }
-        // Yield to avoid busy-wait
-        std.Thread.yield() catch {};
+        // Async-aware yield with cancellation support (replaces std.Thread.yield)
+        client.io.sleep(.fromNanoseconds(0), .awake) catch |err| {
+            if (err == error.Canceled) break;
+        };
     }
 
     // Dispatch final close event if not already done
@@ -1325,7 +1322,12 @@ pub fn destroySubscription(
         protocol.Encoder.encodeUnsub(writer, .{
             .sid = sub.sid,
             .max_msgs = null,
-        }) catch {};
+        }) catch |err| {
+            dbg.print("UNSUB failed for sid {d}: {s}", .{
+                sub.sid,
+                @errorName(err),
+            });
+        };
     }
 
     if (self.sidmap.get(sub.sid)) |slot_idx| {

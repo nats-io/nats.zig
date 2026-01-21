@@ -47,6 +47,10 @@ pub const Error = error{
     StaleConnection,
     /// Server sent -ERR response.
     ServerError,
+    /// Authorization failed (invalid credentials).
+    AuthorizationViolation,
+    /// Server connection limit reached.
+    MaxConnectionsExceeded,
 };
 
 /// Events pushed from io_task to callback_task.
