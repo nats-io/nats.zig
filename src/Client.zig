@@ -1208,7 +1208,8 @@ pub fn drain(self: *Client, alloc: Allocator) !DrainResult {
                 drain_buf[0].deinit(alloc);
             }
 
-            // Mark as drained - sub.deinit() frees resources
+            // Mark subscription state - sub.deinit() frees resources
+            sub.state = .unsubscribed;
             sub.client_destroyed = true;
         }
     }
@@ -1277,80 +1278,6 @@ pub inline fn getSubscriptionBySid(self: *Client, sid: u64) ?*Sub {
         return self.sub_ptrs[slot_idx];
     }
     return null;
-}
-
-/// Unsubscribes by SID.
-pub fn unsubscribeSid(self: *Client, sid: u64) !void {
-    assert(sid > 0);
-    if (!self.state.canSend()) {
-        return error.NotConnected;
-    }
-
-    const writer = &self.writer.interface;
-    protocol.Encoder.encodeUnsub(writer, .{
-        .sid = sid,
-        .max_msgs = null,
-    }) catch {
-        return error.EncodingFailed;
-    };
-
-    if (self.sidmap.get(sid)) |slot_idx| {
-        if (self.cached_sub) |cached| {
-            if (cached.sid == sid) self.cached_sub = null;
-        }
-        self.sub_ptrs[slot_idx] = null;
-        _ = self.sidmap.remove(sid);
-        self.free_slots[self.free_count] = slot_idx;
-        self.free_count += 1;
-    }
-}
-
-/// Destroys a subscription safely while client is alive.
-/// Called by Subscription.deinit() when client_destroyed == false.
-pub fn destroySubscription(
-    self: *Client,
-    sub: *Sub,
-    allocator: Allocator,
-) void {
-    sub.queue.close(self.io);
-
-    self.read_mutex.lockUncancelable(self.io);
-    defer self.read_mutex.unlock(self.io);
-
-    if (sub.state != .unsubscribed) {
-        const writer = &self.writer.interface;
-        protocol.Encoder.encodeUnsub(writer, .{
-            .sid = sub.sid,
-            .max_msgs = null,
-        }) catch |err| {
-            dbg.print("UNSUB failed for sid {d}: {s}", .{
-                sub.sid,
-                @errorName(err),
-            });
-        };
-    }
-
-    if (self.sidmap.get(sub.sid)) |slot_idx| {
-        self.sub_ptrs[slot_idx] = null;
-        if (self.cached_sub == sub) self.cached_sub = null;
-        _ = self.sidmap.remove(sub.sid);
-        self.free_slots[self.free_count] = slot_idx;
-        self.free_count += 1;
-    }
-
-    // Drain remaining messages
-    var drain_buf: [1]Message = undefined;
-    while (true) {
-        const n = sub.queue.popBatch(&drain_buf);
-        if (n == 0) break;
-        drain_buf[0].deinit(allocator);
-    }
-
-    // Free subscription resources
-    allocator.free(sub.queue_buf);
-    allocator.free(sub.subject);
-    if (sub.queue_group) |qg| allocator.free(qg);
-    allocator.destroy(sub);
 }
 
 /// Sends PONG response.
@@ -1487,6 +1414,7 @@ pub fn deinit(self: *Client, alloc: Allocator) void {
     self.closeAllQueues();
     for (self.sub_ptrs) |maybe_sub| {
         if (maybe_sub) |sub| {
+            sub.state = .unsubscribed;
             sub.client_destroyed = true;
         }
     }
@@ -2033,26 +1961,91 @@ pub const Subscription = struct {
         if (!self.queue.push(msg)) return error.QueueFull;
     }
 
-    /// Unsubscribe from the subject.
+    /// Unsubscribes from the subject.
+    ///
+    /// Sends UNSUB to server, removes from client tracking, closes queue.
+    /// Idempotent - returns immediately if already unsubscribed.
+    /// Does NOT free memory - call deinit() for that.
+    ///
+    /// Returns error.NotConnected if UNSUB couldn't be sent (local cleanup
+    /// still succeeds). Returns error.EncodingFailed for protocol errors.
     pub fn unsubscribe(self: *Subscription) !void {
+        // Idempotent - already unsubscribed
         if (self.state == .unsubscribed) return;
+
+        // Client already destroyed - just mark state
+        if (self.client_destroyed) {
+            self.state = .unsubscribed;
+            return;
+        }
+
+        const client = self.client;
+        const can_send = client.state.canSend();
+
+        // Acquire mutex for thread-safe cleanup (fixes CODE-REVIEW 1.4)
+        client.read_mutex.lockUncancelable(client.io);
+        defer client.read_mutex.unlock(client.io);
+
+        // Track if we successfully sent UNSUB
+        var send_failed = false;
+
+        // Send UNSUB protocol if connected
+        if (can_send) {
+            const writer = &client.writer.interface;
+            protocol.Encoder.encodeUnsub(writer, .{
+                .sid = self.sid,
+                .max_msgs = null,
+            }) catch {
+                send_failed = true;
+            };
+        }
+
+        // Always remove from client tracking (inside mutex)
+        // This must happen even if not connected to prevent use-after-free
+        if (client.sidmap.get(self.sid)) |slot_idx| {
+            client.sub_ptrs[slot_idx] = null;
+            if (client.cached_sub == self) client.cached_sub = null;
+            _ = client.sidmap.remove(self.sid);
+            client.free_slots[client.free_count] = slot_idx;
+            client.free_count += 1;
+        }
+
+        // Close queue (inside mutex - fixes CODE-REVIEW 1.4)
+        self.queue.close(client.io);
+
+        // Mark as unsubscribed
         self.state = .unsubscribed;
-        // Note: SpscQueue doesn't need close signaling
-        try self.client.unsubscribeSid(self.sid);
+
+        // Report errors after cleanup completes
+        if (!can_send) return error.NotConnected;
+        if (send_failed) return error.EncodingFailed;
     }
 
-    /// Closes the subscription and frees resources.
+    /// Frees all memory resources.
+    ///
+    /// If not yet unsubscribed, calls unsubscribe() and ignores errors.
+    /// Safe to use in defer blocks (like Rust's Drop trait).
     pub fn deinit(self: *Subscription, allocator: Allocator) void {
-        if (self.client_destroyed) {
-            // Client already handled cleanup - just free local resources
-            allocator.free(self.queue_buf);
-            allocator.free(self.subject);
-            if (self.queue_group) |qg| allocator.free(qg);
-            allocator.destroy(self);
-        } else {
-            // Client is alive - delegate for safe cleanup
-            self.client.destroySubscription(self, allocator);
+        // Ensure unsubscribed (errors ignored - like Rust Drop)
+        if (self.state != .unsubscribed) {
+            self.unsubscribe() catch |err| {
+                dbg.print("deinit: unsubscribe failed: {s}", .{@errorName(err)});
+            };
         }
+
+        // Drain remaining messages (return buffers to pool)
+        var drain_buf: [1]Message = undefined;
+        while (true) {
+            const n = self.queue.popBatch(&drain_buf);
+            if (n == 0) break;
+            drain_buf[0].deinit(allocator);
+        }
+
+        // Free subscription resources
+        allocator.free(self.queue_buf);
+        allocator.free(self.subject);
+        if (self.queue_group) |qg| allocator.free(qg);
+        allocator.destroy(self);
     }
 };
 

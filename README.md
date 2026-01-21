@@ -82,6 +82,8 @@ pub fn main() !void {
 | Flush to network | `client.flush(allocator)` | `!void` |
 | Subscribe | `client.subscribe(allocator, subject)` | `!*Sub` |
 | Queue subscribe | `client.subscribeQueue(allocator, subject, group)` | `!*Sub` |
+| Unsubscribe | `sub.unsubscribe()` | `!void` |
+| Free subscription | `sub.deinit(allocator)` | `void` |
 | Request/reply | `client.request(allocator, subject, data, timeout_ms)` | `!?Message` |
 | Receive (blocking) | `sub.next(allocator, io)` | `!Message` |
 | Receive (non-blocking) | `sub.tryNext()` | `?Message` |
@@ -164,6 +166,42 @@ const sub2 = try client.subscribeQueue(allocator, "tasks.*", "workers");
 
 // Message goes to either sub1 OR sub2, not both
 ```
+
+### Unsubscribing
+
+**Idiomatic Zig (recommended):** Use `defer sub.deinit()` - it calls `unsubscribe()`
+internally and handles errors gracefully:
+
+```zig
+const sub = try client.subscribe(allocator, "events.>");
+defer sub.deinit(allocator);  // Unsubscribes + frees memory
+
+// ... use subscription ...
+```
+
+**Explicit unsubscribe (Go-style):** For users who need to check if the server
+received the UNSUB command, call `unsubscribe()` directly:
+
+```zig
+const sub = try client.subscribe(allocator, "events.>");
+
+// ... use subscription ...
+
+// Explicit unsubscribe with error checking
+sub.unsubscribe() catch |err| {
+    std.log.warn("Unsubscribe failed: {}", .{err});
+};
+sub.deinit(allocator);  // Still needed to free memory
+```
+
+| Method | Returns | Purpose |
+|--------|---------|---------|
+| `sub.unsubscribe()` | `!void` | Sends UNSUB to server, removes from tracking |
+| `sub.deinit(allocator)` | `void` | Calls unsubscribe (if needed) + frees memory |
+
+**Note:** `unsubscribe()` is idempotent - calling it multiple times is safe.
+`deinit()` always succeeds (errors are logged, not returned) making it safe for
+`defer`.
 
 ---
 
