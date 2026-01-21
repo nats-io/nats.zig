@@ -219,6 +219,17 @@ pub const HPubArgs = struct {
     payload: []const u8,
 };
 
+/// Arguments for HPUB command with structured header entries.
+/// Preferred over HPubArgs for type-safe header construction.
+pub const HPubWithEntriesArgs = struct {
+    subject: []const u8,
+    reply_to: ?[]const u8 = null,
+    headers: []const headers_mod.Entry,
+    payload: []const u8,
+};
+
+const headers_mod = @import("headers.zig");
+
 /// Arguments for SUB command.
 pub const SubArgs = struct {
     subject: []const u8,

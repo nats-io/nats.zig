@@ -884,3 +884,198 @@ test "encodeHPub binary headers and payload" {
     // Verify headers and payload are in output
     try std.testing.expect(std.mem.indexOf(u8, written, headers) != null);
 }
+
+// ============================================================================
+// Section 14: HPUB with Entries Tests
+// ============================================================================
+
+const headers_mod = @import("headers.zig");
+
+test "encodeHPubWithEntries basic" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+
+    const entries = [_]headers_mod.Entry{
+        .{ .key = "Foo", .value = "bar" },
+    };
+
+    try Encoder.encodeHPubWithEntries(&writer, .{
+        .subject = "test",
+        .headers = &entries,
+        .payload = "hello",
+    });
+
+    // NATS/1.0\r\nFoo: bar\r\n\r\n = 22 bytes
+    // total = 22 + 5 = 27 bytes
+    try std.testing.expectEqualSlices(
+        u8,
+        "HPUB test 22 27\r\nNATS/1.0\r\nFoo: bar\r\n\r\nhello\r\n",
+        writer.buffered(),
+    );
+}
+
+test "encodeHPubWithEntries with reply_to" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+
+    const entries = [_]headers_mod.Entry{
+        .{ .key = "X", .value = "Y" },
+    };
+
+    try Encoder.encodeHPubWithEntries(&writer, .{
+        .subject = "request",
+        .reply_to = "_INBOX.123",
+        .headers = &entries,
+        .payload = "data",
+    });
+
+    // NATS/1.0\r\nX: Y\r\n\r\n = 18 bytes
+    // total = 18 + 4 = 22 bytes
+    try std.testing.expectEqualSlices(
+        u8,
+        "HPUB request _INBOX.123 18 22\r\nNATS/1.0\r\nX: Y\r\n\r\ndata\r\n",
+        writer.buffered(),
+    );
+}
+
+test "encodeHPubWithEntries multiple headers" {
+    var buf: [512]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+
+    const entries = [_]headers_mod.Entry{
+        .{ .key = "Content-Type", .value = "application/json" },
+        .{ .key = "Nats-Msg-Id", .value = "abc123" },
+    };
+
+    try Encoder.encodeHPubWithEntries(&writer, .{
+        .subject = "api.request",
+        .headers = &entries,
+        .payload = "{}",
+    });
+
+    const written = writer.buffered();
+    try std.testing.expect(std.mem.startsWith(u8, written, "HPUB api.request "));
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        written,
+        "Content-Type: application/json",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        written,
+        "Nats-Msg-Id: abc123",
+    ) != null);
+}
+
+test "encodeHPubWithEntries empty payload" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+
+    const entries = [_]headers_mod.Entry{
+        .{ .key = "Status", .value = "100" },
+    };
+
+    try Encoder.encodeHPubWithEntries(&writer, .{
+        .subject = "notify",
+        .headers = &entries,
+        .payload = "",
+    });
+
+    // NATS/1.0\r\n (10) + Status: 100\r\n (13) + \r\n (2) = 25 bytes
+    // total = 25 + 0 = 25 bytes
+    try std.testing.expectEqualSlices(
+        u8,
+        "HPUB notify 25 25\r\nNATS/1.0\r\nStatus: 100\r\n\r\n\r\n",
+        writer.buffered(),
+    );
+}
+
+test "encodeHPubWithEntries empty headers rejected" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+
+    const entries = [_]headers_mod.Entry{};
+
+    const result = Encoder.encodeHPubWithEntries(&writer, .{
+        .subject = "test",
+        .headers = &entries,
+        .payload = "x",
+    });
+
+    try std.testing.expectError(Encoder.Error.EmptyHeaders, result);
+}
+
+test "encodeHPubWithEntries empty subject rejected" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+
+    const entries = [_]headers_mod.Entry{
+        .{ .key = "X", .value = "Y" },
+    };
+
+    const result = Encoder.encodeHPubWithEntries(&writer, .{
+        .subject = "",
+        .headers = &entries,
+        .payload = "x",
+    });
+
+    try std.testing.expectError(Encoder.Error.EmptySubject, result);
+}
+
+test "encodeHPubWithEntries subject with CRLF rejected" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+
+    const entries = [_]headers_mod.Entry{
+        .{ .key = "X", .value = "Y" },
+    };
+
+    const result = Encoder.encodeHPubWithEntries(&writer, .{
+        .subject = "test\r\nUNSUB 1",
+        .headers = &entries,
+        .payload = "x",
+    });
+
+    try std.testing.expectError(error.InvalidCharacter, result);
+}
+
+test "encodeHPubWithEntries reply_to with CRLF rejected" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+
+    const entries = [_]headers_mod.Entry{
+        .{ .key = "X", .value = "Y" },
+    };
+
+    const result = Encoder.encodeHPubWithEntries(&writer, .{
+        .subject = "test",
+        .reply_to = "_INBOX\r\nUNSUB 1",
+        .headers = &entries,
+        .payload = "x",
+    });
+
+    try std.testing.expectError(error.InvalidCharacter, result);
+}
+
+test "encodeHPubWithEntries empty reply_to treated as null" {
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+
+    const entries = [_]headers_mod.Entry{
+        .{ .key = "X", .value = "Y" },
+    };
+
+    try Encoder.encodeHPubWithEntries(&writer, .{
+        .subject = "test",
+        .reply_to = "",
+        .headers = &entries,
+        .payload = "x",
+    });
+
+    // Should produce same as no reply_to
+    try std.testing.expectEqualSlices(
+        u8,
+        "HPUB test 18 19\r\nNATS/1.0\r\nX: Y\r\n\r\nx\r\n",
+        writer.buffered(),
+    );
+}

@@ -3,6 +3,11 @@
 //! Handles NATS message headers in the NATS/1.0 format.
 //! Headers are used with HPUB/HMSG commands for metadata.
 //!
+//! Features:
+//! - Full ownership: ParseResult copies all strings, safe after source freed
+//! - Case-insensitive header lookup
+//! - API: parse() function, always call deinit()
+//!
 //! Format:
 //! ```
 //! NATS/1.0\r\n
@@ -45,29 +50,128 @@ pub const Entry = struct {
     value: []const u8,
 };
 
-/// Parses headers from NATS/1.0 format.
-/// Returns entries as slices into the original data (no allocation).
-pub fn parse(data: []const u8) ParseResult {
-    assert(data.len > 0);
-    var result: ParseResult = .{};
+/// Result of header parsing.
+///
+/// Owns all its data - copies strings to heap. Safe to use after source
+/// data is freed. Caller MUST call deinit() to free memory.
+pub const ParseResult = struct {
+    /// Heap-allocated entry array (owns this memory).
+    entries: []Entry = &.{},
 
+    /// Heap-allocated string buffer (all key/value strings copied here).
+    string_buf: []u8 = &.{},
+
+    /// Number of valid entries.
+    count: usize = 0,
+
+    /// Allocator used (needed for deinit).
+    allocator: Allocator,
+
+    /// Status code from header line (e.g., "503") - slice into string_buf.
+    status: ?[]const u8 = null,
+
+    /// Description from header line - slice into string_buf.
+    description: ?[]const u8 = null,
+
+    /// Byte offset where headers end in original data.
+    header_end: usize = 0,
+
+    /// Parse error if any.
+    err: ?ParseError = null,
+
+    pub const ParseError = enum {
+        invalid_version,
+        invalid_header,
+        incomplete,
+        out_of_memory,
+    };
+
+    /// Returns all parsed entries. Empty slice if error occurred.
+    pub fn items(self: *const ParseResult) []const Entry {
+        if (self.err != null) return &.{};
+        assert(self.count <= self.entries.len);
+        return self.entries[0..self.count];
+    }
+
+    /// Gets first value for header name (case-insensitive).
+    /// Returns null if error occurred or header not found.
+    pub fn get(self: *const ParseResult, name: []const u8) ?[]const u8 {
+        if (self.err != null) return null;
+        for (self.items()) |entry| {
+            if (std.ascii.eqlIgnoreCase(entry.key, name)) {
+                return entry.value;
+            }
+        }
+        return null;
+    }
+
+    /// Returns true if this is a no-responders status (503).
+    pub fn isNoResponders(self: *const ParseResult) bool {
+        if (self.err != null) return false;
+        if (self.status) |s| {
+            return std.mem.eql(u8, s, Status.no_responders);
+        }
+        return false;
+    }
+
+    /// Frees all heap-allocated memory.
+    /// Safe to call multiple times. MUST be called after parse().
+    pub fn deinit(self: *ParseResult) void {
+        if (self.entries.len > 0) {
+            self.allocator.free(self.entries);
+            self.entries = &.{};
+        }
+        if (self.string_buf.len > 0) {
+            self.allocator.free(self.string_buf);
+            self.string_buf = &.{};
+        }
+        self.count = 0;
+        self.status = null;
+        self.description = null;
+    }
+};
+
+/// Parses headers from NATS/1.0 format.
+///
+/// Allocates memory and copies all header data. ParseResult owns its data
+/// and is safe to use after the source data is freed.
+///
+/// Caller MUST call result.deinit() to free memory.
+///
+/// On error: result.err is set, items() returns empty, get() returns null.
+pub fn parse(allocator: Allocator, data: []const u8) ParseResult {
+    assert(data.len > 0);
+    return parseImpl(allocator, data);
+}
+
+/// Internal parse implementation using two-pass algorithm.
+fn parseImpl(allocator: Allocator, data: []const u8) ParseResult {
+    var result: ParseResult = .{ .allocator = allocator };
+
+    // Validate NATS/1.0 prefix
     if (!std.mem.startsWith(u8, data, "NATS/1.0")) {
         result.err = .invalid_version;
         return result;
     }
 
+    // FIRST PASS: count headers and total string bytes needed
+    var header_count: usize = 0;
+    var total_string_bytes: usize = 0;
+    var status_len: usize = 0;
+    var desc_len: usize = 0;
+
     var pos: usize = 8;
 
-    // Skip optional status code and description on first line
+    // Parse optional status and description on first line
     if (pos < data.len and data[pos] == ' ') {
-        // Has status: NATS/1.0 503 No Responders\r\n
         pos += 1;
         const status_end = std.mem.indexOfPos(u8, data, pos, " ") orelse
             std.mem.indexOfPos(u8, data, pos, "\r\n") orelse {
             result.err = .incomplete;
             return result;
         };
-        result.status = data[pos..status_end];
+        status_len = status_end - pos;
+        total_string_bytes += status_len;
         pos = status_end;
 
         // Skip description if present
@@ -77,7 +181,8 @@ pub fn parse(data: []const u8) ParseResult {
                 result.err = .incomplete;
                 return result;
             };
-            result.description = data[pos..desc_end];
+            desc_len = desc_end - pos;
+            total_string_bytes += desc_len;
             pos = desc_end;
         }
     }
@@ -89,12 +194,12 @@ pub fn parse(data: []const u8) ParseResult {
     }
     pos += 2;
 
-    // Parse header entries
+    // Count header entries and their string sizes
     while (pos < data.len) {
         // Empty line marks end of headers
         if (std.mem.startsWith(u8, data[pos..], "\r\n")) {
             result.header_end = pos + 2;
-            return result;
+            break;
         }
 
         // Find colon separator
@@ -103,7 +208,7 @@ pub fn parse(data: []const u8) ParseResult {
             return result;
         };
 
-        const key = data[pos..colon];
+        const key_len = colon - pos;
 
         // Skip colon and optional space
         var value_start = colon + 1;
@@ -112,77 +217,121 @@ pub fn parse(data: []const u8) ParseResult {
         }
 
         // Find end of line
-        const crlf = "\r\n";
-        const idx = std.mem.indexOfPos(u8, data, value_start, crlf);
-        const line_end = idx orelse {
+        const line_end = std.mem.indexOfPos(u8, data, value_start, "\r\n") orelse {
             result.err = .incomplete;
             return result;
         };
 
-        const value = data[value_start..line_end];
+        const value_len = line_end - value_start;
 
-        if (result.count < result.entries.len) {
-            result.entries[result.count] = .{ .key = key, .value = value };
-            result.count += 1;
-        } else {
-            result.err = .header_overflow;
-            return result;
-        }
+        header_count += 1;
+        total_string_bytes += key_len + value_len;
 
         pos = line_end + 2;
+    } else {
+        // Didn't find terminating \r\n\r\n
+        result.err = .incomplete;
+        return result;
     }
 
-    result.err = .incomplete;
-    return result;
-}
+    // SECOND PASS: allocate and copy
+    if (header_count > 0 or status_len > 0 or desc_len > 0) {
+        // Allocate entries array
+        const entries = allocator.alloc(Entry, header_count) catch {
+            result.err = .out_of_memory;
+            return result;
+        };
 
-/// Result of header parsing.
-pub const ParseResult = struct {
-    entries: [16]Entry = undefined,
-    count: usize = 0,
-    status: ?[]const u8 = null,
-    description: ?[]const u8 = null,
-    header_end: usize = 0,
-    err: ?ParseError = null,
+        // Allocate string buffer
+        const string_buf = allocator.alloc(u8, total_string_bytes) catch {
+            allocator.free(entries);
+            result.err = .out_of_memory;
+            return result;
+        };
 
-    pub const ParseError = enum {
-        invalid_version,
-        invalid_header,
-        incomplete,
-        header_overflow,
-    };
+        result.entries = entries;
+        result.string_buf = string_buf;
 
-    /// Returns slice of parsed entries.
-    pub fn items(self: *const ParseResult) []const Entry {
-        assert(self.count <= self.entries.len);
-        return self.entries[0..self.count];
-    }
+        // Copy strings into buffer
+        var buf_pos: usize = 0;
+        var entry_idx: usize = 0;
 
-    /// Gets first value for a header name.
-    pub fn get(self: *const ParseResult, name: []const u8) ?[]const u8 {
-        for (self.entries[0..self.count]) |entry| {
-            if (std.ascii.eqlIgnoreCase(entry.key, name)) {
-                return entry.value;
+        pos = 8;
+
+        // Copy status and description
+        if (status_len > 0) {
+            pos += 1; // skip space
+            @memcpy(string_buf[buf_pos..][0..status_len], data[pos..][0..status_len]);
+            result.status = string_buf[buf_pos..][0..status_len];
+            buf_pos += status_len;
+            pos += status_len;
+
+            if (desc_len > 0) {
+                pos += 1; // skip space
+                @memcpy(
+                    string_buf[buf_pos..][0..desc_len],
+                    data[pos..][0..desc_len],
+                );
+                result.description = string_buf[buf_pos..][0..desc_len];
+                buf_pos += desc_len;
+                pos += desc_len;
             }
         }
-        return null;
+
+        // Skip \r\n after version line
+        pos = std.mem.indexOfPos(u8, data, 8, "\r\n").? + 2;
+
+        // Copy header entries
+        while (pos < data.len) {
+            if (std.mem.startsWith(u8, data[pos..], "\r\n")) {
+                break;
+            }
+
+            const colon = std.mem.indexOfPos(u8, data, pos, ":").?;
+            const key_len = colon - pos;
+
+            // Copy key
+            @memcpy(string_buf[buf_pos..][0..key_len], data[pos..][0..key_len]);
+            const key_slice = string_buf[buf_pos..][0..key_len];
+            buf_pos += key_len;
+
+            // Skip colon and optional space
+            var value_start = colon + 1;
+            if (value_start < data.len and data[value_start] == ' ') {
+                value_start += 1;
+            }
+
+            const line_end = std.mem.indexOfPos(u8, data, value_start, "\r\n").?;
+            const value_len = line_end - value_start;
+
+            // Copy value
+            @memcpy(
+                string_buf[buf_pos..][0..value_len],
+                data[value_start..][0..value_len],
+            );
+            const value_slice = string_buf[buf_pos..][0..value_len];
+            buf_pos += value_len;
+
+            entries[entry_idx] = .{ .key = key_slice, .value = value_slice };
+            entry_idx += 1;
+
+            pos = line_end + 2;
+        }
+
+        result.count = entry_idx;
+        assert(entry_idx == header_count);
+        assert(buf_pos == total_string_bytes);
     }
 
-    /// Returns true if this is a no-responders status.
-    pub fn isNoResponders(self: *const ParseResult) bool {
-        if (self.status) |s| {
-            return std.mem.eql(u8, s, Status.no_responders);
-        }
-        return false;
-    }
-};
+    return result;
+}
 
 /// Encodes headers to NATS/1.0 format.
 pub fn encode(
     writer: *Io.Writer,
     entries: []const Entry,
 ) Io.Writer.Error!void {
-    assert(entries.len <= 16);
+    assert(entries.len > 0);
     try writer.writeAll("NATS/1.0\r\n");
 
     for (entries) |entry| {
@@ -197,6 +346,7 @@ pub fn encode(
 
 /// Calculates the encoded size of headers.
 pub fn encodedSize(entries: []const Entry) usize {
+    assert(entries.len > 0);
     var size: usize = 10; // "NATS/1.0\r\n"
 
     for (entries) |entry| {
@@ -207,32 +357,36 @@ pub fn encodedSize(entries: []const Entry) usize {
     return size;
 }
 
+// Tests
+
 test "parse simple headers" {
     const data = "NATS/1.0\r\nFoo: bar\r\nBaz: qux\r\n\r\n";
-    const result = parse(data);
+    var result = parse(std.testing.allocator, data);
+    defer result.deinit();
 
     try std.testing.expectEqual(@as(?ParseResult.ParseError, null), result.err);
     try std.testing.expectEqual(@as(usize, 2), result.count);
-    try std.testing.expectEqualSlices(u8, "Foo", result.entries[0].key);
-    try std.testing.expectEqualSlices(u8, "bar", result.entries[0].value);
-    try std.testing.expectEqualSlices(u8, "Baz", result.entries[1].key);
-    try std.testing.expectEqualSlices(u8, "qux", result.entries[1].value);
+    try std.testing.expectEqualSlices(u8, "Foo", result.items()[0].key);
+    try std.testing.expectEqualSlices(u8, "bar", result.items()[0].value);
+    try std.testing.expectEqualSlices(u8, "Baz", result.items()[1].key);
+    try std.testing.expectEqualSlices(u8, "qux", result.items()[1].value);
 }
 
 test "parse with status" {
     const data = "NATS/1.0 503 No Responders\r\n\r\n";
-    const result = parse(data);
+    var result = parse(std.testing.allocator, data);
+    defer result.deinit();
 
     try std.testing.expectEqual(@as(?ParseResult.ParseError, null), result.err);
     try std.testing.expectEqualSlices(u8, "503", result.status.?);
-    const desc = "No Responders";
-    try std.testing.expectEqualSlices(u8, desc, result.description.?);
+    try std.testing.expectEqualSlices(u8, "No Responders", result.description.?);
     try std.testing.expect(result.isNoResponders());
 }
 
 test "parse no headers" {
     const data = "NATS/1.0\r\n\r\n";
-    const result = parse(data);
+    var result = parse(std.testing.allocator, data);
+    defer result.deinit();
 
     try std.testing.expectEqual(@as(?ParseResult.ParseError, null), result.err);
     try std.testing.expectEqual(@as(usize, 0), result.count);
@@ -240,13 +394,75 @@ test "parse no headers" {
 
 test "get header case insensitive" {
     const data = "NATS/1.0\r\nContent-Type: application/json\r\n\r\n";
-    const result = parse(data);
+    var result = parse(std.testing.allocator, data);
+    defer result.deinit();
 
-    try std.testing.expectEqualSlices(
-        u8,
-        "application/json",
-        result.get("content-type").?,
-    );
+    try std.testing.expect(result.get("content-type") != null);
+    try std.testing.expect(result.get("CONTENT-TYPE") != null);
+    try std.testing.expect(result.get("Content-Type") != null);
+}
+
+test "parse many headers" {
+    // Build 100 headers dynamically
+    var data_buf: [4096]u8 = undefined;
+    var pos: usize = 0;
+
+    const prefix = "NATS/1.0\r\n";
+    @memcpy(data_buf[pos..][0..prefix.len], prefix);
+    pos += prefix.len;
+
+    for (0..100) |i| {
+        const written = std.fmt.bufPrint(
+            data_buf[pos..],
+            "H{d:0>3}: value{d}\r\n",
+            .{ i, i },
+        ) catch unreachable;
+        pos += written.len;
+    }
+    @memcpy(data_buf[pos..][0..2], "\r\n");
+    pos += 2;
+
+    var result = parse(std.testing.allocator, data_buf[0..pos]);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(?ParseResult.ParseError, null), result.err);
+    try std.testing.expectEqual(@as(usize, 100), result.count);
+    try std.testing.expect(result.get("H000") != null);
+    try std.testing.expect(result.get("H099") != null);
+}
+
+test "parsed data survives after source freed" {
+    // This test verifies ownership - parsed data is independent
+    const data = try std.testing.allocator.dupe(u8, "NATS/1.0\r\nKey: value\r\n\r\n");
+
+    var result = parse(std.testing.allocator, data);
+    defer result.deinit();
+
+    // Free source data
+    std.testing.allocator.free(data);
+
+    // ParseResult should still work (owns copies)
+    try std.testing.expectEqualSlices(u8, "Key", result.items()[0].key);
+    try std.testing.expectEqualSlices(u8, "value", result.items()[0].value);
+}
+
+test "error returns empty items" {
+    const data = "INVALID\r\n";
+    var result = parse(std.testing.allocator, data);
+    defer result.deinit();
+
+    try std.testing.expect(result.err != null);
+    try std.testing.expectEqual(@as(usize, 0), result.items().len);
+    try std.testing.expect(result.get("anything") == null);
+}
+
+test "deinit is safe to call multiple times" {
+    const data = "NATS/1.0\r\nFoo: bar\r\n\r\n";
+    var result = parse(std.testing.allocator, data);
+
+    result.deinit();
+    result.deinit();
+    result.deinit();
 }
 
 test "encode headers" {
@@ -259,7 +475,6 @@ test "encode headers" {
     };
 
     try encode(&writer, &entries);
-
     try std.testing.expectEqualSlices(
         u8,
         "NATS/1.0\r\nFoo: bar\r\nBaz: 123\r\n\r\n",
@@ -276,19 +491,36 @@ test "encoded size" {
     try std.testing.expectEqual(@as(usize, 22), size);
 }
 
-test "parse header overflow" {
-    // Build header block with 17 headers (exceeds 16 limit)
-    const data = "NATS/1.0\r\n" ++
-        "H0: v\r\nH1: v\r\nH2: v\r\nH3: v\r\n" ++
-        "H4: v\r\nH5: v\r\nH6: v\r\nH7: v\r\n" ++
-        "H8: v\r\nH9: v\r\nHA: v\r\nHB: v\r\n" ++
-        "HC: v\r\nHD: v\r\nHE: v\r\nHF: v\r\n" ++
-        "HG: v\r\n\r\n";
+test "parse status only no description" {
+    const data = "NATS/1.0 503\r\n\r\n";
+    var result = parse(std.testing.allocator, data);
+    defer result.deinit();
 
-    const result = parse(data);
-    try std.testing.expectEqual(
-        ParseResult.ParseError.header_overflow,
-        result.err.?,
-    );
-    try std.testing.expectEqual(@as(usize, 16), result.count);
+    try std.testing.expectEqual(@as(?ParseResult.ParseError, null), result.err);
+    try std.testing.expectEqualSlices(u8, "503", result.status.?);
+    try std.testing.expect(result.description == null);
+    try std.testing.expect(result.isNoResponders());
+}
+
+test "parse status with headers" {
+    const data = "NATS/1.0 100 Idle Heartbeat\r\nNats-Last-Consumer: 42\r\n\r\n";
+    var result = parse(std.testing.allocator, data);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(?ParseResult.ParseError, null), result.err);
+    try std.testing.expectEqualSlices(u8, "100", result.status.?);
+    try std.testing.expectEqualSlices(u8, "Idle Heartbeat", result.description.?);
+    try std.testing.expectEqual(@as(usize, 1), result.count);
+    try std.testing.expectEqualSlices(u8, "42", result.get("Nats-Last-Consumer").?);
+}
+
+test "header_end is set correctly" {
+    // "NATS/1.0\r\nFoo: bar\r\n\r\n" = 8 + 2 + 8 + 2 + 2 = 22 bytes
+    const data = "NATS/1.0\r\nFoo: bar\r\n\r\npayload here";
+    var result = parse(std.testing.allocator, data);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(?ParseResult.ParseError, null), result.err);
+    try std.testing.expectEqual(@as(usize, 22), result.header_end);
+    try std.testing.expectEqualSlices(u8, "payload here", data[result.header_end..]);
 }

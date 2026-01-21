@@ -24,6 +24,7 @@ pub const protocol = @import("protocol.zig");
 pub const concurrency = @import("concurrency.zig");
 pub const reconnect = @import("reconnect.zig");
 pub const error_handling = @import("error_handling.zig");
+pub const headers = @import("headers.zig");
 
 /// Runs all async client tests.
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -45,4 +46,5 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     concurrency.runAll(allocator);
     reconnect.runAll(allocator, manager);
     error_handling.runAll(allocator);
+    headers.runAll(allocator);
 }

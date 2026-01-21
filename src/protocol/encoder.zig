@@ -12,8 +12,11 @@ const commands = @import("commands.zig");
 const ConnectOptions = commands.ConnectOptions;
 const PubArgs = commands.PubArgs;
 const HPubArgs = commands.HPubArgs;
+const HPubWithEntriesArgs = commands.HPubWithEntriesArgs;
 const SubArgs = commands.SubArgs;
 const UnsubArgs = commands.UnsubArgs;
+
+const headers = @import("headers.zig");
 
 const subject = @import("../pubsub/subject.zig");
 const ValidationError = subject.ValidationError;
@@ -114,6 +117,43 @@ pub const Encoder = struct {
         try writer.writeAll(writeUsizeToBuffer(&num_buf, total_len));
         try writer.writeAll("\r\n");
         try writer.writeAll(args.headers);
+        try writer.writeAll(args.payload);
+        try writer.writeAll("\r\n");
+    }
+
+    /// Encodes HPUB command with structured header entries.
+    /// Calculates header size and encodes headers inline.
+    pub fn encodeHPubWithEntries(
+        writer: *Io.Writer,
+        args: HPubWithEntriesArgs,
+    ) (Error || Io.Writer.Error)!void {
+        try subject.validatePublish(args.subject);
+        if (args.headers.len == 0) return Error.EmptyHeaders;
+        assert(args.subject.len > 0);
+        assert(args.headers.len > 0);
+        assert(args.headers.len <= 1024);
+
+        try writer.writeAll("HPUB ");
+        try writer.writeAll(args.subject);
+
+        // Validate and write reply_to if present and non-empty
+        if (args.reply_to) |reply| {
+            if (reply.len > 0) {
+                try subject.validateReplyTo(reply);
+                try writer.writeByte(' ');
+                try writer.writeAll(reply);
+            }
+        }
+
+        const hdr_len = headers.encodedSize(args.headers);
+        const total_len = hdr_len + args.payload.len;
+        var num_buf: [20]u8 = undefined;
+        try writer.writeByte(' ');
+        try writer.writeAll(writeUsizeToBuffer(&num_buf, hdr_len));
+        try writer.writeByte(' ');
+        try writer.writeAll(writeUsizeToBuffer(&num_buf, total_len));
+        try writer.writeAll("\r\n");
+        try headers.encode(writer, args.headers);
         try writer.writeAll(args.payload);
         try writer.writeAll("\r\n");
     }

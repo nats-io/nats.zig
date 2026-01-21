@@ -8,6 +8,7 @@ Production-grade NATS client for Zig 0.16+.
 - Built on `std.Io` for async-aware I/O
 - Inline routing architecture for optimal performance
 - Full cancellation support via `std.Io.Future`
+- Headers support (NATS 2.2+)
 - Go-inspired API design
 
 ## Requirements
@@ -85,6 +86,9 @@ pub fn main() !void {
 | Unsubscribe | `sub.unsubscribe()` | `!void` |
 | Free subscription | `sub.deinit(allocator)` | `void` |
 | Request/reply | `client.request(allocator, subject, data, timeout_ms)` | `!?Message` |
+| Publish with headers | `client.publishWithHeaders(subject, hdrs, data)` | `!void` |
+| Publish+reply+headers | `client.publishRequestWithHeaders(subject, reply, hdrs, data)` | `!void` |
+| Request with headers | `client.requestWithHeaders(allocator, subject, hdrs, data, timeout_ms)` | `!?Message` |
 | Receive (blocking) | `sub.next(allocator, io)` | `!Message` |
 | Receive (non-blocking) | `sub.tryNext()` | `?Message` |
 | Receive (with timeout) | `sub.nextWithTimeout(allocator, timeout_ms)` | `!?Message` |
@@ -135,8 +139,11 @@ try client.flush(allocator);
 |--------|-------------|
 | `publish()` | No - writes to buffer |
 | `publishRequest()` | No - writes to buffer |
+| `publishWithHeaders()` | No - writes to buffer |
+| `publishRequestWithHeaders()` | No - writes to buffer |
 | `flush()` | Yes - sends buffer + PING, waits for PONG |
 | `request()` | Yes - flushes, waits for response |
+| `requestWithHeaders()` | Yes - flushes, waits for response |
 
 ---
 
@@ -352,6 +359,119 @@ if (try reply_sub.nextWithTimeout(allocator, 5000)) |reply| {
     // Timeout
 }
 ```
+
+---
+
+## Headers
+
+NATS headers allow attaching metadata to messages (similar to HTTP headers).
+Headers are supported with NATS server 2.2+.
+
+### Publishing with Headers
+
+```zig
+const nats = @import("nats");
+const headers = nats.protocol.headers;
+
+// Single header
+const hdrs = [_]headers.Entry{
+    .{ .key = "X-Request-Id", .value = "req-123" },
+};
+try client.publishWithHeaders("events.user", &hdrs, "user logged in");
+try client.flush(allocator);
+
+// Multiple headers
+const multi_hdrs = [_]headers.Entry{
+    .{ .key = "Content-Type", .value = "application/json" },
+    .{ .key = "X-Correlation-Id", .value = "corr-456" },
+    .{ .key = "X-Timestamp", .value = "2026-01-21T10:30:00Z" },
+};
+try client.publishWithHeaders("events.order", &multi_hdrs, order_json);
+```
+
+### Publish with Headers and Reply-To
+
+```zig
+const hdrs = [_]headers.Entry{
+    .{ .key = "X-Request-Id", .value = "req-789" },
+};
+try client.publishRequestWithHeaders("service.echo", "my.inbox", &hdrs, "ping");
+try client.flush(allocator);
+```
+
+### Request/Reply with Headers
+
+```zig
+const hdrs = [_]headers.Entry{
+    .{ .key = headers.HeaderName.msg_id, .value = "unique-001" },
+};
+
+if (try client.requestWithHeaders(allocator, "service.api", &hdrs, "data", 5000)) |reply| {
+    defer reply.deinit(allocator);
+    std.debug.print("Response: {s}\n", .{reply.data});
+} else {
+    std.debug.print("Timeout\n", .{});
+}
+```
+
+### Receiving and Parsing Headers
+
+```zig
+const msg = try sub.next(allocator, io);
+defer msg.deinit(allocator);
+
+if (msg.headers) |raw_headers| {
+    var parsed = headers.parse(allocator, raw_headers);
+    defer parsed.deinit();  // MUST call deinit!
+
+    if (parsed.err == null) {
+        // Iterate all headers
+        for (parsed.items()) |entry| {
+            std.debug.print("{s}: {s}\n", .{ entry.key, entry.value });
+        }
+
+        // Lookup by name (case-insensitive)
+        if (parsed.get("X-Request-Id")) |req_id| {
+            std.debug.print("Request ID: {s}\n", .{req_id});
+        }
+
+        // Check for no-responders status
+        if (parsed.isNoResponders()) {
+            std.debug.print("No responders available\n", .{});
+        }
+    }
+}
+```
+
+**Important**: `ParseResult` owns its data (copies strings to heap). This means
+parsed headers remain valid even after `msg.deinit()` is called. Always call
+`parsed.deinit()` to free memory.
+
+### Well-Known Header Names
+
+Use constants from `headers.HeaderName` for JetStream and NATS features:
+
+```zig
+const hdrs = [_]headers.Entry{
+    // JetStream message deduplication
+    .{ .key = headers.HeaderName.msg_id, .value = "unique-msg-001" },
+    // Expected stream for publish
+    .{ .key = headers.HeaderName.expected_stream, .value = "ORDERS" },
+};
+```
+
+| Constant | Header Name | Purpose |
+|----------|-------------|---------|
+| `msg_id` | `Nats-Msg-Id` | JetStream deduplication |
+| `expected_stream` | `Nats-Expected-Stream` | Verify target stream |
+| `expected_last_msg_id` | `Nats-Expected-Last-Msg-Id` | Optimistic concurrency |
+| `expected_last_seq` | `Nats-Expected-Last-Sequence` | Sequence verification |
+
+### Header Notes
+
+- Header values can contain colons (URLs, timestamps work fine)
+- Case-insensitive lookup for header names
+- On parse error: `items()` returns empty slice, `get()` returns null
 
 ---
 
@@ -584,7 +704,7 @@ pub const Message = struct {
     sid: u64,                  // Subscription ID
     reply_to: ?[]const u8,     // Reply-to address (for request/reply)
     data: []const u8,          // Message payload
-    headers: ?[]const u8,      // NATS headers (if enabled)
+    headers: ?[]const u8,      // Raw NATS headers (use headers.parse())
 };
 ```
 
@@ -722,6 +842,7 @@ nats bench sub test.subject --msgs=100000
 | Core Protocol | Complete |
 | Pub/Sub | Complete |
 | Request/Reply | Complete |
+| Headers | Complete |
 | Reconnection | Complete |
 | Event Callbacks | Complete |
 | JetStream | Planned |

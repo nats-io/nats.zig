@@ -35,6 +35,9 @@ const events_mod = @import("events.zig");
 pub const Event = events_mod.Event;
 pub const EventHandler = events_mod.EventHandler;
 
+const headers = @import("protocol/headers.zig");
+pub const HeaderEntry = headers.Entry;
+
 const Client = @This();
 
 /// Gets current time in nanoseconds (Zig 0.16 compatible).
@@ -1103,6 +1106,187 @@ pub fn publishRequest(
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += payload.len;
+}
+
+/// Publishes a message with headers.
+///
+/// Arguments:
+///     subject: Destination subject (no wildcards allowed)
+///     hdrs: Header entries to include
+///     payload: Message data
+///
+/// Messages are buffered. Call flush() to ensure delivery.
+/// Thread-safe: protected by write_mutex for concurrent publish.
+pub fn publishWithHeaders(
+    self: *Client,
+    subject: []const u8,
+    hdrs: []const headers.Entry,
+    payload: []const u8,
+) !void {
+    assert(subject.len > 0);
+    assert(hdrs.len > 0);
+    if (!self.state.canSend()) {
+        return error.NotConnected;
+    }
+    try pubsub.validatePublish(subject);
+
+    const hdr_size = headers.encodedSize(hdrs);
+    if (hdr_size + payload.len > self.max_payload) return error.PayloadTooLarge;
+
+    // Acquire write mutex for thread-safe buffer access
+    try self.write_mutex.lock(self.io);
+    defer self.write_mutex.unlock(self.io);
+
+    const writer = &self.writer.interface;
+    protocol.Encoder.encodeHPubWithEntries(writer, .{
+        .subject = subject,
+        .reply_to = null,
+        .headers = hdrs,
+        .payload = payload,
+    }) catch {
+        return error.EncodingFailed;
+    };
+
+    self.stats.msgs_out += 1;
+    self.stats.bytes_out += payload.len;
+}
+
+/// Publishes with headers and reply-to subject.
+///
+/// Arguments:
+///     subject: Destination subject (no wildcards allowed)
+///     reply_to: Subject for reply
+///     hdrs: Header entries to include
+///     payload: Message data
+///
+/// Thread-safe: protected by write_mutex for concurrent publish.
+pub fn publishRequestWithHeaders(
+    self: *Client,
+    subject: []const u8,
+    reply_to: []const u8,
+    hdrs: []const headers.Entry,
+    payload: []const u8,
+) !void {
+    assert(subject.len > 0);
+    assert(reply_to.len > 0);
+    assert(hdrs.len > 0);
+    if (!self.state.canSend()) {
+        return error.NotConnected;
+    }
+    try pubsub.validatePublish(subject);
+    try pubsub.validateReplyTo(reply_to);
+
+    const hdr_size = headers.encodedSize(hdrs);
+    if (hdr_size + payload.len > self.max_payload) return error.PayloadTooLarge;
+
+    // Acquire write mutex for thread-safe buffer access
+    try self.write_mutex.lock(self.io);
+    defer self.write_mutex.unlock(self.io);
+
+    const writer = &self.writer.interface;
+    protocol.Encoder.encodeHPubWithEntries(writer, .{
+        .subject = subject,
+        .reply_to = reply_to,
+        .headers = hdrs,
+        .payload = payload,
+    }) catch {
+        return error.EncodingFailed;
+    };
+
+    self.stats.msgs_out += 1;
+    self.stats.bytes_out += payload.len;
+}
+
+/// Sends a request with headers and waits for a reply with timeout.
+///
+/// Arguments:
+///     allocator: Allocator for response message
+///     subject: Request destination subject
+///     hdrs: Header entries to include in request
+///     payload: Request data
+///     timeout_ms: Maximum time to wait for reply in milliseconds
+///
+/// Creates a temporary inbox subscription, sends request with reply-to
+/// and headers, and waits for response using io.select().
+/// Returns null on timeout.
+pub fn requestWithHeaders(
+    self: *Client,
+    allocator: Allocator,
+    subject: []const u8,
+    hdrs: []const headers.Entry,
+    payload: []const u8,
+    timeout_ms: u32,
+) !?Message {
+    assert(subject.len > 0);
+    assert(hdrs.len > 0);
+    assert(timeout_ms > 0);
+    if (!self.state.canSend()) {
+        return error.NotConnected;
+    }
+
+    // Generate unique inbox for reply
+    const inbox = try pubsub.newInbox(allocator, self.io);
+    defer allocator.free(inbox);
+
+    // Subscribe to inbox (temporary subscription)
+    const sub = try self.subscribe(allocator, inbox);
+    defer sub.deinit(allocator);
+
+    // Flush subscription registration before publishing
+    try self.flush(allocator);
+
+    // Brief delay to ensure server has registered subscription
+    self.io.sleep(.fromMilliseconds(5), .awake) catch {};
+
+    // Publish request with reply-to and headers
+    try self.publishRequestWithHeaders(subject, inbox, hdrs, payload);
+    try self.flush(allocator);
+
+    // Wait for reply using io.select()
+    var response_future = self.io.async(
+        Subscription.next,
+        .{ sub, allocator, self.io },
+    );
+    var timeout_future = self.io.async(
+        sleepMs,
+        .{ self.io, timeout_ms },
+    );
+
+    // Winner-tracking pattern: defer cleanup for non-winners
+    var winner: enum { none, response, timeout } = .none;
+
+    defer if (winner != .response) {
+        if (response_future.cancel(self.io)) |msg| {
+            msg.deinit(allocator);
+        } else |_| {}
+    };
+    defer if (winner != .timeout) {
+        timeout_future.cancel(self.io);
+    };
+
+    const select_result = self.io.select(.{
+        .response = &response_future,
+        .timeout = &timeout_future,
+    }) catch |err| {
+        if (err == error.Canceled) return null;
+        return err;
+    };
+
+    switch (select_result) {
+        .response => |msg_result| {
+            winner = .response;
+            return msg_result catch |err| {
+                if (err == error.Canceled or err == error.Closed) {
+                    return null;
+                }
+                return err;
+            };
+        },
+        .timeout => {
+            winner = .timeout;
+            return null;
+        },
+    }
 }
 
 /// Flushes pending writes to the server.
