@@ -156,6 +156,13 @@ pub const Options = struct {
     /// Max outstanding PINGs before connection is considered stale.
     max_pings_outstanding: u8 = defaults.Connection.max_pings_outstanding,
 
+    // ERROR REPORTING
+
+    /// Messages between rate-limited error notifications.
+    /// After first error (alloc_failed, protocol_error), subsequent errors
+    /// only notify every N messages. Prevents event queue flooding.
+    error_notify_interval_msgs: u64 = defaults.ErrorReporting.notify_interval_msgs,
+
     // EVENT CALLBACKS
 
     /// Event handler for connection lifecycle callbacks (optional).
@@ -221,6 +228,11 @@ pub const DrainResult = struct {
     unsub_failures: u16 = 0,
     /// True if final flush failed (data may not have reached server).
     flush_failed: bool = false,
+
+    /// Returns true if drain completed without any failures.
+    pub fn isClean(self: DrainResult) bool {
+        return self.unsub_failures == 0 and !self.flush_failed;
+    }
 };
 
 /// Subscribe command data (used by restoreSubscriptions).
@@ -373,6 +385,12 @@ pings_outstanding: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 // Debug counters for io_task (only used when dbg.enabled)
 io_task_stats: IoTaskStats = .{},
 
+// Error rate-limiting state (written by io_task only)
+/// Count of protocol parse errors encountered.
+protocol_errors: u64 = 0,
+/// msgs_in value when protocol_error event was last pushed (rate-limit).
+last_parse_error_notified_at: u64 = 0,
+
 // Background I/O task infrastructure
 write_mutex: Io.Mutex = .init,
 /// Future for background I/O task (for proper cancellation in deinit).
@@ -406,6 +424,9 @@ pub fn connect(
     url: []const u8,
     opts: Options,
 ) !*Client {
+    // Validate URL length - reject rather than truncate
+    if (url.len > defaults.Server.max_url_len) return error.UrlTooLong;
+
     const parsed = try parseUrl(url);
 
     const client = try allocator.create(Client);
@@ -549,9 +570,10 @@ pub fn connect(
     // Perform handshake
     try client.handshake(allocator, opts, parsed);
 
-    // Store original URL for reconnection
-    const url_len: u8 = @intCast(@min(url.len, 256));
-    @memcpy(client.original_url[0..url_len], url[0..url_len]);
+    // Store original URL for reconnection (already validated)
+    assert(url.len <= defaults.Server.max_url_len);
+    const url_len: u8 = @intCast(url.len);
+    @memcpy(client.original_url[0..url_len], url);
     client.original_url_len = url_len;
 
     // Initialize server pool with primary URL
@@ -620,6 +642,24 @@ pub fn connect(
 
         // Push initial connected event
         _ = eq.push(.{ .connected = {} });
+
+        // Push socket option warnings (non-fatal, performance impact)
+        if (!client.tcp_nodelay_set) {
+            _ = eq.push(.{
+                .err = .{
+                    .err = events_mod.Error.TcpNoDelayFailed,
+                    .msg = null,
+                },
+            });
+        }
+        if (!client.tcp_rcvbuf_set and opts.tcp_rcvbuf > 0) {
+            _ = eq.push(.{
+                .err = .{
+                    .err = events_mod.Error.TcpRcvBufFailed,
+                    .msg = null,
+                },
+            });
+        }
     }
 
     assert(client.next_sid >= 1);
@@ -658,9 +698,17 @@ fn callbackTaskFn(client: *Client) void {
                     dbg.print("callback_task: EXITED (closed event)", .{});
                     return;
                 },
-                .slow_consumer => handler.dispatchError(events_mod.Error.SlowConsumer),
+                .slow_consumer => {
+                    handler.dispatchError(events_mod.Error.SlowConsumer);
+                },
                 .err => |e| handler.dispatchError(e.err),
                 .lame_duck => handler.dispatchLameDuck(),
+                .alloc_failed => {
+                    handler.dispatchError(events_mod.Error.AllocationFailed);
+                },
+                .protocol_error => {
+                    handler.dispatchError(events_mod.Error.ProtocolParseError);
+                },
             }
         }
         // Async-aware yield with cancellation support (replaces std.Thread.yield)
@@ -895,6 +943,14 @@ pub fn subscribeQueue(
     }
     try pubsub.validateSubscribe(subject);
     if (queue_group) |qg| try pubsub.validateQueueGroup(qg);
+
+    // Validate lengths for backup buffer compatibility
+    if (subject.len > defaults.Limits.max_subject_len) return error.SubjectTooLong;
+    if (queue_group) |qg| {
+        if (qg.len > defaults.Limits.max_queue_group_len) {
+            return error.QueueGroupTooLong;
+        }
+    }
     assert(self.next_sid >= 1);
 
     // Allocate slot
@@ -1232,6 +1288,16 @@ pub fn drain(self: *Client, alloc: Allocator) !DrainResult {
         self.server_info = null;
     }
 
+    // Push err event if drain had failures
+    if (!result.isClean()) {
+        self.pushEvent(.{
+            .err = .{
+                .err = events_mod.Error.DrainIncomplete,
+                .msg = null,
+            },
+        });
+    }
+
     return result;
 }
 
@@ -1265,6 +1331,18 @@ pub fn isTcpNoDelaySet(self: *const Client) bool {
 /// Returns true if TCP receive buffer was successfully set.
 pub fn isTcpRcvBufSet(self: *const Client) bool {
     return self.tcp_rcvbuf_set;
+}
+
+/// Reset rate-limit counters, allowing errors to re-trigger events.
+/// Call this if you want immediate re-notification of ongoing errors.
+/// Resets both subscription alloc_failed and client protocol_error thresholds.
+pub fn resetErrorNotifications(self: *Client) void {
+    for (self.sub_ptrs) |maybe_sub| {
+        if (maybe_sub) |sub| {
+            sub.last_alloc_notified_at = 0;
+        }
+    }
+    self.last_parse_error_notified_at = 0;
 }
 
 /// Get subscription by SID.
@@ -1449,7 +1527,8 @@ pub fn deinit(self: *Client, alloc: Allocator) void {
 
 /// Backup all active subscriptions for restoration after reconnect.
 /// Stores SID, subject, and queue_group in inline buffers (no allocation).
-pub fn backupSubscriptions(self: *Client) void {
+/// Returns error if any subject > 256 bytes or queue_group > 64 bytes.
+pub fn backupSubscriptions(self: *Client) error{SubjectTooLong}!void {
     self.sub_backup_count = 0;
 
     for (self.sub_ptrs) |maybe_sub| {
@@ -1457,18 +1536,40 @@ pub fn backupSubscriptions(self: *Client) void {
             if (sub.state != .active) continue;
             if (self.sub_backup_count >= MAX_SUBSCRIPTIONS) break;
 
+            // Validate lengths - reject truncation
+            if (sub.subject.len > defaults.Limits.max_subject_len) {
+                self.pushEvent(.{
+                    .err = .{
+                        .err = events_mod.Error.SubjectTooLong,
+                        .msg = null,
+                    },
+                });
+                return error.SubjectTooLong;
+            }
+            if (sub.queue_group) |qg| {
+                if (qg.len > defaults.Limits.max_queue_group_len) {
+                    self.pushEvent(.{
+                        .err = .{
+                            .err = events_mod.Error.QueueGroupTooLong,
+                            .msg = null,
+                        },
+                    });
+                    return error.SubjectTooLong;
+                }
+            }
+
             var backup = &self.sub_backups[self.sub_backup_count];
             backup.sid = sub.sid;
 
-            // Copy subject
-            const subj_len: u8 = @intCast(@min(sub.subject.len, 256));
-            @memcpy(backup.subject_buf[0..subj_len], sub.subject[0..subj_len]);
+            // Copy subject (validated above)
+            const subj_len: u8 = @intCast(sub.subject.len);
+            @memcpy(backup.subject_buf[0..subj_len], sub.subject);
             backup.subject_len = subj_len;
 
-            // Copy queue_group if present
+            // Copy queue_group if present (validated above)
             if (sub.queue_group) |qg| {
-                const qg_len: u8 = @intCast(@min(qg.len, 64));
-                @memcpy(backup.queue_group_buf[0..qg_len], qg[0..qg_len]);
+                const qg_len: u8 = @intCast(qg.len);
+                @memcpy(backup.queue_group_buf[0..qg_len], qg);
                 backup.queue_group_len = qg_len;
             } else {
                 backup.queue_group_len = 0;
@@ -1720,8 +1821,11 @@ pub fn reconnect(self: *Client, allocator: Allocator) !void {
         self.server_pool_initialized = true;
     }
 
-    // Backup subscriptions before cleanup
-    self.backupSubscriptions();
+    // Backup subscriptions before cleanup (error = subs won't restore)
+    self.backupSubscriptions() catch |err| {
+        dbg.print("backupSubscriptions failed: {s}", .{@errorName(err)});
+        // Error event already pushed by backupSubscriptions
+    };
     self.cleanupForReconnect();
     self.state = .reconnecting;
 
@@ -1831,6 +1935,8 @@ pub const Subscription = struct {
     dropped_msgs: u64 = 0,
     alloc_failed_msgs: u64 = 0,
     client_destroyed: bool = false,
+    /// msgs_in value when alloc_failed event was last pushed (rate-limit).
+    last_alloc_notified_at: u64 = 0,
 
     /// Blocks until a message is available or connection is closed.
     ///

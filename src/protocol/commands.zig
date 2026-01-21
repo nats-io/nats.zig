@@ -6,6 +6,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
+const defaults = @import("../defaults.zig");
 
 /// Commands sent from server to client.
 pub const ServerCommand = union(enum) {
@@ -105,12 +106,15 @@ pub const ServerInfo = struct {
         };
 
         // Copy connect_urls (inline, no allocation)
+        // Skip URLs > max_url_len (truncated URL would be invalid anyway)
         if (info.connect_urls) |urls| {
-            for (urls, 0..) |url, i| {
-                if (i >= 16) break;
-                const len: u8 = @intCast(@min(url.len, 256));
-                @memcpy(owned.connect_urls[i][0..len], url[0..len]);
-                owned.connect_urls_lens[i] = len;
+            for (urls) |url| {
+                if (owned.connect_urls_count >= 16) break;
+                if (url.len > defaults.Server.max_url_len) continue;
+                const len: u8 = @intCast(url.len);
+                const idx = owned.connect_urls_count;
+                @memcpy(owned.connect_urls[idx][0..len], url);
+                owned.connect_urls_lens[idx] = len;
                 owned.connect_urls_count += 1;
             }
         }

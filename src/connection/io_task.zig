@@ -285,7 +285,27 @@ inline fn tryRouteBufferedMessages(
             // Scan to next CRLF for recovery (skip corrupted data)
             // Uses SIMD on supported platforms - faster than byte-by-byte
             if (std.mem.indexOf(u8, data[offset..], "\r\n")) |crlf_pos| {
-                offset += crlf_pos + 2;
+                const bytes_skipped = crlf_pos + 2;
+                offset += bytes_skipped;
+
+                // Track and rate-limit protocol error notifications
+                client.protocol_errors += 1;
+                const msgs_since = client.stats.msgs_in -|
+                    client.last_parse_error_notified_at;
+                const interval = client.options.error_notify_interval_msgs;
+                if (client.protocol_errors == 1 or msgs_since >= interval) {
+                    client.last_parse_error_notified_at = client.stats.msgs_in;
+                    client.pushEvent(.{
+                        .protocol_error = .{
+                            .bytes_skipped = bytes_skipped,
+                            .count = client.protocol_errors,
+                        },
+                    });
+                }
+                dbg.print(
+                    "parse error (#{d}, skipped {d} bytes, rate-limited)",
+                    .{ client.protocol_errors, bytes_skipped },
+                );
             } else {
                 break; // No CRLF found, need more data
             }
@@ -380,6 +400,22 @@ inline fn routeMessageToSub(
 
     const buf = slab.alloc(total_size) orelse {
         sub.alloc_failed_msgs += 1;
+        // Rate-limit: push event on 1st failure OR after interval msgs
+        const msgs_since = client.stats.msgs_in -| sub.last_alloc_notified_at;
+        const interval = client.options.error_notify_interval_msgs;
+        if (sub.alloc_failed_msgs == 1 or msgs_since >= interval) {
+            sub.last_alloc_notified_at = client.stats.msgs_in;
+            client.pushEvent(.{
+                .alloc_failed = .{
+                    .sid = args.sid,
+                    .count = sub.alloc_failed_msgs,
+                },
+            });
+        }
+        dbg.print(
+            "alloc failed sid={d} (#{d}, rate-limited every {d} msgs)",
+            .{ args.sid, sub.alloc_failed_msgs, interval },
+        );
         return;
     };
 
@@ -446,6 +482,22 @@ inline fn routeHMessageToSub(
     // Allocate message with backing buffer (direct slab call, no vtable)
     const buf = slab.alloc(total_size) orelse {
         sub.alloc_failed_msgs += 1;
+        // Rate-limit: push event on 1st failure OR after interval msgs
+        const msgs_since = client.stats.msgs_in -| sub.last_alloc_notified_at;
+        const interval = client.options.error_notify_interval_msgs;
+        if (sub.alloc_failed_msgs == 1 or msgs_since >= interval) {
+            sub.last_alloc_notified_at = client.stats.msgs_in;
+            client.pushEvent(.{
+                .alloc_failed = .{
+                    .sid = args.sid,
+                    .count = sub.alloc_failed_msgs,
+                },
+            });
+        }
+        dbg.print(
+            "alloc failed sid={d} (#{d}, rate-limited every {d} msgs)",
+            .{ args.sid, sub.alloc_failed_msgs, interval },
+        );
         return;
     };
 
@@ -497,8 +549,11 @@ fn handleDisconnect(client: *Client, allocator: Allocator) bool {
     // Push disconnected event (no specific error captured at this level)
     client.pushEvent(.{ .disconnected = .{ .err = null } });
 
-    // Backup subscriptions before reconnect
-    client.backupSubscriptions();
+    // Backup subscriptions before reconnect (error = subs won't restore)
+    client.backupSubscriptions() catch |err| {
+        dbg.print("backupSubscriptions failed: {s}", .{@errorName(err)});
+        // Error event already pushed by backupSubscriptions
+    };
 
     // Try reconnection
     if (tryReconnectLoop(client, allocator)) {

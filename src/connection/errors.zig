@@ -19,6 +19,16 @@ pub const Error = error{
     StaleConnection,
     /// Server is in lame duck mode and will shut down soon.
     LameDuckMode,
+    /// TCP_NODELAY socket option failed (non-fatal, performance impact).
+    TcpNoDelayFailed,
+    /// TCP receive buffer option failed (non-fatal, performance impact).
+    TcpRcvBufFailed,
+    /// URL too long (>256 bytes, cannot be stored).
+    UrlTooLong,
+    /// Queue group too long (>64 bytes, cannot be stored in backup).
+    QueueGroupTooLong,
+    /// Subject too long (>256 bytes, cannot be stored in backup).
+    SubjectTooLong,
 };
 
 /// Parses auth-related errors from server -ERR message.

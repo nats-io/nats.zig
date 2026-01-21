@@ -129,3 +129,21 @@ pub const Spin = struct {
     /// Reduces syscalls while maintaining reasonable timeout granularity.
     pub const timeout_check_iterations: u32 = 10000;
 };
+
+/// Protocol limits for subjects and queue groups.
+/// These are compile-time limits that define backup buffer sizes.
+pub const Limits = struct {
+    /// Max subject length for backup buffers (reconnect support).
+    /// Subjects longer than this cannot be restored after reconnect.
+    pub const max_subject_len: u16 = 256;
+    /// Max queue group length for backup buffers.
+    pub const max_queue_group_len: u8 = 64;
+};
+
+/// Error reporting configuration.
+pub const ErrorReporting = struct {
+    /// Messages between rate-limited error notifications.
+    /// After first error, subsequent errors only notify every N messages.
+    /// This prevents event queue flooding during sustained error conditions.
+    pub const notify_interval_msgs: u64 = 100_000;
+};

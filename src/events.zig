@@ -54,6 +54,22 @@ pub const Error = error{
     /// Failed to restore subscriptions after reconnect.
     /// User may need to re-subscribe manually.
     SubscriptionRestoreFailed,
+    /// Message allocation failed (slab exhausted).
+    AllocationFailed,
+    /// Protocol parse error (malformed data skipped).
+    ProtocolParseError,
+    /// Subject too long for backup buffer (>256 bytes).
+    SubjectTooLong,
+    /// Queue group too long for backup buffer (>64 bytes).
+    QueueGroupTooLong,
+    /// Drain completed with failures (UNSUB or flush failed).
+    DrainIncomplete,
+    /// TCP_NODELAY socket option failed (performance impact).
+    TcpNoDelayFailed,
+    /// TCP receive buffer option failed (performance impact).
+    TcpRcvBufFailed,
+    /// URL too long (>256 bytes, would be truncated).
+    UrlTooLong,
 };
 
 /// Events pushed from io_task to callback_task.
@@ -86,6 +102,14 @@ pub const Event = union(enum) {
     /// Server entering lame duck mode (graceful shutdown).
     /// Client should prepare for eventual disconnect.
     lame_duck: void,
+
+    /// Message allocation failed (slab exhausted).
+    /// Rate-limited: fires on first failure, then every 100k messages.
+    alloc_failed: struct { sid: u64, count: u64 },
+
+    /// Protocol parse error (malformed data recovered via CRLF skip).
+    /// Rate-limited: fires on first error, then every 100k messages.
+    protocol_error: struct { bytes_skipped: usize, count: u64 },
 };
 
 /// Type-erased event handler using std.mem.Allocator vtable pattern.
@@ -334,6 +358,8 @@ test "Event union" {
         .{ .err = .{ .err = Error.SlowConsumer, .msg = null } },
         .{ .err = .{ .err = Error.PermissionViolation, .msg = "test" } },
         .{ .lame_duck = {} },
+        .{ .alloc_failed = .{ .sid = 1, .count = 5 } },
+        .{ .protocol_error = .{ .bytes_skipped = 128, .count = 3 } },
     };
 
     for (events) |event| {
@@ -353,6 +379,14 @@ test "Event union" {
                 _ = @errorName(e.err);
             },
             .lame_duck => {},
+            .alloc_failed => |af| {
+                try std.testing.expect(af.sid > 0);
+                try std.testing.expect(af.count > 0);
+            },
+            .protocol_error => |pe| {
+                try std.testing.expect(pe.bytes_skipped > 0);
+                try std.testing.expect(pe.count > 0);
+            },
         }
     }
 }
