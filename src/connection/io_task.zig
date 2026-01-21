@@ -367,29 +367,34 @@ inline fn routeMessageToSub(
     const sub = client.getSubscriptionBySid(args.sid) orelse return;
 
     // Allocate message with backing buffer (direct slab call, no vtable)
-    const total_size = args.subject.len + args.payload.len +
-        (if (args.reply_to) |rt| rt.len else 0);
+    const subj_len = args.subject.len;
+    const payload_len = args.payload.len;
+    const reply_len = if (args.reply_to) |rt| rt.len else 0;
+    const total_size = subj_len + payload_len + reply_len;
+
+    // Bounds verification - assert our arithmetic is correct
+    const subj_end = subj_len;
+    const payload_end = subj_end + payload_len;
+    const reply_end = payload_end + reply_len;
+    assert(reply_end == total_size);
+
     const buf = slab.alloc(total_size) orelse {
         sub.alloc_failed_msgs += 1;
         return;
     };
 
-    // Copy all data into backing buffer first (better CPU pipelining)
-    const subj_len = args.subject.len;
-    const payload_len = args.payload.len;
-    const reply_len = if (args.reply_to) |rt| rt.len else 0;
-
-    @memcpy(buf[0..subj_len], args.subject);
-    @memcpy(buf[subj_len..][0..payload_len], args.payload);
+    // Copy all data into backing buffer (better CPU pipelining)
+    @memcpy(buf[0..subj_end], args.subject);
+    @memcpy(buf[subj_end..payload_end], args.payload);
     if (args.reply_to) |rt| {
-        @memcpy(buf[subj_len + payload_len ..][0..reply_len], rt);
+        @memcpy(buf[payload_end..reply_end], rt);
     }
 
     // Create slices after all copies complete
-    const subject = buf[0..subj_len];
-    const data_slice = buf[subj_len..][0..payload_len];
+    const subject = buf[0..subj_end];
+    const data_slice = buf[subj_end..payload_end];
     const reply_to: ?[]const u8 = if (reply_len > 0)
-        buf[subj_len + payload_len ..][0..reply_len]
+        buf[payload_end..reply_end]
     else
         null;
 
@@ -423,35 +428,41 @@ inline fn routeHMessageToSub(
     args: protocol.HMsgArgs,
 ) void {
     const sub = client.getSubscriptionBySid(args.sid) orelse return;
-    const payload_len = args.total_len - args.header_len;
+
+    // Compute lengths upfront
+    const subj_len = args.subject.len;
+    const data_len = args.payload.len;
+    const hdr_len = args.headers.len;
+    const reply_len = if (args.reply_to) |rt| rt.len else 0;
+    const total_size = subj_len + data_len + hdr_len + reply_len;
+
+    // Bounds verification - assert our arithmetic is correct
+    const subj_end = subj_len;
+    const data_end = subj_end + data_len;
+    const hdr_end = data_end + hdr_len;
+    const reply_end = hdr_end + reply_len;
+    assert(reply_end == total_size);
 
     // Allocate message with backing buffer (direct slab call, no vtable)
-    const total_size = args.subject.len + payload_len + args.header_len +
-        (if (args.reply_to) |rt| rt.len else 0);
     const buf = slab.alloc(total_size) orelse {
         sub.alloc_failed_msgs += 1;
         return;
     };
 
-    // Copy all data into backing buffer first (better CPU pipelining)
-    const subj_len = args.subject.len;
-    const data_len = args.payload.len;
-    const hdr_len = args.headers.len;
-    const reply_len = if (args.reply_to) |rt| rt.len else 0;
-
-    @memcpy(buf[0..subj_len], args.subject);
-    @memcpy(buf[subj_len..][0..data_len], args.payload);
-    @memcpy(buf[subj_len + data_len ..][0..hdr_len], args.headers);
+    // Copy all data into backing buffer (better CPU pipelining)
+    @memcpy(buf[0..subj_end], args.subject);
+    @memcpy(buf[subj_end..data_end], args.payload);
+    @memcpy(buf[data_end..hdr_end], args.headers);
     if (args.reply_to) |rt| {
-        @memcpy(buf[subj_len + data_len + hdr_len ..][0..reply_len], rt);
+        @memcpy(buf[hdr_end..reply_end], rt);
     }
 
     // Create slices after all copies complete
-    const subject = buf[0..subj_len];
-    const data_slice = buf[subj_len..][0..data_len];
-    const headers = buf[subj_len + data_len ..][0..hdr_len];
+    const subject = buf[0..subj_end];
+    const data_slice = buf[subj_end..data_end];
+    const headers = buf[data_end..hdr_end];
     const reply_to: ?[]const u8 = if (reply_len > 0)
-        buf[subj_len + data_len + hdr_len ..][0..reply_len]
+        buf[hdr_end..reply_end]
     else
         null;
 

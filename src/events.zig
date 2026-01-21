@@ -51,6 +51,9 @@ pub const Error = error{
     AuthorizationViolation,
     /// Server connection limit reached.
     MaxConnectionsExceeded,
+    /// Failed to restore subscriptions after reconnect.
+    /// User may need to re-subscribe manually.
+    SubscriptionRestoreFailed,
 };
 
 /// Events pushed from io_task to callback_task.

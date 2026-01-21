@@ -637,14 +637,16 @@ pub fn pushEvent(self: *Client, event: Event) void {
 
 /// Callback task: drains event queue and dispatches to user handler.
 /// Runs concurrently, uses io.sleep(0) for async-aware yield with cancellation.
-/// Exits on .closed event or when canceled during shutdown.
+/// Exits on .closed event, null queue (deinit), or when canceled during shutdown.
 fn callbackTaskFn(client: *Client) void {
     dbg.print("callback_task: STARTED", .{});
 
     const handler = client.event_handler orelse return;
-    const queue = client.event_queue orelse return;
 
     while (State.atomicLoad(&client.state) != .closed) {
+        // Check if queue was nulled by deinit() - must exit immediately
+        const queue = client.event_queue orelse break;
+
         // Drain all pending events
         while (queue.pop()) |event| {
             switch (event) {
@@ -1393,17 +1395,21 @@ pub fn deinit(self: *Client, alloc: Allocator) void {
     }
 
     // 4. Cancel callback task and free event queue
-    if (self.event_queue) |eq| {
+    // SAFETY: Set event_queue = null BEFORE canceling to signal callback_task
+    // to exit. This prevents use-after-free if callback_task is mid-loop.
+    const eq = self.event_queue;
+    self.event_queue = null; // Signal callback_task to exit
+    if (eq) |queue| {
         // Push closed event so callback_task can dispatch final onClose
-        _ = eq.push(.{ .closed = {} });
+        _ = queue.push(.{ .closed = {} });
     }
     if (self.callback_task_future) |*future| {
         _ = future.cancel(self.io);
         self.callback_task_future = null;
     }
-    if (self.event_queue) |eq| {
-        alloc.destroy(eq);
-        self.event_queue = null;
+    // Now safe to free - callback_task has exited (state=closed + null check)
+    if (eq) |queue| {
+        alloc.destroy(queue);
     }
     if (self.event_queue_buf) |buf| {
         alloc.free(buf);
@@ -1750,6 +1756,13 @@ pub fn reconnect(self: *Client, allocator: Allocator) !void {
                     "Failed to restore subscriptions: {s}",
                     .{@errorName(err)},
                 );
+                // Notify user - subscriptions may be broken, they can re-sub
+                self.pushEvent(.{
+                    .err = .{
+                        .err = events_mod.Error.SubscriptionRestoreFailed,
+                        .msg = null,
+                    },
+                });
             };
             self.flushPendingBuffer() catch |err| {
                 dbg.print(

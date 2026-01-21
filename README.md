@@ -691,7 +691,7 @@ zig build fmt
 | Subscriber | Publisher Rate | Subscriber Rate | Bandwidth |
 |------------|----------------|-----------------|-----------|
 | Zig io_uring | 22,232,024 msg/s | 22,413,431 msg/s | 2736 MB/s |
-| **Zig** | **8,183,090 msg/s** | **7,993,197 msg/s** | **976 MB/s** |
+| **Zig** | **8,328,443 msg/s** | **8,328,443 msg/s** | **1017 MB/s** |
 | Go | 3,307,826 msg/s | 3,180,441 msg/s | 388 MB/s |
 | C | 2,680,022 msg/s | 2,590,673 msg/s | 332 MB/s |
 | Rust | 2,092,537 msg/s | 1,995,394 msg/s | 255 MB/s |

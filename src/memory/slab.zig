@@ -130,7 +130,18 @@ pub const Slab = struct {
     }
 
     inline fn ptrToIndex(self: *Slab, ptr: [*]u8) u32 {
-        const offset = @intFromPtr(ptr) - @intFromPtr(self.memory.ptr);
+        const ptr_addr = @intFromPtr(ptr);
+        const mem_start = @intFromPtr(self.memory.ptr);
+        const mem_end = mem_start + self.memory.len;
+
+        // Validate pointer is within slab memory
+        assert(ptr_addr >= mem_start);
+        assert(ptr_addr < mem_end);
+
+        const offset = ptr_addr - mem_start;
+        // Validate pointer is aligned to slice boundary
+        assert(offset % self.slice_size == 0);
+
         return @intCast(offset / self.slice_size);
     }
 
