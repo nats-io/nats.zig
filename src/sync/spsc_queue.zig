@@ -2,12 +2,40 @@
 //!
 //! Zero syscalls, zero mutex, maximum throughput.
 //! Designed for cross-thread message passing between io_task and subscriber.
+//!
+//! ## Memory Ordering Rationale
+//!
+//! This SPSC queue uses a carefully chosen memory ordering strategy that is
+//! both correct on weakly-ordered architectures (ARM) and optimal for
+//! strongly-ordered architectures (x86_64).
+//!
+//! **Key insight**: Each index (head/tail) has exactly ONE writer thread.
+//! - `head`: written only by producer, read by both
+//! - `tail`: written only by consumer, read by both
+//!
+//! **Ordering rules applied**:
+//! - Reading your OWN index: `.monotonic` (you're the only writer, no sync needed)
+//! - Reading OTHER's index: `.acquire` (must see their prior writes to buffer)
+//! - Writing your index: `.release` (your buffer writes must be visible first)
+//!
+//! **The release-acquire pairing**:
+//! ```
+//! Producer:                          Consumer:
+//!   buffer[head] = item;               head = head.load(.acquire);  // sees data
+//!   head.store(new, .release);  ---->  item = buffer[tail];
+//!                                      tail.store(new, .release);
+//!                               <----  tail.load(.acquire);  // sees consumption
+//! ```
+//!
+//! This ensures: when consumer sees updated head, the data write is visible.
+//! When producer sees updated tail, the slot is safe to reuse.
 
 const std = @import("std");
 const assert = std.debug.assert;
 
 /// Lock-free SPSC queue with runtime-sized buffer.
 /// Producer (io_task) and consumer (subscriber) can run on different threads.
+/// See module doc comment for memory ordering rationale.
 pub fn SpscQueue(comptime T: type) type {
     return struct {
         buffer: []T,
@@ -33,7 +61,9 @@ pub fn SpscQueue(comptime T: type) type {
         /// Push item (producer only). Returns false if full.
         /// O(1), lock-free, never blocks.
         pub fn push(self: *Self, item: T) bool {
+            // .monotonic: we're the only head writer, no sync needed for own read
             const head = self.head.load(.monotonic);
+            // .acquire: must see consumer's tail updates to know slots are free
             const tail = self.tail.load(.acquire);
 
             // Full check: head has wrapped around to tail
@@ -42,7 +72,8 @@ pub fn SpscQueue(comptime T: type) type {
             // Bitwise AND is faster than modulo (power-of-2 capacity)
             const mask = self.capacity - 1;
             self.buffer[head & mask] = item;
-            // Release ensures item write is visible before head increment
+            // .release: ensures item write is visible BEFORE head increment
+            // Consumer's .acquire on head will see this data
             self.head.store(head +% 1, .release);
             return true;
         }
@@ -50,7 +81,10 @@ pub fn SpscQueue(comptime T: type) type {
         /// Pop item (consumer only). Returns null if empty.
         /// O(1), lock-free, never blocks.
         pub fn pop(self: *Self) ?T {
+            // .monotonic: we're the only tail writer, no sync needed for own read
             const tail = self.tail.load(.monotonic);
+            // .acquire: must see producer's buffer writes that happened before
+            // their .release store to head
             const head = self.head.load(.acquire);
 
             // Empty check
@@ -59,15 +93,19 @@ pub fn SpscQueue(comptime T: type) type {
             // Bitwise AND is faster than modulo (power-of-2 capacity)
             const mask = self.capacity - 1;
             const item = self.buffer[tail & mask];
-            // Release ensures item read completes before tail increment
+            // .release: ensures item read completes BEFORE tail increment
+            // Producer's .acquire on tail will see slot is now free
             self.tail.store(tail +% 1, .release);
             return item;
         }
 
         /// Pop multiple items into output buffer. Returns count popped.
         /// O(n), lock-free, never blocks.
+        /// Same memory ordering rationale as pop() - see module doc.
         pub fn popBatch(self: *Self, out: []T) usize {
+            // .monotonic: we're the only tail writer
             const tail = self.tail.load(.monotonic);
+            // .acquire: must see producer's buffer writes
             const head = self.head.load(.acquire);
 
             const available = head -% tail;
@@ -79,6 +117,7 @@ pub fn SpscQueue(comptime T: type) type {
             for (0..count) |i| {
                 out[i] = self.buffer[(tail +% i) & mask];
             }
+            // .release: ensures all reads complete before tail update
             self.tail.store(tail +% count, .release);
             return count;
         }

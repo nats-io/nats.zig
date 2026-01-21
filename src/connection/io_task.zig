@@ -3,6 +3,26 @@
 //! Pure reader task: reads from socket, routes messages, responds to PING.
 //! All writes (PUB, SUB, flush) happen in user thread.
 //! Runs as async task started by Client.connect().
+//!
+//! ## Concurrency Model
+//!
+//! This task runs concurrently with the user thread. Key synchronization:
+//!
+//! **State checks (hot path)**: Uses plain reads, NOT atomics.
+//! - Rationale: "close-then-cancel" pattern in Client.deinit() ensures safe exit
+//! - If we read stale `.connected` instead of `.closed`, we try socket op
+//! - Socket op fails (already closed), error handler checks state, we exit
+//! - Worst case: one extra loop iteration, no corruption or crash
+//! - Benefit: avoids atomic overhead in hot loop (~2.5M msg/s throughput)
+//!
+//! **State changes (cold path)**: Uses atomics for reconnect/disconnect.
+//! - `State.atomicLoad()` / `@atomicStore()` used in error handlers
+//! - These are cold paths (only on disconnect), atomics acceptable
+//!
+//! **Stats counters**: Single-writer pattern, no atomics needed.
+//! - `msgs_in`, `bytes_in`: written ONLY by io_task
+//! - `msgs_out`, `bytes_out`: written ONLY by user thread
+//! - `getStats()` reads are safe: individual u64 loads are atomic on 64-bit
 
 const std = @import("std");
 const posix = std.posix;
@@ -55,9 +75,9 @@ pub fn run(client: *Client, allocator: Allocator) void {
 
     outer: while (true) {
         if (dbg.enabled) loop_count += 1;
-        // Exit immediately if client is closing
-        // Non-atomic read OK - close-then-cancel pattern ensures exit via
-        // stream error or cancellation even if we see stale value briefly
+        // HOT PATH: Exit check - intentionally non-atomic for performance.
+        // Safe because of "close-then-cancel" pattern (see module doc).
+        // If stale read misses .closed, socket op will fail and we exit anyway.
         if (client.state == .closed) break :outer;
 
         // Periodic health check (detects stale connections when server killed)
@@ -189,7 +209,7 @@ inline fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
 /// Uses poll() to check for data, then fillMore() to read.
 inline fn tryFillBuffer(client: *Client) ReadResult {
     if (dbg.enabled) client.io_task_stats.fill_calls += 1;
-    // Non-atomic read OK - just for faster exit, stream close handles it
+    // HOT PATH: Non-atomic read - see module doc "State checks (hot path)"
     if (client.state == .closed) return .canceled;
 
     const reader = &client.reader.interface;
@@ -211,7 +231,7 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
     if (dbg.enabled) client.io_task_stats.fill_buffered_hits += before;
 
     // Re-check state before read (race with deinit closing socket)
-    // Non-atomic read OK - just for faster exit
+    // HOT PATH: Non-atomic read - see module doc "State checks (hot path)"
     if (client.state == .closed) return .canceled;
 
     // Socket has data → fillMore() will return immediately
@@ -246,7 +266,7 @@ inline fn tryRouteBufferedMessages(
     const reader = &client.reader.interface;
     const slab = &client.tiered_slab;
 
-    // Non-atomic read OK - just for faster exit, stream close handles it
+    // HOT PATH: Non-atomic read - see module doc "State checks (hot path)"
     if (client.state == .closed) return .canceled;
 
     // Check what's already buffered (no I/O)
@@ -276,11 +296,14 @@ inline fn tryRouteBufferedMessages(
             switch (cmd) {
                 .msg => |args| {
                     routeMessageToSub(client, slab, args);
+                    // Single-writer pattern: only io_task writes msgs_in/bytes_in
+                    // No atomics needed - see module doc "Stats counters"
                     client.stats.msgs_in += 1;
                     client.stats.bytes_in += args.payload.len;
                 },
                 .hmsg => |args| {
                     routeHMessageToSub(client, slab, args);
+                    // Single-writer pattern: only io_task writes msgs_in/bytes_in
                     client.stats.msgs_in += 1;
                     client.stats.bytes_in += args.total_len;
                 },
