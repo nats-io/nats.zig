@@ -48,10 +48,7 @@ fn getNowNs() error{TimerUnavailable}!u64 {
     return secs * std.time.ns_per_s + nsecs;
 }
 
-/// Message received on a subscription.
-///
-/// All slices point into a single backing buffer for cache efficiency.
-/// Call deinit() to free - allocator param kept for API compat but ignored.
+/// Message received on a subscription. Call deinit() to free.
 pub const Message = struct {
     subject: []const u8,
     sid: u64,
@@ -68,20 +65,14 @@ pub const Message = struct {
     pub fn deinit(self: *const Message, allocator: Allocator) void {
         if (!self.owned) return;
         if (self.backing_buf) |buf| {
-            // backing_buf always comes from slab, return_queue must be set
             assert(self.return_queue != null);
             const rq = self.return_queue.?;
-            // Return buffer to slab via return_queue. The io_task drains this
-            // queue on every iteration (io_task.zig:93), so push almost always
-            // succeeds immediately. The while loop is a safety net for the rare
-            // case where the queue is momentarily full - yield allows io_task
-            // to drain before retry.
+            // Yield allows io_task to drain before retry
             while (!rq.push(buf)) {
                 std.Thread.yield() catch {};
             }
             return;
         }
-        // Separate allocations (legacy path)
         allocator.free(self.subject);
         allocator.free(self.data);
         if (self.reply_to) |rt| allocator.free(rt);
@@ -258,7 +249,6 @@ pub const SIDMAP_CAPACITY: u32 = defaults.Client.sidmap_capacity;
 /// Default queue size per subscription (messages buffered before dropping).
 pub const DEFAULT_QUEUE_SIZE: u32 = defaults.Memory.queue_size.value();
 
-// Compile-time validation of capacity constraints
 comptime {
     assert(SIDMAP_CAPACITY >= MAX_SUBSCRIPTIONS);
 }
@@ -268,7 +258,6 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     if (url.len == 0) return error.InvalidUrl;
     var remaining = url;
 
-    // Strip nats:// prefix
     if (std.mem.startsWith(u8, remaining, "nats://")) {
         remaining = remaining[7..];
     }
@@ -276,7 +265,6 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     var user: ?[]const u8 = null;
     var pass: ?[]const u8 = null;
 
-    // Check for user:pass@
     if (std.mem.indexOf(u8, remaining, "@")) |at_pos| {
         const auth = remaining[0..at_pos];
         remaining = remaining[at_pos + 1 ..];
@@ -289,7 +277,6 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
         }
     }
 
-    // Parse host:port
     var host: []const u8 = undefined;
     var port: u16 = 4222;
 
@@ -317,24 +304,20 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
 /// Subscription type alias.
 pub const Sub = Subscription;
 
-// Connection state (set at connect time)
 io: Io,
 stream: net.Stream,
 reader: net.Stream.Reader,
 writer: net.Stream.Writer,
 options: Options,
 
-// Buffers (allocated based on options.buffer_size)
 read_buffer: []u8,
 write_buffer: []u8,
 
-// Subscription routing (O(1) via SidMap)
 sidmap: SidMap,
 sidmap_keys: [SIDMAP_CAPACITY]u64,
 sidmap_vals: [SIDMAP_CAPACITY]u16,
 free_slots: [MAX_SUBSCRIPTIONS]u16,
 
-// Fields with defaults
 parser: Parser = .{},
 server_info: ?ServerInfo = null,
 state: State = .connecting,
@@ -431,7 +414,6 @@ pub fn connect(
     const parsed = try parseUrl(url);
 
     const client = try allocator.create(Client);
-    // Initialize fields with defaults (allocator.create returns undefined)
     client.server_info = null;
     client.parser = .{};
     client.state = .connecting;
@@ -499,7 +481,6 @@ pub fn connect(
         allocator.destroy(client);
     }
 
-    // Parse address
     const host = if (std.mem.eql(u8, parsed.host, "localhost"))
         "127.0.0.1"
     else
@@ -509,7 +490,6 @@ pub fn connect(
         return error.InvalidAddress;
     };
 
-    // Connect
     client.stream = net.IpAddress.connect(address, io, .{
         .mode = .stream,
         .protocol = .tcp,
@@ -518,7 +498,7 @@ pub fn connect(
     };
     errdefer client.stream.close(io);
 
-    // Set TCP_NODELAY (track success for diagnostics)
+    // TCP_NODELAY
     const enable: u32 = 1;
     client.tcp_nodelay_set = true;
     std.posix.setsockopt(
@@ -543,7 +523,6 @@ pub fn connect(
         };
     }
 
-    // Allocate buffers based on options
     client.read_buffer = allocator.alloc(u8, opts.buffer_size) catch {
         return error.OutOfMemory;
     };
@@ -554,13 +533,11 @@ pub fn connect(
     };
     errdefer allocator.free(client.write_buffer);
 
-    // Initialize I/O and state (other fields use struct defaults)
     client.io = io;
     client.reader = client.stream.reader(io, client.read_buffer);
     client.writer = client.stream.writer(io, client.write_buffer);
     client.options = opts;
 
-    // Initialize SidMap and free slot stack
     client.sidmap_keys = undefined;
     client.sidmap_vals = undefined;
     client.sidmap = .init(&client.sidmap_keys, &client.sidmap_vals);
@@ -568,22 +545,18 @@ pub fn connect(
         client.free_slots[i] = @intCast(MAX_SUBSCRIPTIONS - 1 - i);
     }
 
-    // Perform handshake
     try client.handshake(allocator, opts, parsed);
 
-    // Store original URL for reconnection (already validated)
     assert(url.len <= defaults.Server.max_url_len);
     const url_len: u8 = @intCast(url.len);
     @memcpy(client.original_url[0..url_len], url);
     client.original_url_len = url_len;
 
-    // Initialize server pool with primary URL
     client.server_pool = connection.ServerPool.init(url) catch {
         return error.InvalidUrl;
     };
     client.server_pool_initialized = true;
 
-    // Add discovered servers from INFO connect_urls
     if (opts.discover_servers) {
         if (client.server_info) |info| {
             client.server_pool.addFromConnectUrls(
@@ -594,17 +567,13 @@ pub fn connect(
         }
     }
 
-    // Initialize pending buffer for reconnect
     try client.initPendingBuffer(allocator);
 
-    // Initialize health check timestamps (atomics)
     const now_ns = getNowNs() catch 0;
     client.last_ping_sent_ns.store(now_ns, .monotonic);
     client.last_pong_received_ns.store(now_ns, .monotonic);
 
-    // Start background I/O task for message routing and keepalive
-    // MUST use concurrent() for true parallelism - async() may not schedule
-    // the task until the main thread yields, causing deadlock on flush()
+    // concurrent() required - async() may deadlock on flush()
     client.io_task_future = io.concurrent(
         connection.io_task.run,
         .{ client, allocator },
@@ -1013,7 +982,6 @@ pub fn subscribeQueue(
     self.sub_ptrs[slot_idx] = sub;
     self.cached_sub = sub;
 
-    // Send SUB command
     const writer = &self.writer.interface;
     protocol.Encoder.encodeSub(writer, .{
         .subject = subject,
@@ -1297,7 +1265,6 @@ pub fn flush(self: *Client, allocator: Allocator) !void {
         return error.NotConnected;
     }
 
-    // Flush write buffer under mutex to sync with other writers
     try self.write_mutex.lock(self.io);
     defer self.write_mutex.unlock(self.io);
     self.writer.interface.flush() catch return error.WriteFailed;

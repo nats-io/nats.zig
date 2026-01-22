@@ -78,19 +78,16 @@ pub const ServerPool = struct {
 
         var remaining = url;
 
-        // Strip nats:// prefix
         if (std.mem.startsWith(u8, remaining, "nats://")) {
             remaining = remaining[7..];
             server.host_start = 7;
         }
 
-        // Skip user:pass@ if present
         if (std.mem.indexOf(u8, remaining, "@")) |at_pos| {
             remaining = remaining[at_pos + 1 ..];
             server.host_start += @intCast(at_pos + 1);
         }
 
-        // Parse host:port
         if (std.mem.indexOf(u8, remaining, ":")) |colon_pos| {
             server.host_len = @intCast(colon_pos);
             server.port = std.fmt.parseInt(

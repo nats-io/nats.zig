@@ -97,15 +97,13 @@ pub const Parser = struct {
 
         if (data.len == 0) return null;
 
-        // Find end of first line (fast inline scan)
         const line_end = findCRLF(data) orelse return null;
         const line = data[0..line_end];
         const header_len = line_end + 2;
 
         assert(line.len > 0);
 
-        // u32 word comparison for command dispatch (single load, single compare)
-        // Little-endian u32 constants for each command
+        // u32 word comparison for dispatch
         const CMD_MSG: u32 = 0x2047534D; // "MSG " in little-endian
         const CMD_PING: u32 = 0x474E4950; // "PING" in little-endian
         const CMD_PONG: u32 = 0x474E4F50; // "PONG" in little-endian
@@ -113,7 +111,6 @@ pub const Parser = struct {
         const CMD_HMSG: u32 = 0x47534D48; // "HMSG" in little-endian
         const CMD_ERR: u32 = 0x5252452D; // "-ERR" in little-endian
 
-        // Fast path: most commands are 4+ chars, read u32 once
         if (line.len >= 4) {
             const cmd = std.mem.readInt(u32, line[0..4], .little);
 
@@ -163,7 +160,6 @@ pub const Parser = struct {
             }
         }
 
-        // Slow path: +OK (3 chars only)
         if (line.len == 3 and line[0] == '+' and line[1] == 'O' and
             line[2] == 'K')
         {

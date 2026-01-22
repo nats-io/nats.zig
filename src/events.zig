@@ -5,14 +5,6 @@
 //!
 //! ## Architecture
 //!
-//! ```
-//! ┌─────────────────┐     SPSC Queue        ┌─────────────────┐
-//! │   io_task       │ ────────────────────→ │ callback_task   │
-//! │   (reader)      │   Event{...}          │ (calls handler) │
-//! │   never blocks  │                       │   user code     │
-//! └─────────────────┘                       └─────────────────┘
-//! ```
-//!
 //! io_task pushes events to SPSC queue (non-blocking).
 //! callback_task drains queue and dispatches to user handlers.
 //!
@@ -75,8 +67,7 @@ pub const Error = error{
 /// Events pushed from io_task to callback_task.
 /// These represent connection lifecycle changes and async errors.
 pub const Event = union(enum) {
-    /// Initial connection established (INFO/CONNECT handshake complete).
-    /// Fired once on first connect, NOT on reconnect.
+    /// Initial connection established. Fired once, not on reconnect.
     connected: void,
 
     /// Connection lost. err is the I/O error that caused disconnect,
@@ -100,11 +91,9 @@ pub const Event = union(enum) {
     err: struct { err: anyerror, msg: ?[]const u8 },
 
     /// Server entering lame duck mode (graceful shutdown).
-    /// Client should prepare for eventual disconnect.
     lame_duck: void,
 
-    /// Message allocation failed (slab exhausted).
-    /// Rate-limited: fires on first failure, then every 100k messages.
+    /// Message allocation failed (slab exhausted). Rate-limited.
     alloc_failed: struct { sid: u64, count: u64 },
 
     /// Protocol parse error (malformed data recovered via CRLF skip).

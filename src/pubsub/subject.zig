@@ -20,7 +20,6 @@ pub const ValidationError = error{
 pub fn validatePublish(subject: []const u8) ValidationError!void {
     if (subject.len == 0) return error.EmptySubject;
 
-    // Single pass: check dots, spaces, wildcards, and control chars
     var token_start: usize = 0;
     for (subject, 0..) |c, i| {
         if (c == '.') {
@@ -42,7 +41,6 @@ pub fn validatePublish(subject: []const u8) ValidationError!void {
 pub fn validateSubscribe(subject: []const u8) ValidationError!void {
     if (subject.len == 0) return error.EmptySubject;
 
-    // Single pass: check all constraints
     var token_start: usize = 0;
     var has_full_wildcard = false;
 
@@ -79,7 +77,6 @@ pub fn validateSubscribe(subject: []const u8) ValidationError!void {
 /// Validates a reply-to address for protocol safety.
 pub fn validateReplyTo(reply_to: []const u8) ValidationError!void {
     if (reply_to.len == 0) return error.EmptySubject;
-    // Single pass: reject space, control chars
     for (reply_to) |c| {
         if (c <= 0x20 or c == 0x7f) return error.InvalidCharacter;
     }
@@ -88,7 +85,6 @@ pub fn validateReplyTo(reply_to: []const u8) ValidationError!void {
 /// Validates a queue group name for protocol safety.
 pub fn validateQueueGroup(queue: []const u8) ValidationError!void {
     if (queue.len == 0) return error.EmptySubject;
-    // Single pass: reject space, control chars
     for (queue) |c| {
         if (c <= 0x20 or c == 0x7f) return error.InvalidCharacter;
     }

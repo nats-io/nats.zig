@@ -69,7 +69,6 @@ pub const Encoder = struct {
         try writer.writeAll("PUB ");
         try writer.writeAll(args.subject);
 
-        // Validate and write reply_to if present and non-empty
         if (args.reply_to) |reply| {
             if (reply.len > 0) {
                 try subject.validateReplyTo(reply);
@@ -100,7 +99,6 @@ pub const Encoder = struct {
         try writer.writeAll("HPUB ");
         try writer.writeAll(args.subject);
 
-        // Validate and write reply_to if present and non-empty
         if (args.reply_to) |reply| {
             if (reply.len > 0) {
                 try subject.validateReplyTo(reply);
@@ -136,7 +134,6 @@ pub const Encoder = struct {
         try writer.writeAll("HPUB ");
         try writer.writeAll(args.subject);
 
-        // Validate and write reply_to if present and non-empty
         if (args.reply_to) |reply| {
             if (reply.len > 0) {
                 try subject.validateReplyTo(reply);
@@ -172,7 +169,6 @@ pub const Encoder = struct {
         try writer.writeAll("SUB ");
         try writer.writeAll(args.subject);
 
-        // Validate and write queue_group if present and non-empty
         if (args.queue_group) |queue| {
             if (queue.len > 0) {
                 try subject.validateQueueGroup(queue);

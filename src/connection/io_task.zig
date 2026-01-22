@@ -196,7 +196,9 @@ inline fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
     // Single load, combined checks (avoid 3 separate loads)
     const revents = fds[0].revents;
     // POLLHUP/POLLERR means connection is dead - even if POLLIN is also set
-    if ((revents & (posix.POLL.HUP | posix.POLL.ERR)) != 0) return .disconnected;
+    if ((revents & (posix.POLL.HUP | posix.POLL.ERR)) != 0)
+        return .disconnected;
+
     if ((revents & posix.POLL.IN) != 0) return .has_data;
     return .no_data;
 }
@@ -308,21 +310,17 @@ inline fn tryRouteBufferedMessages(
             switch (cmd) {
                 .msg => |args| {
                     routeMessageToSub(client, slab, args);
-                    // Single-writer pattern: only io_task writes msgs_in/bytes_in
-                    // No atomics needed - see module doc "Stats counters"
                     client.stats.msgs_in += 1;
                     client.stats.bytes_in += args.payload.len;
                 },
                 .hmsg => |args| {
                     routeHMessageToSub(client, slab, args);
-                    // Single-writer pattern: only io_task writes msgs_in/bytes_in
                     client.stats.msgs_in += 1;
                     client.stats.bytes_in += args.total_len;
                 },
                 .ping => {
-                    // Respond to server PING with PONG (with mutex)
-                    // Write failure = broken connection, trigger reconnect
-                    client.write_mutex.lock(client.io) catch return .disconnected;
+                    client.write_mutex.lock(client.io) catch
+                        return .disconnected;
                     defer client.write_mutex.unlock(client.io);
                     client.writer.interface.writeAll("PONG\r\n") catch {
                         return .disconnected;
@@ -330,7 +328,6 @@ inline fn tryRouteBufferedMessages(
                     client.writer.interface.flush() catch return .disconnected;
                 },
                 .pong => {
-                    // Server responded to our PING (keepalive)
                     dbg.print("Got PONG, resetting pings_outstanding", .{});
                     client.pings_outstanding.store(0, .monotonic);
                     const now = getNowNs() catch 0;
@@ -428,11 +425,9 @@ inline fn routeMessageToSub(
         .return_queue = &client.return_queue,
     };
 
-    // Push to subscription queue
     sub.pushMessage(msg) catch {
         sub.dropped_msgs += 1;
         slab.free(buf);
-        // Push slow_consumer event (only on first drop to avoid flood)
         if (sub.dropped_msgs == 1) {
             client.pushEvent(.{ .slow_consumer = .{ .sid = args.sid } });
         }

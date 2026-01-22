@@ -144,17 +144,15 @@ pub fn parse(allocator: Allocator, data: []const u8) ParseResult {
     return parseImpl(allocator, data);
 }
 
-/// Internal parse implementation using two-pass algorithm.
 fn parseImpl(allocator: Allocator, data: []const u8) ParseResult {
     var result: ParseResult = .{ .allocator = allocator };
 
-    // Validate NATS/1.0 prefix
     if (!std.mem.startsWith(u8, data, "NATS/1.0")) {
         result.err = .invalid_version;
         return result;
     }
 
-    // FIRST PASS: count headers and total string bytes needed
+    // Pass 1: count headers and string bytes
     var header_count: usize = 0;
     var total_string_bytes: usize = 0;
     var status_len: usize = 0;
@@ -234,7 +232,7 @@ fn parseImpl(allocator: Allocator, data: []const u8) ParseResult {
         return result;
     }
 
-    // SECOND PASS: allocate and copy
+    // Pass 2: allocate and copy
     if (header_count > 0 or status_len > 0 or desc_len > 0) {
         // Allocate entries array
         const entries = allocator.alloc(Entry, header_count) catch {
