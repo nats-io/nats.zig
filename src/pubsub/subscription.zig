@@ -66,7 +66,7 @@ pub const FixedSubConfig = struct {
 /// Zero-allocation subscription slot (for embedded use).
 /// Uses fixed buffers for subject, queue_group, and message queue.
 /// Designed for embedding in fixed arrays (no heap allocation).
-/// NOTE: Message type must be provided by user as it's in client.zig.
+/// Message type must be provided by user as it's defined in client.zig.
 pub fn FixedSubscription(
     comptime ClientType: type,
     comptime MessageType: type,

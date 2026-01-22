@@ -30,7 +30,7 @@ pub fn main() !void {
         "nats://localhost:4222",
         .{ .name = "graceful-shutdown-example" },
     );
-    // Note: we'll call drain() instead of just deinit()
+    // Using drain() for graceful cleanup instead of deinit()
 
     std.debug.print("Connected to NATS!\n", .{});
 

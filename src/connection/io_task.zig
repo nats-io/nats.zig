@@ -185,7 +185,7 @@ const PollResult = enum {
 
 /// Poll socket for readable data with timeout (cross-platform).
 /// Also detects disconnect via POLLHUP/POLLERR.
-/// NOTE: On Linux, POLLIN and POLLHUP can both be set when there's
+/// On Linux, POLLIN and POLLHUP can both be set when there's
 /// buffered data AND the connection is closing. POLLHUP is prioritized
 /// to detect dead connections even with buffered data.
 inline fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
@@ -256,7 +256,7 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
     return .no_progress;
 }
 
-/// Route buffered messages (NO I/O - just process buffer).
+/// Route buffered messages (no I/O, buffer processing only).
 /// Handles: MSG → route to queue, PING → write PONG.
 /// Uses lock-free SpscQueue - no yields needed.
 inline fn tryRouteBufferedMessages(
@@ -350,7 +350,6 @@ inline fn tryRouteBufferedMessages(
                     }
                     client.server_info = info;
                     client.max_payload = info.max_payload;
-                    // TODO: handle lame duck mode notification
                 },
                 .ok => {},
                 .err => |err_msg| {

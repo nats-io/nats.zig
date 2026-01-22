@@ -378,7 +378,7 @@ pending_buffer_capacity: usize = 0,
 
 // PING/PONG health check state (atomics for cross-thread access)
 // Main thread reads during health check (~100ms), io_task writes on PONG.
-// Uses monotonic ordering - exact timing not critical, just eventual visibility.
+// Uses monotonic ordering - exact timing not critical, eventual visibility suffices.
 last_ping_sent_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 last_pong_received_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 pings_outstanding: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
@@ -2128,7 +2128,7 @@ pub const Subscription = struct {
     /// Blocks until a message arrives on this subscription.
     ///
     /// The background io_task handles all socket I/O and routes messages
-    /// to subscription queues. This function just blocks on the queue.
+    /// to subscription queues. This function blocks on the queue.
     /// Lock-free spin-wait for message.
     ///
     /// Returns owned Message that caller must free via msg.deinit(allocator).
@@ -2274,7 +2274,7 @@ pub const Subscription = struct {
         // Idempotent - already unsubscribed
         if (self.state == .unsubscribed) return;
 
-        // Client already destroyed - just mark state
+        // Client already destroyed, mark state only
         if (self.client_destroyed) {
             self.state = .unsubscribed;
             return;
