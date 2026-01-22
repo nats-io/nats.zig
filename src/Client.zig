@@ -38,6 +38,8 @@ pub const EventHandler = events_mod.EventHandler;
 const headers = @import("protocol/headers.zig");
 pub const HeaderEntry = headers.Entry;
 
+const nkey_auth = @import("auth.zig");
+
 const Client = @This();
 
 /// Gets current time in nanoseconds (Zig 0.16 compatible).
@@ -114,6 +116,12 @@ pub const Options = struct {
     tls_required: bool = false,
     /// NKey seed for authentication.
     nkey_seed: ?[]const u8 = null,
+    /// NKey seed file path (alternative to nkey_seed).
+    nkey_seed_file: ?[]const u8 = null,
+    /// NKey public key for callback-based signing.
+    nkey_pubkey: ?[]const u8 = null,
+    /// NKey signing callback (returns true on success).
+    nkey_sign_fn: ?*const fn (nonce: []const u8, sig: *[64]u8) bool = null,
     /// JWT for authentication.
     jwt: ?[]const u8 = null,
     /// Read/write buffer size. Must be >= max message size you expect (1MB).
@@ -744,6 +752,52 @@ fn handshake(
         user = null;
     }
 
+    // NKey authentication: sign nonce if seed provided
+    // Priority: nkey_seed > nkey_seed_file > nkey_sign_fn
+    var sig_buf: [86]u8 = undefined;
+    var pubkey_buf: [56]u8 = undefined;
+    var sig_slice: ?[]const u8 = null;
+    var pubkey_slice: ?[]const u8 = null;
+    // Buffer for seed from file (must outlive signing operation)
+    var file_seed_buf: [128]u8 = undefined;
+
+    if (opts.nkey_seed) |seed| {
+        if (self.server_info.?.nonce) |nonce| {
+            var kp = nkey_auth.KeyPair.fromSeed(seed) catch {
+                return error.InvalidNKeySeed;
+            };
+            defer kp.wipe();
+
+            sig_slice = kp.signEncoded(nonce, &sig_buf);
+            pubkey_slice = kp.publicKey(&pubkey_buf);
+        }
+    } else if (opts.nkey_seed_file) |path| {
+        if (self.server_info.?.nonce) |nonce| {
+            const seed = try readSeedFile(self.io, path, &file_seed_buf);
+            defer std.crypto.secureZero(u8, file_seed_buf[0..seed.len]);
+
+            var kp = nkey_auth.KeyPair.fromSeed(seed) catch {
+                return error.InvalidNKeySeed;
+            };
+            defer kp.wipe();
+
+            sig_slice = kp.signEncoded(nonce, &sig_buf);
+            pubkey_slice = kp.publicKey(&pubkey_buf);
+        }
+    } else if (opts.nkey_sign_fn) |sign_fn| {
+        if (self.server_info.?.nonce) |nonce| {
+            var raw_sig: [64]u8 = undefined;
+            if (!sign_fn(nonce, &raw_sig)) {
+                return error.NKeySigningFailed;
+            }
+            sig_slice = std.base64.url_safe_no_pad.Encoder.encode(
+                &sig_buf,
+                &raw_sig,
+            );
+            pubkey_slice = opts.nkey_pubkey;
+        }
+    }
+
     const connect_opts = protocol.ConnectOptions{
         .verbose = opts.verbose,
         .pedantic = opts.pedantic,
@@ -759,7 +813,8 @@ fn handshake(
         .no_responders = opts.no_responders,
         .tls_required = opts.tls_required,
         .jwt = opts.jwt,
-        .nkey = opts.nkey_seed,
+        .nkey = pubkey_slice,
+        .sig = sig_slice,
     };
 
     protocol.Encoder.encodeConnect(writer, connect_opts) catch {
@@ -1366,6 +1421,34 @@ fn sleepMs(io: Io, timeout_ms: u32) void {
 /// Helper for connection timeout (nanoseconds).
 fn sleepNs(io: Io, timeout_ns: u64) void {
     io.sleep(.fromNanoseconds(timeout_ns), .awake) catch {};
+}
+
+/// Reads NKey seed from file, trimming whitespace.
+/// Returns slice into buf containing the seed.
+/// File system errors (FileNotFound, AccessDenied, etc.) propagate directly.
+/// Returns InvalidNKeySeedFile only for content issues (empty/whitespace-only).
+fn readSeedFile(io: Io, path: []const u8, buf: *[128]u8) ![]const u8 {
+    assert(path.len > 0);
+
+    const data = try Io.Dir.readFile(.cwd(), io, path, buf);
+
+    if (data.len == 0) return error.InvalidNKeySeedFile;
+    assert(data.len > 0);
+
+    // Trim leading/trailing whitespace
+    var start: usize = 0;
+    var end: usize = data.len;
+
+    while (start < end and std.ascii.isWhitespace(buf[start])) {
+        start += 1;
+    }
+    while (end > start and std.ascii.isWhitespace(buf[end - 1])) {
+        end -= 1;
+    }
+
+    if (start >= end) return error.InvalidNKeySeedFile;
+    assert(start < end);
+    return buf[start..end];
 }
 
 /// Gracefully drains subscriptions and closes the connection.

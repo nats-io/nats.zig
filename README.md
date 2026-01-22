@@ -582,6 +582,63 @@ const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .
 
 ---
 
+## NKey Authentication
+
+NKey authentication uses Ed25519 signatures for secure, password-less
+authentication. NKeys are the recommended authentication method for production
+NATS deployments.
+
+### Using NKey Seed (Direct)
+
+Pass the seed directly in connection options:
+
+```zig
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    .nkey_seed = "SUAMK2FG4MI6UE3ACF3FK3OIQBCEIEZV7NSWFFEW63UXMRLFM2XLAXK4GY",
+});
+```
+
+### Using NKey Seed File
+
+Load the seed from a file (useful for deployment):
+
+```zig
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    .nkey_seed_file = "/path/to/user.nk",
+});
+```
+
+### Using Signing Callback (HSM/Hardware Keys)
+
+For hardware security modules or custom signing:
+
+```zig
+fn mySignCallback(nonce: []const u8, sig: *[64]u8) bool {
+    // Sign nonce using HSM, hardware token, etc.
+    // Return true on success, false on failure
+    return hsm.sign(nonce, sig);
+}
+
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    .nkey_pubkey = "UDXU4RCSJNZOIQHZNWXHXORDPRTGNJAHAHFRGZNEEJCPQTT2M7NLCNF4",
+    .nkey_sign_fn = &mySignCallback,
+});
+```
+
+### Priority Order
+
+When multiple NKey options are set, they are used in this priority:
+
+1. `nkey_seed` - Direct seed string
+2. `nkey_seed_file` - Load seed from file
+3. `nkey_sign_fn` + `nkey_pubkey` - Custom signing callback
+
+### Security Notes
+
+- The library securely wipes seed data from memory after use
+
+---
+
 ## Event Callbacks
 
 Handle connection lifecycle events using the `EventHandler` pattern - a type-safe,
@@ -613,7 +670,7 @@ const client = try nats.Client.connect(allocator, io, url, .{
 });
 ```
 
-### Accessing External State (Powerful Pattern)
+### Accessing External State
 
 Handlers can reference external application state - no closures needed:
 

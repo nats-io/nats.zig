@@ -10,7 +10,11 @@ pub const ServerConfig = server_manager.ServerConfig;
 // Test configuration
 pub const test_port: u16 = 14222;
 pub const auth_port: u16 = 14223;
+pub const nkey_port: u16 = 14224;
 pub const test_token = "test-secret-token";
+pub const test_nkey_seed =
+    "SUAMK2FG4MI6UE3ACF3FK3OIQBCEIEZV7NSWFFEW63UXMRLFM2XLAXK4GY";
+pub const test_nkey_seed_file = "/tmp/nats-test-nkey.seed";
 
 // Test counters (mutable global state for test reporting)
 pub var tests_passed: u32 = 0;

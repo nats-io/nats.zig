@@ -14,6 +14,8 @@ pub const ServerConfig = struct {
     port: u16 = 4222,
     /// Optional authentication token.
     auth_token: ?[]const u8 = null,
+    /// Optional path to config file (-c option).
+    config_file: ?[]const u8 = null,
     /// Enable debug/verbose output.
     debug: bool = false,
 };
@@ -50,6 +52,11 @@ pub const ServerInstance = struct {
         if (self.config.auth_token) |token| {
             try args.append(allocator, "--auth");
             try args.append(allocator, token);
+        }
+
+        if (self.config.config_file) |config_file| {
+            try args.append(allocator, "-c");
+            try args.append(allocator, config_file);
         }
 
         if (self.config.debug) {
@@ -179,6 +186,7 @@ test "server config defaults" {
     const config: ServerConfig = .{};
     try std.testing.expectEqual(@as(u16, 4222), config.port);
     try std.testing.expect(config.auth_token == null);
+    try std.testing.expect(config.config_file == null);
     try std.testing.expect(!config.debug);
 }
 

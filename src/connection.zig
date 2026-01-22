@@ -14,7 +14,6 @@ pub const State = state.State;
 pub const StateMachine = state.StateMachine;
 
 pub const Event = events.Event;
-pub const EventQueue = events.EventQueue;
 pub const ConnectedInfo = events.ConnectedInfo;
 pub const DisconnectedInfo = events.DisconnectedInfo;
 pub const DisconnectReason = events.DisconnectReason;

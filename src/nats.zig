@@ -34,6 +34,7 @@ pub const protocol = @import("protocol.zig");
 pub const connection = @import("connection.zig");
 pub const pubsub = @import("pubsub.zig");
 pub const memory = @import("memory.zig");
+pub const auth = @import("auth.zig");
 
 // Configuration types
 pub const QueueSize = defaults.QueueSize;
