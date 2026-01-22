@@ -2036,7 +2036,7 @@ pub fn reconnect(self: *Client, allocator: Allocator) !void {
 
         // Attempt connection
         if (self.tryConnect(allocator, server)) {
-            // SUCCESS!
+            // Connection succeeded
             self.restoreSubscriptions() catch |err| {
                 dbg.print(
                     "Failed to restore subscriptions: {s}",

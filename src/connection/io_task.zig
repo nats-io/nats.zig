@@ -1,6 +1,6 @@
 //! Background I/O Task for NATS Client
 //!
-//! Pure reader task: reads from socket, routes messages, responds to PING.
+//! Reader task: reads from socket, routes messages, responds to PING.
 //! All writes (PUB, SUB, flush) happen in user thread.
 //! Runs as async task started by Client.connect().
 //!
@@ -61,7 +61,7 @@ inline fn drainReturnQueue(client: *Client) void {
 }
 
 /// Main I/O task entry point. Called via io.async() from connect().
-/// Pure reader: reads socket, routes MSG, responds to PING with PONG.
+/// Reader: reads socket, routes MSG, responds to PING with PONG.
 /// Exits cleanly when stream is closed (close then cancel).
 pub fn run(client: *Client, allocator: Allocator) void {
     dbg.print("io_task: STARTED", .{});
@@ -350,11 +350,7 @@ inline fn tryRouteBufferedMessages(
                     }
                     client.server_info = info;
                     client.max_payload = info.max_payload;
-                    // TODO: Check for lame duck mode when ServerInfo parses ldm
-                    // if (info.lame_duck_mode and !client.lame_duck_notified) {
-                    //     client.lame_duck_notified = true;
-                    //     client.pushEvent(.{ .lame_duck = {} });
-                    // }
+                    // TODO: handle lame duck mode notification
                 },
                 .ok => {},
                 .err => |err_msg| {

@@ -1,7 +1,7 @@
 //! Simple NATS Example
 //!
 //! Minimal "hello world" - connect, subscribe, publish, receive one message.
-//! This is the best starting point for learning the NATS Zig client.
+//! A starting point for learning the NATS Zig client.
 //! Run with: zig build run-simple
 //!
 //! Prerequisites: nats-server running on localhost:4222

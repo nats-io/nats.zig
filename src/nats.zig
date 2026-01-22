@@ -1,6 +1,6 @@
 //! NATS Client Library for Zig
 //!
-//! A pure Zig implementation of the NATS messaging protocol with native
+//! A Zig implementation of the NATS messaging protocol with native
 //! async I/O using std.Io, zero external C dependencies.
 //!
 //! ## Quick Start

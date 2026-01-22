@@ -28,9 +28,7 @@ const TestConfig = subscription.FixedSubConfig{
 
 const TestSub = FixedSubscription(TestClient, TestMessage, TestConfig);
 
-// ============================================================================
 // Section 1: FixedQueue Basic Operations
-// ============================================================================
 
 test "FixedQueue push and pop basic" {
     var q: FixedQueue(u32, 4) = .{};
@@ -63,9 +61,7 @@ test "FixedQueue pop from empty returns null" {
     try testing.expectEqual(@as(u16, 0), q.count);
 }
 
-// ============================================================================
 // Section 2: FixedQueue Wraparound Behavior
-// ============================================================================
 
 test "FixedQueue wraparound single cycle" {
     // Capacity 4: fill, empty, refill to test wraparound
@@ -141,9 +137,7 @@ test "FixedQueue wraparound stress" {
     try testing.expectEqual(@as(u16, 0), q.count);
 }
 
-// ============================================================================
 // Section 3: FixedQueue Clear Operations
-// ============================================================================
 
 test "FixedQueue clear non-empty" {
     var q: FixedQueue(u32, 4) = .{};
@@ -192,9 +186,7 @@ test "FixedQueue clear after wraparound" {
     try testing.expectEqual(@as(u16, 0), q.tail);
 }
 
-// ============================================================================
 // Section 4: FixedQueue Edge Capacities
-// ============================================================================
 
 test "FixedQueue capacity 1" {
     var q: FixedQueue(u32, 1) = .{};
@@ -241,9 +233,7 @@ test "FixedQueue capacity 256" {
     }
 }
 
-// ============================================================================
 // Section 5: FixedQueue Count Accuracy
-// ============================================================================
 
 test "FixedQueue count accuracy through operations" {
     var q: FixedQueue(u32, 8) = .{};
@@ -281,9 +271,7 @@ test "FixedQueue count with failed push" {
     try testing.expectEqual(@as(u16, 2), q.count);
 }
 
-// ============================================================================
 // Section 6: FixedQueue FIFO Order
-// ============================================================================
 
 test "FixedQueue strict FIFO order" {
     var q: FixedQueue(u32, 16) = .{};
@@ -313,9 +301,7 @@ test "FixedQueue FIFO with interleaved operations" {
     try testing.expectEqual(@as(?u32, 5), q.tryPop());
 }
 
-// ============================================================================
 // Section 7: FixedQueue Different Types
-// ============================================================================
 
 test "FixedQueue with struct type" {
     const Item = struct { id: u32, value: u64 };
@@ -348,9 +334,7 @@ test "FixedQueue with pointer type" {
     try testing.expectEqual(@as(u32, 20), p2.*);
 }
 
-// ============================================================================
 // Section 8: FixedSubscription initEmpty
-// ============================================================================
 
 test "FixedSubscription initEmpty defaults" {
     const sub = TestSub.initEmpty();
@@ -379,9 +363,7 @@ test "FixedSubscription initEmpty queueGroup accessor" {
     try testing.expect(sub.queueGroup() == null);
 }
 
-// ============================================================================
 // Section 9: FixedSubscription activate Valid Cases
-// ============================================================================
 
 test "FixedSubscription activate basic" {
     var client = TestClient{};
@@ -432,9 +414,7 @@ test "FixedSubscription activate queue_group at max length" {
     try testing.expectEqualStrings(max_qg, sub.queueGroup().?);
 }
 
-// ============================================================================
 // Section 10: FixedSubscription activate Error Cases
-// ============================================================================
 
 test "FixedSubscription activate subject too long" {
     var client = TestClient{};
@@ -469,7 +449,6 @@ test "FixedSubscription activate empty subject returns error" {
     var client = TestClient{};
     var sub = TestSub.initEmpty();
 
-    // BUG #1 FIX VERIFIED: Now returns EmptySubject error instead of crashing
     try testing.expectError(
         error.EmptySubject,
         sub.activate(&client, 1, "", null),
@@ -478,9 +457,7 @@ test "FixedSubscription activate empty subject returns error" {
     try testing.expectEqual(false, sub.active);
 }
 
-// ============================================================================
 // Section 11: FixedSubscription deactivate
-// ============================================================================
 
 test "FixedSubscription deactivate resets state" {
     var client = TestClient{};
@@ -522,9 +499,7 @@ test "FixedSubscription reactivate after deactivate" {
     try testing.expectEqual(true, sub.isActive());
 }
 
-// ============================================================================
 // Section 12: FixedSubscription State Transitions
-// ============================================================================
 
 test "FixedSubscription drain from active" {
     var client = TestClient{};
@@ -576,9 +551,7 @@ test "FixedSubscription isActive requires both flags" {
     try testing.expectEqual(false, sub.isActive());
 }
 
-// ============================================================================
 // Section 13: FixedSubscription pending count
-// ============================================================================
 
 test "FixedSubscription pending initial" {
     const sub = TestSub.initEmpty();
@@ -609,9 +582,7 @@ test "FixedSubscription pending after message push" {
     try testing.expectEqual(@as(u16, 1), sub.pending());
 }
 
-// ============================================================================
 // Section 14: FixedSubscription matches
-// ============================================================================
 
 test "FixedSubscription matches exact" {
     var client = TestClient{};
@@ -650,9 +621,7 @@ test "FixedSubscription matches wildcard full" {
     try testing.expect(!sub.matches("bar.foo"));
 }
 
-// ============================================================================
 // Section 15: FixedSubscription Multiple Cycles
-// ============================================================================
 
 test "FixedSubscription multiple activate deactivate cycles" {
     var client = TestClient{};
@@ -688,9 +657,7 @@ test "FixedSubscription activate clears message queue" {
     try testing.expectEqual(@as(u16, 0), sub.pending());
 }
 
-// ============================================================================
 // Section 16: State Enum
-// ============================================================================
 
 test "State enum values distinct" {
     try testing.expect(State.active != State.draining);
@@ -698,9 +665,7 @@ test "State enum values distinct" {
     try testing.expect(State.draining != State.unsubscribed);
 }
 
-// ============================================================================
 // Section 17: Edge Case Configs
-// ============================================================================
 
 test "FixedSubscription minimal config" {
     const MinConfig = subscription.FixedSubConfig{
@@ -723,7 +688,6 @@ test "FixedSubscription minimal config" {
 }
 
 test "FixedSubscription large config" {
-    // BUG #2 FIX VERIFIED: subject_len is now u16, can store > 255
     const LargeConfig = subscription.FixedSubConfig{
         .max_subject_len = 1024,
         .max_queue_group_len = 512,
@@ -755,9 +719,7 @@ test "FixedSubscription large queue group" {
     try testing.expectEqual(@as(usize, 512), sub.queueGroup().?.len);
 }
 
-// ============================================================================
 // Section 18: SID Edge Values
-// ============================================================================
 
 test "FixedSubscription SID zero" {
     var client = TestClient{};
@@ -775,9 +737,7 @@ test "FixedSubscription SID max u64" {
     try testing.expectEqual(std.math.maxInt(u64), sub.sid);
 }
 
-// ============================================================================
 // Section 19: Received/Max Messages
-// ============================================================================
 
 test "FixedSubscription received msgs initial" {
     const sub = TestSub.initEmpty();
@@ -803,9 +763,7 @@ test "FixedSubscription activate resets counters" {
     try testing.expectEqual(@as(u64, 0), sub.max_msgs);
 }
 
-// ============================================================================
 // Section 20: Subject/QueueGroup with Dots
-// ============================================================================
 
 test "FixedSubscription subject with dots" {
     var client = TestClient{};
@@ -832,9 +790,7 @@ test "FixedSubscription queue group with dots" {
     try testing.expectEqualStrings("group.name", sub.queueGroup().?);
 }
 
-// ============================================================================
 // Section 21: Subject/QueueGroup Special Characters
-// ============================================================================
 
 test "FixedSubscription subject with hyphens and underscores" {
     var client = TestClient{};
@@ -869,9 +825,7 @@ test "FixedSubscription subject all printable ASCII" {
     try testing.expectEqualStrings("!#$%&'()+,-./0123456789:;<=>?@ABC", sub.subject());
 }
 
-// ============================================================================
 // Section 22: Subject/QueueGroup Unicode
-// ============================================================================
 // NOTE: FixedSubscription stores raw bytes - it does NOT validate subject content.
 // Unicode validation (if needed) should be done at the NATS protocol encoder level.
 // These tests verify that arbitrary bytes are stored/retrieved correctly.
@@ -905,19 +859,3 @@ test "FixedSubscription queue group with unicode bytes" {
     try sub.activate(&client, 1, "test", unicode_qg);
     try testing.expectEqualStrings(unicode_qg, sub.queueGroup().?);
 }
-
-// ============================================================================
-// BUG DOCUMENTATION - ALL FIXED
-// ============================================================================
-// BUG #1: activate() used assert(subj.len > 0) on line 115
-//   - FIXED: Now returns error.EmptySubject for empty subject
-//   - Assert kept as defense-in-depth after validation
-//
-// BUG #2: Type mismatch between config and storage fields
-//   - FIXED: Changed subject_len and queue_group_len from u8 to u16
-//   - Now matches config type, supports subjects up to 65535 chars
-//
-// NOTE: queue group error returned error.SubjectTooLong (misleading)
-//   - FIXED: Added error.QueueGroupTooLong for queue group too long
-//   - Now has proper error.EmptySubject, error.SubjectTooLong,
-//     error.QueueGroupTooLong

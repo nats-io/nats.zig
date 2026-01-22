@@ -7,9 +7,7 @@ const std = @import("std");
 const Client = @import("../Client.zig");
 const SubBackup = Client.SubBackup;
 
-// =============================================================================
 // SubBackup Structure Tests
-// =============================================================================
 
 test "SubBackup default initialization" {
     const backup: SubBackup = .{};
@@ -89,9 +87,7 @@ test "SubBackup max SID value" {
     try std.testing.expectEqual(std.math.maxInt(u64), backup.sid);
 }
 
-// =============================================================================
 // Backoff Calculation Tests
-// =============================================================================
 
 // These test the backoff calculation formula:
 // exp_wait = base << attempt (capped at 10)
@@ -173,9 +169,7 @@ test "backoff max jitter 50 percent" {
     try std.testing.expectEqual(@as(u64, 15000), jitter_range);
 }
 
-// =============================================================================
 // Reconnection Options Tests
-// =============================================================================
 
 test "default reconnection options" {
     const opts: Client.Options = .{};
@@ -221,9 +215,7 @@ test "custom pending buffer size" {
     try std.testing.expectEqual(@as(usize, 1024 * 1024), opts.pending_buffer_size);
 }
 
-// =============================================================================
 // Health Check Options Tests
-// =============================================================================
 
 test "default health check options" {
     const opts: Client.Options = .{};
@@ -247,18 +239,14 @@ test "aggressive health check" {
     try std.testing.expectEqual(@as(u8, 1), opts.max_pings_outstanding);
 }
 
-// =============================================================================
 // Stats Tests
-// =============================================================================
 
 test "stats default reconnects zero" {
     const stats: Client.Stats = .{};
     try std.testing.expectEqual(@as(u32, 0), stats.reconnects);
 }
 
-// =============================================================================
 // Subscription Remaining Messages Calculation Tests
-// =============================================================================
 
 test "remaining messages calculation" {
     // Test the -| saturating subtraction pattern used in restoreSubscriptions
@@ -289,9 +277,7 @@ test "remaining messages max values" {
     try std.testing.expectEqual(std.math.maxInt(u64) - 1, remaining);
 }
 
-// =============================================================================
 // Pending Buffer Size Estimation Tests
-// =============================================================================
 
 // Tests for the size estimation: "PUB subject len\r\npayload\r\n"
 // encoded_size = 4 + subject.len + 1 + 10 + 2 + payload.len + 2
@@ -318,9 +304,7 @@ test "pending buffer size estimation large payload" {
     try std.testing.expectEqual(@as(usize, 1048606), estimate);
 }
 
-// =============================================================================
 // Multiple Backup Array Tests
-// =============================================================================
 
 test "backup array initialization" {
     const backups = [_]SubBackup{.{}} ** Client.MAX_SUBSCRIPTIONS;
@@ -347,9 +331,7 @@ test "backup array modification" {
     try std.testing.expectEqual(@as(u64, 4), backups[3].sid);
 }
 
-// =============================================================================
 // Edge Case Tests
-// =============================================================================
 
 test "subject with special characters in backup" {
     var backup: SubBackup = .{};

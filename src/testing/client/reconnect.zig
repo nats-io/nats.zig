@@ -59,9 +59,7 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     testLongDisconnectionRecovery(allocator, manager);
 }
 
-// =============================================================================
 // Basic Reconnection Tests
-// =============================================================================
 
 /// Test: Basic automatic reconnection after server restart.
 fn testAutoReconnectBasic(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -265,9 +263,7 @@ fn testMultipleSubscriptionsRestored(
     }
 }
 
-// =============================================================================
 // Reconnection Limit Tests
-// =============================================================================
 
 /// Test: Reconnection stops after max attempts exhausted.
 fn testReconnectMaxAttempts(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -359,9 +355,7 @@ fn testReconnectDisabled(allocator: std.mem.Allocator, manager: *ServerManager) 
     }
 }
 
-// =============================================================================
 // Pending Buffer Tests
-// =============================================================================
 
 /// Test: Pending buffer flushes published messages after reconnect.
 fn testPendingBufferFlush(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -489,9 +483,7 @@ fn testPublishDuringReconnect(
     }
 }
 
-// =============================================================================
 // Stats Tests
-// =============================================================================
 
 /// Test: Reconnect counter increments on reconnection.
 fn testReconnectStatsIncrement(
@@ -543,9 +535,7 @@ fn testReconnectStatsIncrement(
     }
 }
 
-// =============================================================================
 // Queue Group Tests
-// =============================================================================
 
 /// Test: Queue group subscription restored after reconnect.
 fn testReconnectWithQueueGroup(
@@ -601,9 +591,7 @@ fn testReconnectWithQueueGroup(
     }
 }
 
-// =============================================================================
 // Multi-Client Tests
-// =============================================================================
 
 /// Test: Multiple clients can reconnect after server restart.
 fn testMultiClientReconnect(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -662,9 +650,7 @@ fn testMultiClientReconnect(allocator: std.mem.Allocator, manager: *ServerManage
     }
 }
 
-// =============================================================================
 // SID Preservation Tests
-// =============================================================================
 
 /// Test: Subscription SID is preserved after reconnection.
 fn testReconnectPreservesSid(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -711,9 +697,7 @@ fn testReconnectPreservesSid(allocator: std.mem.Allocator, manager: *ServerManag
     }
 }
 
-// =============================================================================
 // Wildcard Subscription Tests
-// =============================================================================
 
 /// Test: Wildcard subscription restored after reconnection.
 fn testReconnectWildcardSub(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -766,9 +750,7 @@ fn testReconnectWildcardSub(allocator: std.mem.Allocator, manager: *ServerManage
     }
 }
 
-// =============================================================================
 // Backoff Behavior Tests
-// =============================================================================
 
 /// Test: Reconnect uses exponential backoff.
 fn testReconnectBackoff(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -806,9 +788,7 @@ fn testReconnectBackoff(allocator: std.mem.Allocator, manager: *ServerManager) v
     reportResult("reconnect_backoff", true, "");
 }
 
-// =============================================================================
 // Health Check Tests
-// =============================================================================
 
 /// Test: Health check configuration is respected.
 fn testHealthCheckReconnect(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -857,9 +837,7 @@ fn testHealthCheckReconnect(allocator: std.mem.Allocator, manager: *ServerManage
     reportResult("health_check_reconnect", true, "");
 }
 
-// =============================================================================
 // Group A: Multi-Server Failover Tests
-// =============================================================================
 
 /// Test: Failover to second server when primary dies.
 fn testFailoverToSecondServer(
@@ -1181,9 +1159,7 @@ fn testServerCooldownRespected(
     }
 }
 
-// =============================================================================
 // Group B: Parallel Subscription Scenarios
-// =============================================================================
 
 /// Test: Multiple subscriptions actively receiving survive reconnect.
 fn testMultipleSubsActivelyReceiving(
@@ -1574,9 +1550,7 @@ fn testQueueGroupMultiClientReconnect(
     }
 }
 
-// =============================================================================
 // Group C: Edge Cases
-// =============================================================================
 
 /// Test: Client survives rapid server restarts.
 fn testRapidServerRestarts(

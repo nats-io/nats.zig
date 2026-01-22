@@ -165,7 +165,7 @@ pub const SidMap = struct {
 };
 
 /// splitmix64 hash function - fast 64-bit mixer.
-/// 5 operations, excellent avalanche properties.
+/// 5 operations, good avalanche properties.
 inline fn mix64(x0: u64) u64 {
     var x = x0 +% 0x9E3779B97F4A7C15;
     x = (x ^ (x >> 30)) *% 0xBF58476D1CE4E5B9;

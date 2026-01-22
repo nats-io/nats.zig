@@ -14,9 +14,7 @@ const parseU64Fast = parser.parseU64Fast;
 const parseUsizeFast = parser.parseUsizeFast;
 const ServerCommand = @import("commands.zig").ServerCommand;
 
-// ============================================================================
 // Section 1: Existing Tests (moved from parser.zig)
-// ============================================================================
 
 test "parse PING" {
     var p: Parser = .{};
@@ -285,9 +283,7 @@ test "parse HMSG with SID=0 rejected" {
     try std.testing.expectError(Parser.Error.InvalidArguments, result);
 }
 
-// ============================================================================
 // Section 2: Integer Parsing Edge Cases (parseU64Fast / parseUsizeFast)
-// ============================================================================
 
 test "parseU64Fast u64 max value" {
     // u64 max = 18446744073709551615 (exactly 20 digits)
@@ -418,9 +414,7 @@ test "parseU64Fast special ASCII near digits" {
     try std.testing.expectError(error.InvalidCharacter, parseU64Fast("1:2"));
 }
 
-// ============================================================================
 // Section 3: MSG Parsing Edge Cases
-// ============================================================================
 
 test "MSG header only no CRLF returns null" {
     var p: Parser = .{};
@@ -719,9 +713,7 @@ test "MSG missing SID field rejected" {
     try std.testing.expectError(Parser.Error.InvalidArguments, result);
 }
 
-// ============================================================================
 // Section 4: HMSG Parsing Edge Cases
-// ============================================================================
 
 test "HMSG header length zero" {
     var p: Parser = .{};
@@ -896,9 +888,7 @@ test "HMSG non-numeric total length rejected" {
     try std.testing.expectError(Parser.Error.InvalidArguments, result);
 }
 
-// ============================================================================
 // Section 5: INFO Parsing Edge Cases
-// ============================================================================
 
 test "INFO minimal valid json" {
     var p: Parser = .{};
@@ -1143,9 +1133,7 @@ test "INFO with all valid fields" {
     try std.testing.expectEqual(true, info.jetstream);
 }
 
-// ============================================================================
 // Section 6: Command Dispatch Edge Cases
-// ============================================================================
 
 test "parse MSG without space rejected" {
     var p: Parser = .{};
@@ -1310,9 +1298,7 @@ test "parse high ASCII rejected" {
     try std.testing.expectError(Parser.Error.InvalidCommand, result);
 }
 
-// ============================================================================
 // Section 7: CRLF Verification Edge Cases
-// ============================================================================
 
 test "MSG with LF only line ending incomplete" {
     var p: Parser = .{};
@@ -1386,9 +1372,7 @@ test "MSG wrong CRLF order in payload trailing" {
     }
 }
 
-// ============================================================================
 // Section 8: Buffer Boundary Edge Cases
-// ============================================================================
 
 test "MSG exactly fills buffer" {
     var p: Parser = .{};

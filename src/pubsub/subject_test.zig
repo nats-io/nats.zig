@@ -18,9 +18,7 @@ const tokenCount = subject.tokenCount;
 const getToken = subject.getToken;
 const ValidationError = subject.ValidationError;
 
-// ============================================================================
 // Section 1: Existing Tests (moved from subject.zig)
-// ============================================================================
 
 test "validate publish subject" {
     try validatePublish("foo");
@@ -130,9 +128,7 @@ test "validateQueueGroup rejects injection" {
     try std.testing.expectError(inv_char, validateQueueGroup("workers\tfoo"));
 }
 
-// ============================================================================
 // Section 2: validatePublish Edge Cases
-// ============================================================================
 
 test "validatePublish single character subject" {
     try validatePublish("a");
@@ -154,7 +150,6 @@ test "validatePublish multiple consecutive dots rejected" {
 
 test "validatePublish null byte rejected" {
     // Null bytes could be used for injection - should be rejected
-    // BUG HUNTER: This might not be checked!
     const result = validatePublish("foo\x00bar");
     try std.testing.expectError(error.InvalidCharacter, result);
 }
@@ -167,14 +162,12 @@ test "validatePublish control characters rejected" {
 
 test "validatePublish unicode characters" {
     // Unicode should probably be allowed (common in international use)
-    // BUG HUNTER: Verify this is the intended behavior
     try validatePublish("日本語");
     try validatePublish("foo.émoji.bar");
 }
 
 test "validatePublish very long subject" {
     // Very long subject - should there be a limit?
-    // BUG HUNTER: No length checking might cause issues
     const long_subject = "a" ** 10000;
     try validatePublish(long_subject);
 }
@@ -193,9 +186,7 @@ test "validatePublish leading/trailing dots" {
     try std.testing.expectError(error.EmptyToken, validatePublish("."));
 }
 
-// ============================================================================
 // Section 3: validateSubscribe Edge Cases
-// ============================================================================
 
 test "validateSubscribe single wildcard tokens" {
     try validateSubscribe("*");
@@ -229,7 +220,6 @@ test "validateSubscribe > not at end rejected" {
 }
 
 test "validateSubscribe null byte rejected" {
-    // BUG HUNTER: This might not be checked!
     const result = validateSubscribe("foo\x00bar");
     try std.testing.expectError(error.InvalidCharacter, result);
 }
@@ -243,19 +233,14 @@ test "validateSubscribe empty token before wildcard" {
     try std.testing.expectError(error.EmptyToken, validateSubscribe(".>"));
 }
 
-// ============================================================================
 // Section 4: validateReplyTo Edge Cases
-// ============================================================================
 
 test "validateReplyTo empty string" {
-    // BUG HUNTER: Uses assert(len > 0) - crashes in debug, undefined in release!
-    // This test will crash if the bug exists
     const result = validateReplyTo("");
     try std.testing.expectError(error.EmptySubject, result);
 }
 
 test "validateReplyTo null byte rejected" {
-    // BUG HUNTER: Null bytes not checked!
     const result = validateReplyTo("inbox\x00inject");
     try std.testing.expectError(error.InvalidCharacter, result);
 }
@@ -303,18 +288,14 @@ test "validateReplyTo very long string" {
     try validateReplyTo(long_reply);
 }
 
-// ============================================================================
 // Section 5: validateQueueGroup Edge Cases
-// ============================================================================
 
 test "validateQueueGroup empty string" {
-    // BUG HUNTER: Uses assert(len > 0) - crashes in debug, undefined in release!
     const result = validateQueueGroup("");
     try std.testing.expectError(error.EmptySubject, result);
 }
 
 test "validateQueueGroup null byte rejected" {
-    // BUG HUNTER: Null bytes not checked!
     const result = validateQueueGroup("workers\x00inject");
     try std.testing.expectError(error.InvalidCharacter, result);
 }
@@ -366,19 +347,14 @@ test "validateQueueGroup allows special chars" {
     try validateQueueGroup("WORKERS");
 }
 
-// ============================================================================
 // Section 6: matches() Edge Cases
-// ============================================================================
 
 test "matches empty pattern" {
-    // BUG HUNTER: Uses assert(pattern.len > 0) - undefined behavior!
-    // This test documents the bug - it will crash
     const result = matches("", "foo");
     try std.testing.expect(!result);
 }
 
 test "matches empty subject" {
-    // BUG HUNTER: Uses assert(subject.len > 0) - undefined behavior!
     const result = matches("foo", "");
     try std.testing.expect(!result);
 }
@@ -440,13 +416,10 @@ test "matches with dots in pattern edge cases" {
     try std.testing.expect(matches(".foo", ".foo"));
 }
 
-// ============================================================================
 // Section 7: tokenCount Edge Cases
-// ============================================================================
 
 test "tokenCount single dot" {
     // "." has two empty tokens
-    // BUG HUNTER: Returns 2, but both tokens are empty - is this correct?
     const count = tokenCount(".");
     try std.testing.expectEqual(@as(usize, 2), count);
 }
@@ -472,9 +445,7 @@ test "tokenCount very long subject" {
     try std.testing.expectEqual(@as(usize, 26), tokenCount(long_subject));
 }
 
-// ============================================================================
 // Section 8: getToken Edge Cases
-// ============================================================================
 
 test "getToken empty subject" {
     // Empty subject should return null for any index
@@ -484,7 +455,6 @@ test "getToken empty subject" {
 
 test "getToken single dot" {
     // "." splits into empty tokens - tokenizeScalar skips them
-    // BUG HUNTER: This returns null because tokenizeScalar skips empty tokens
     try std.testing.expect(getToken(".", 0) == null);
 }
 

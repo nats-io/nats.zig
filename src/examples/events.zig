@@ -2,21 +2,21 @@
 //!
 //! Demonstrates how to handle connection lifecycle events using the
 //! EventHandler pattern. Shows how handlers can reference external state
-//! without closures - a powerful Zig pattern.
+//! without closures.
 //!
 //! Run with: zig build run-events
 //!
 //! Prerequisites: nats-server running on localhost:4222
 //!   nats-server -DV
 //!
-//! Try stopping/starting nats-server to see disconnect/reconnect events!
+//! Try stopping/starting nats-server to see disconnect/reconnect events.
 
 const std = @import("std");
 const nats = @import("nats");
 
 /// Application state that callbacks will modify.
 /// This pattern allows event handlers to update shared state
-/// without closures - pure Zig, no hidden allocations.
+/// without closures.
 const AppState = struct {
     is_online: bool = false,
     reconnect_count: u32 = 0,
@@ -83,7 +83,7 @@ pub fn main(init: std.process.Init) !void {
     // External state that callbacks will modify
     var app_state = AppState{};
 
-    // Handler with reference to external state - no closures needed!
+    // Handler with reference to external state
     var handler = MyEventHandler{ .app = &app_state };
 
     std.debug.print("Connecting to NATS with event callbacks...\n", .{});

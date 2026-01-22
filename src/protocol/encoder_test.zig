@@ -13,9 +13,7 @@ const Io = std.Io;
 const encoder = @import("encoder.zig");
 const Encoder = encoder.Encoder;
 
-// ============================================================================
 // Section 1: Existing Tests (moved from encoder.zig)
-// ============================================================================
 
 test "encode PING" {
     var buf: [64]u8 = undefined;
@@ -191,9 +189,7 @@ test "encodeUnsub invalid SID rejected" {
     try std.testing.expectError(Encoder.Error.InvalidSid, result);
 }
 
-// ============================================================================
 // Section 2: SID Boundary Value Tests
-// ============================================================================
 
 test "encodeSub SID one" {
     var buf: [256]u8 = undefined;
@@ -256,9 +252,7 @@ test "encodeUnsub max_msgs u64 max" {
     try std.testing.expectEqualSlices(u8, expected, writer.buffered());
 }
 
-// ============================================================================
 // Section 3: Payload Size Edge Cases
-// ============================================================================
 
 test "encodePub empty payload" {
     var buf: [256]u8 = undefined;
@@ -364,9 +358,7 @@ test "encodeHPub headers and payload lengths" {
     );
 }
 
-// ============================================================================
 // Section 4: Subject Edge Cases
-// ============================================================================
 
 test "encodePub single char subject" {
     var buf: [256]u8 = undefined;
@@ -423,9 +415,7 @@ test "encodeSub subject only wildcard" {
     try std.testing.expectEqualSlices(u8, "SUB > 1\r\n", writer.buffered());
 }
 
-// ============================================================================
 // Section 5: CRLF Injection Tests (SECURITY) - FIXED
-// ============================================================================
 
 test "encodePub subject with CRLF rejected" {
     var buf: [256]u8 = undefined;
@@ -511,9 +501,7 @@ test "encodeHPub reply_to with CRLF rejected" {
     try std.testing.expectError(error.InvalidCharacter, result);
 }
 
-// ============================================================================
 // Section 6: Space in Fields Tests - FIXED
-// ============================================================================
 
 test "encodePub subject with space rejected" {
     var buf: [256]u8 = undefined;
@@ -542,9 +530,7 @@ test "encodeSub queue_group with space rejected" {
     try std.testing.expectError(error.InvalidCharacter, result);
 }
 
-// ============================================================================
 // Section 7: Empty Optional Field Tests - FIXED
-// ============================================================================
 
 test "encodePub empty reply_to treated as null" {
     // Empty string reply_to is now treated as null (skipped)
@@ -604,9 +590,7 @@ test "encodeHPub empty reply_to treated as null" {
     );
 }
 
-// ============================================================================
 // Section 8: Null Byte Tests - FIXED
-// ============================================================================
 
 test "encodePub subject with null byte rejected" {
     var buf: [256]u8 = undefined;
@@ -640,9 +624,7 @@ test "encodePub payload with null byte allowed" {
     );
 }
 
-// ============================================================================
 // Section 9: Control Character Tests - FIXED
-// ============================================================================
 
 test "encodePub subject with tab rejected" {
     var buf: [256]u8 = undefined;
@@ -724,9 +706,7 @@ test "encodeSub queue_group with control char rejected" {
     try std.testing.expectError(error.InvalidCharacter, result);
 }
 
-// ============================================================================
 // Section 10: UNSUB max_msgs Edge Cases
-// ============================================================================
 
 test "encodeUnsub max_msgs zero" {
     var buf: [256]u8 = undefined;
@@ -753,9 +733,7 @@ test "encodeUnsub max_msgs one" {
     );
 }
 
-// ============================================================================
 // Section 11: CONNECT Edge Cases
-// ============================================================================
 
 test "encodeConnect minimal options" {
     var buf: [1024]u8 = undefined;
@@ -795,9 +773,7 @@ test "encodeConnect with all options" {
     );
 }
 
-// ============================================================================
 // Section 12: Long Subject/Payload Tests
-// ============================================================================
 
 test "encodePub long subject" {
     var buf: [4096]u8 = undefined;
@@ -834,9 +810,7 @@ test "encodeSub long queue_group" {
     try std.testing.expect(written.len > 100);
 }
 
-// ============================================================================
 // Section 13: Binary Payload Tests
-// ============================================================================
 
 test "encodePub payload with all byte values" {
     var buf: [1024]u8 = undefined;
@@ -885,9 +859,7 @@ test "encodeHPub binary headers and payload" {
     try std.testing.expect(std.mem.indexOf(u8, written, headers) != null);
 }
 
-// ============================================================================
 // Section 14: HPUB with Entries Tests
-// ============================================================================
 
 const headers_mod = @import("headers.zig");
 

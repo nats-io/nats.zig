@@ -9,9 +9,7 @@ const Server = @import("server_pool.zig").Server;
 const MAX_SERVERS = @import("server_pool.zig").MAX_SERVERS;
 const MAX_URL_LEN = @import("server_pool.zig").MAX_URL_LEN;
 
-// =============================================================================
 // URL Parsing Tests
-// =============================================================================
 
 test "parse URL with IPv4 address" {
     const pool = try ServerPool.init("nats://192.168.1.100:4222");
@@ -67,9 +65,7 @@ test "parse URL preserves original" {
     try std.testing.expectEqualStrings(original, pool.servers[0].getUrl());
 }
 
-// =============================================================================
 // Pool Capacity Tests
-// =============================================================================
 
 test "pool starts empty after primary" {
     const pool = try ServerPool.init("nats://localhost:4222");
@@ -121,9 +117,7 @@ test "URL exactly max length succeeds" {
     try std.testing.expectEqual(@as(u8, 1), pool.serverCount());
 }
 
-// =============================================================================
 // Deduplication Tests
-// =============================================================================
 
 test "exact duplicate rejected" {
     var pool = try ServerPool.init("nats://localhost:4222");
@@ -150,9 +144,7 @@ test "case sensitive URLs" {
     try std.testing.expectEqual(@as(u8, 2), pool.serverCount());
 }
 
-// =============================================================================
 // Round-Robin Rotation Tests
-// =============================================================================
 
 test "rotation starts from second server" {
     var pool = try ServerPool.init("nats://server1:4222");
@@ -192,9 +184,7 @@ test "single server rotation returns same" {
     try std.testing.expectEqualStrings("nats://only:4222", s3.getUrl());
 }
 
-// =============================================================================
 // Failure Tracking Tests
-// =============================================================================
 
 test "failure count increments" {
     var pool = try ServerPool.init("nats://server:4222");
@@ -247,9 +237,7 @@ test "reset failures clears all" {
     try std.testing.expectEqual(@as(u8, 0), pool.servers[1].consecutive_failures);
 }
 
-// =============================================================================
 // Cooldown Behavior Tests
-// =============================================================================
 
 test "cooldown increases with failures" {
     var pool = try ServerPool.init("nats://server:4222");
@@ -321,9 +309,7 @@ test "healthy server chosen over failed" {
     try std.testing.expectEqualStrings("nats://healthy:4222", server.getUrl());
 }
 
-// =============================================================================
 // Connect URLs Tests
-// =============================================================================
 
 test "add from connect_urls" {
     var pool = try ServerPool.init("nats://primary:4222");
@@ -379,9 +365,7 @@ test "add from connect_urls deduplicates" {
     try std.testing.expectEqual(@as(u8, 1), pool.serverCount());
 }
 
-// =============================================================================
 // Current Server Access Tests
-// =============================================================================
 
 test "currentUrl on empty pool returns none" {
     // Can't create empty pool directly, but test the behavior
@@ -404,9 +388,7 @@ test "current allows modification" {
     try std.testing.expectEqual(@as(u8, 5), pool.servers[0].consecutive_failures);
 }
 
-// =============================================================================
 // Server Struct Tests
-// =============================================================================
 
 test "server default values" {
     const server: Server = .{};
@@ -436,9 +418,7 @@ test "server getHost returns correct slice" {
     try std.testing.expectEqualStrings("myhost", server.getHost());
 }
 
-// =============================================================================
 // Edge Case Tests
-// =============================================================================
 
 test "primary index preserved" {
     var pool = try ServerPool.init("nats://primary:4222");

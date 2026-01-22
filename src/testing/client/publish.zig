@@ -43,8 +43,8 @@ pub fn testClientAsyncPubSub(allocator: std.mem.Allocator) void {
     };
     client.flush(allocator) catch {};
 
-    // True async/await - reader task routes messages automatically!
-    // defer handles cleanup via cancel() - DON'T deinit in success path!
+    // True async/await - reader task routes messages automatically.
+    // defer handles cleanup via cancel() - do not deinit in success path.
     var future = io.io().async(nats.Client.Sub.next, .{ sub, allocator, io.io() });
     defer if (future.cancel(io.io())) |msg| msg.deinit(allocator) else |_| {};
 

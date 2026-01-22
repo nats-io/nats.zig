@@ -14,9 +14,7 @@ const EMPTY = sidmap.EMPTY;
 const TOMB = sidmap.TOMB;
 const MAX_SLOT = sidmap.MAX_SLOT;
 
-// ============================================================================
 // Section 1: Existing Tests (moved from sidmap.zig)
-// ============================================================================
 
 test "SidMap basic operations" {
     var keys: [8]u64 = undefined;
@@ -133,9 +131,7 @@ test "SidMap large capacity" {
     }
 }
 
-// ============================================================================
 // Section 2: Edge Value Tests (SID boundaries)
-// ============================================================================
 
 test "SidMap SID zero" {
     var keys: [8]u64 = undefined;
@@ -191,9 +187,7 @@ test "SidMap consecutive SIDs" {
     try std.testing.expectEqual(@as(u16, 4), map.get(5).?);
 }
 
-// ============================================================================
 // Section 3: Edge Value Tests (Slot boundaries)
-// ============================================================================
 
 test "SidMap slot zero" {
     var keys: [8]u64 = undefined;
@@ -249,9 +243,7 @@ test "SidMap valid slot range" {
     try std.testing.expectEqual(MAX_SLOT, map.get(2).?);
 }
 
-// ============================================================================
 // Section 4: Load Factor Boundary Tests
-// ============================================================================
 
 test "SidMap exact load factor boundary" {
     var keys: [8]u64 = undefined;
@@ -332,9 +324,7 @@ test "SidMap load factor 256 capacity" {
     try std.testing.expectError(error.MapFull, map.put(9999, 179));
 }
 
-// ============================================================================
 // Section 5: Tombstone Behavior Tests
-// ============================================================================
 
 test "SidMap tombstone lookup continues probing" {
     var keys: [8]u64 = undefined;
@@ -439,9 +429,7 @@ test "SidMap tombstone does not affect count" {
     try std.testing.expectEqual(@as(u16, 1), map.get(2).?);
 }
 
-// ============================================================================
 // Section 6: Double Operation Tests
-// ============================================================================
 
 test "SidMap double remove same SID" {
     var keys: [8]u64 = undefined;
@@ -493,9 +481,7 @@ test "SidMap put after remove same SID" {
     try std.testing.expectEqual(@as(u32, 1), map.count());
 }
 
-// ============================================================================
 // Section 7: Empty Map Operations
-// ============================================================================
 
 test "SidMap get on empty" {
     var keys: [8]u64 = undefined;
@@ -551,9 +537,7 @@ test "SidMap clear after operations" {
     try std.testing.expectEqual(@as(u32, 5), map.count());
 }
 
-// ============================================================================
 // Section 8: Probe Chain Integrity Tests
-// ============================================================================
 
 test "SidMap remove does not break probe chain" {
     var keys: [8]u64 = undefined;
@@ -613,9 +597,7 @@ test "SidMap insert after remove maintains integrity" {
     try std.testing.expect(map.get(4) == null);
 }
 
-// ============================================================================
 // Section 9: Capacity Variations
-// ============================================================================
 
 test "SidMap minimum capacity 2" {
     var keys: [2]u64 = undefined;
@@ -660,9 +642,7 @@ test "SidMap capacity 1024" {
     try std.testing.expectError(error.MapFull, map.put(99999, 0));
 }
 
-// ============================================================================
 // Section 10: Lookup Performance After Tombstones
-// ============================================================================
 
 test "SidMap lookup non-existent after many tombstones" {
     var keys: [64]u64 = undefined;
@@ -714,9 +694,7 @@ test "SidMap alternating insert remove stress" {
     try std.testing.expectEqual(@as(u16, 0), map.get(1).?);
 }
 
-// ============================================================================
 // Section 11: Hash Distribution Tests
-// ============================================================================
 
 test "SidMap sequential SIDs distribute well" {
     var keys: [256]u64 = undefined;
@@ -762,9 +740,7 @@ test "SidMap sparse SIDs" {
     }
 }
 
-// ============================================================================
 // Section 12: Edge Cases in State
-// ============================================================================
 
 test "SidMap isEmpty after fill and empty" {
     var keys: [8]u64 = undefined;
