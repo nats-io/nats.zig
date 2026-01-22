@@ -1,4 +1,4 @@
-//! Concurrency Tests for NATS Async Client
+//! Concurrency Tests for NATS Client
 //!
 //! Tests for race conditions, concurrent operations, and thread safety.
 //! These tests verify the client behaves correctly under concurrent access.
@@ -15,7 +15,6 @@ const auth_port = utils.auth_port;
 const test_token = utils.test_token;
 const ServerManager = utils.ServerManager;
 
-/// Verifies SID allocation is safe under concurrent subscribe calls.
 pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -23,14 +22,20 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("concurrent_subscribe", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
     const NUM_SUBS = 10;
-    var subs: [NUM_SUBS]?*nats.Subscription = [_]?*nats.Subscription{null} ** NUM_SUBS;
+    var subs: [NUM_SUBS]?*nats.Subscription =
+        [_]?*nats.Subscription{null} ** NUM_SUBS;
     var created: u32 = 0;
 
     defer for (&subs) |*s| {
@@ -53,7 +58,11 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
 
     if (created != NUM_SUBS) {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}/10", .{created}) catch "e";
+        const detail = std.fmt.bufPrint(
+            &buf,
+            "got {d}/10",
+            .{created},
+        ) catch "e";
         reportResult("concurrent_subscribe", false, detail);
         return;
     }
@@ -62,10 +71,13 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
     for (0..NUM_SUBS) |i| {
         if (subs[i]) |sub| {
             sids[i] = sub.sid;
-            // Check for duplicates
             for (0..i) |j| {
                 if (sids[j] == sids[i]) {
-                    reportResult("concurrent_subscribe", false, "duplicate SID");
+                    reportResult(
+                        "concurrent_subscribe",
+                        false,
+                        "duplicate SID",
+                    );
                     return;
                 }
             }
@@ -79,7 +91,6 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Verifies publish is safe under rapid consecutive calls.
 pub fn testRapidPublish(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -87,7 +98,12 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("rapid_publish", false, "connect failed");
         return;
     };
@@ -118,10 +134,13 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
         return;
     };
 
-    // Must publish all 100
     if (published != NUM_MSGS) {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "pub {d}/100", .{published}) catch "e";
+        const detail = std.fmt.bufPrint(
+            &buf,
+            "pub {d}/100",
+            .{published},
+        ) catch "e";
         reportResult("rapid_publish", false, detail);
         return;
     }
@@ -138,12 +157,15 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
         reportResult("rapid_publish", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}/100", .{received}) catch "e";
+        const detail = std.fmt.bufPrint(
+            &buf,
+            "got {d}/100",
+            .{received},
+        ) catch "e";
         reportResult("rapid_publish", false, detail);
     }
 }
 
-/// Verifies subscribe/unsubscribe interleaving is safe.
 pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -151,7 +173,12 @@ pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("concurrent_sub_unsub", false, "connect failed");
         return;
     };
@@ -191,7 +218,6 @@ pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Verifies messages published while subscribing are handled correctly.
 pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -199,13 +225,23 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const publisher = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const publisher = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("race_sub_delivery", false, "pub connect failed");
         return;
     };
     defer publisher.deinit(allocator);
 
-    const subscriber = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const subscriber = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("race_sub_delivery", false, "sub connect failed");
         return;
     };
@@ -247,7 +283,6 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Verifies unsubscribe during message delivery doesn't crash.
 pub fn testRaceUnsubscribeVsDelivery(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -294,7 +329,6 @@ pub fn testRaceUnsubscribeVsDelivery(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Verifies SID allocation remains consistent after slot recycling.
 pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -302,7 +336,12 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("sid_allocation_recycle", false, "connect failed");
         return;
     };
@@ -353,7 +392,6 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Verifies multiple clients can share the same Io.Threaded.
 pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -361,19 +399,34 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client1 = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client1 = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("multi_client_shared_io", false, "client1 failed");
         return;
     };
     defer client1.deinit(allocator);
 
-    const client2 = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client2 = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("multi_client_shared_io", false, "client2 failed");
         return;
     };
     defer client2.deinit(allocator);
 
-    const client3 = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client3 = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("multi_client_shared_io", false, "client3 failed");
         return;
     };
@@ -417,40 +470,44 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Uses io.async() to receive from multiple subscriptions concurrently.
-pub fn testParallelAsyncReceive(allocator: std.mem.Allocator) void {
+pub fn testParallelReceive(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
-        reportResult("parallel_async_recv", false, "connect failed");
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("parallel_recv", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
     const sub1 = client.subscribe(allocator, "parallel.1") catch {
-        reportResult("parallel_async_recv", false, "sub1 failed");
+        reportResult("parallel_recv", false, "sub1 failed");
         return;
     };
     defer sub1.deinit(allocator);
 
     const sub2 = client.subscribe(allocator, "parallel.2") catch {
-        reportResult("parallel_async_recv", false, "sub2 failed");
+        reportResult("parallel_recv", false, "sub2 failed");
         return;
     };
     defer sub2.deinit(allocator);
 
     const sub3 = client.subscribe(allocator, "parallel.3") catch {
-        reportResult("parallel_async_recv", false, "sub3 failed");
+        reportResult("parallel_recv", false, "sub3 failed");
         return;
     };
     defer sub3.deinit(allocator);
 
     client.flush(allocator) catch {
-        reportResult("parallel_async_recv", false, "flush1 failed");
+        reportResult("parallel_recv", false, "flush1 failed");
         return;
     };
 
@@ -477,15 +534,18 @@ pub fn testParallelAsyncReceive(allocator: std.mem.Allocator) void {
     }
 
     if (received == 3) {
-        reportResult("parallel_async_recv", true, "");
+        reportResult("parallel_recv", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}/3", .{received}) catch "e";
-        reportResult("parallel_async_recv", false, detail);
+        const detail = std.fmt.bufPrint(
+            &buf,
+            "got {d}/3",
+            .{received},
+        ) catch "e";
+        reportResult("parallel_recv", false, detail);
     }
 }
 
-/// Verifies multiple rapid flushes don't cause issues.
 pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -493,7 +553,12 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("rapid_flush", false, "connect failed");
         return;
     };
@@ -509,7 +574,11 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
 
     if (success != 50) {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "flush {d}/50", .{success}) catch "e";
+        const detail = std.fmt.bufPrint(
+            &buf,
+            "flush {d}/50",
+            .{success},
+        ) catch "e";
         reportResult("rapid_flush", false, detail);
         return;
     }
@@ -526,7 +595,6 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Verifies stats are updated correctly under concurrent operations.
 pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -534,7 +602,12 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("stats_concurrency", false, "connect failed");
         return;
     };
@@ -592,7 +665,6 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
     reportResult("stats_concurrency", true, "");
 }
 
-/// Runs all concurrency tests.
 pub fn runAll(allocator: std.mem.Allocator) void {
     testConcurrentSubscribe(allocator);
     testRapidPublish(allocator);
@@ -601,7 +673,7 @@ pub fn runAll(allocator: std.mem.Allocator) void {
     testRaceUnsubscribeVsDelivery(allocator);
     testSidAllocationRecycling(allocator);
     testMultipleClientsSharedIo(allocator);
-    testParallelAsyncReceive(allocator);
+    testParallelReceive(allocator);
     testRapidFlushOperations(allocator);
     testStatsConcurrency(allocator);
 }

@@ -40,8 +40,8 @@ pub fn SpscQueue(comptime T: type) type {
     return struct {
         buffer: []T,
         capacity: usize,
-        head: std.atomic.Value(usize), // Producer writes here
-        tail: std.atomic.Value(usize), // Consumer reads here
+        head: std.atomic.Value(usize),
+        tail: std.atomic.Value(usize),
 
         const Self = @This();
 
@@ -66,10 +66,8 @@ pub fn SpscQueue(comptime T: type) type {
             // .acquire: must see consumer's tail updates to know slots are free
             const tail = self.tail.load(.acquire);
 
-            // Full check: head has wrapped around to tail
             if (head -% tail >= self.capacity) return false;
 
-            // Bitwise AND is faster than modulo (power-of-2 capacity)
             const mask = self.capacity - 1;
             self.buffer[head & mask] = item;
             // .release: ensures item write is visible BEFORE head increment
@@ -87,10 +85,8 @@ pub fn SpscQueue(comptime T: type) type {
             // their .release store to head
             const head = self.head.load(.acquire);
 
-            // Empty check
             if (tail == head) return null;
 
-            // Bitwise AND is faster than modulo (power-of-2 capacity)
             const mask = self.capacity - 1;
             const item = self.buffer[tail & mask];
             // .release: ensures item read completes BEFORE tail increment
@@ -111,7 +107,6 @@ pub fn SpscQueue(comptime T: type) type {
             const available = head -% tail;
             if (available == 0) return 0;
 
-            // Bitwise AND is faster than modulo (power-of-2 capacity)
             const mask = self.capacity - 1;
             const count = @min(available, out.len);
             for (0..count) |i| {
@@ -138,7 +133,6 @@ pub fn SpscQueue(comptime T: type) type {
         pub fn close(self: *Self, io: anytype) void {
             _ = self;
             _ = io;
-            // No-op - SPSC doesn't need close signaling
         }
     };
 }
@@ -154,7 +148,7 @@ test "SpscQueue push/pop" {
     try std.testing.expect(q.push(2));
     try std.testing.expect(q.push(3));
     try std.testing.expect(q.push(4));
-    try std.testing.expect(!q.push(5)); // Full
+    try std.testing.expect(!q.push(5));
 
     try std.testing.expectEqual(@as(usize, 4), q.len());
 
@@ -162,7 +156,7 @@ test "SpscQueue push/pop" {
     try std.testing.expectEqual(@as(?u32, 2), q.pop());
     try std.testing.expectEqual(@as(?u32, 3), q.pop());
     try std.testing.expectEqual(@as(?u32, 4), q.pop());
-    try std.testing.expectEqual(@as(?u32, null), q.pop()); // Empty
+    try std.testing.expectEqual(@as(?u32, null), q.pop());
 
     try std.testing.expect(q.isEmpty());
 }
@@ -191,14 +185,13 @@ test "SpscQueue wraparound" {
     var buffer: [4]u32 = undefined;
     var q = SpscQueue(u32).init(&buffer);
 
-    // Fill and drain several times to test wraparound
     for (0..10) |cycle| {
         const base: u32 = @intCast(cycle * 4);
         try std.testing.expect(q.push(base + 1));
         try std.testing.expect(q.push(base + 2));
         try std.testing.expect(q.push(base + 3));
         try std.testing.expect(q.push(base + 4));
-        try std.testing.expect(!q.push(base + 5)); // Full
+        try std.testing.expect(!q.push(base + 5));
 
         try std.testing.expectEqual(@as(?u32, base + 1), q.pop());
         try std.testing.expectEqual(@as(?u32, base + 2), q.pop());

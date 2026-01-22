@@ -17,7 +17,12 @@ pub fn testWildcardSubscribe(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("wildcard_subscribe", false, "connect failed");
         return;
     };
@@ -52,7 +57,12 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("wildcard_matching", false, "connect failed");
         return;
     };
@@ -136,7 +146,12 @@ pub fn testWildcardPositions(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("wildcard_positions", false, "connect failed");
         return;
     };
@@ -177,7 +192,8 @@ pub fn testWildcardPositions(allocator: std.mem.Allocator) void {
         reportResult("wildcard_positions", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}/2", .{count}) catch "err";
+        const detail =
+            std.fmt.bufPrint(&buf, "got {d}/2", .{count}) catch "err";
         reportResult("wildcard_positions", false, detail);
     }
 }
@@ -189,7 +205,12 @@ pub fn testMultipleWildcards(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("multi_wildcards", false, "connect failed");
         return;
     };
@@ -234,7 +255,12 @@ pub fn testPublishSubscribe(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("publish_subscribe", false, "connect failed");
         return;
     };

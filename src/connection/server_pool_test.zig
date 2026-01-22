@@ -65,8 +65,6 @@ test "parse URL preserves original" {
     try std.testing.expectEqualStrings(original, pool.servers[0].getUrl());
 }
 
-// Pool Capacity Tests
-
 test "pool starts empty after primary" {
     const pool = try ServerPool.init("nats://localhost:4222");
     try std.testing.expectEqual(@as(u8, 1), pool.serverCount());
@@ -111,13 +109,10 @@ test "URL too long returns error" {
 test "URL exactly max length succeeds" {
     var url: [MAX_URL_LEN]u8 = undefined;
     @memset(&url, 'a');
-    // Make it a valid-ish URL
     @memcpy(url[0..7], "server:");
     const pool = try ServerPool.init(&url);
     try std.testing.expectEqual(@as(u8, 1), pool.serverCount());
 }
-
-// Deduplication Tests
 
 test "exact duplicate rejected" {
     var pool = try ServerPool.init("nats://localhost:4222");
@@ -140,11 +135,8 @@ test "different host not duplicate" {
 test "case sensitive URLs" {
     var pool = try ServerPool.init("nats://Server1:4222");
     try pool.addServer("nats://server1:4222");
-    // URLs are case-sensitive, so these are different
     try std.testing.expectEqual(@as(u8, 2), pool.serverCount());
 }
-
-// Round-Robin Rotation Tests
 
 test "rotation starts from second server" {
     var pool = try ServerPool.init("nats://server1:4222");
@@ -153,7 +145,6 @@ test "rotation starts from second server" {
 
     const now: u64 = 1_000_000_000_000;
 
-    // First call should return server2 (index 1)
     const s1 = pool.nextServer(now).?;
     try std.testing.expectEqualStrings("nats://server2:4222", s1.getUrl());
 }
@@ -206,7 +197,6 @@ test "failure count saturates at 255" {
 
     _ = pool.nextServer(now);
 
-    // Max out failures
     var i: u16 = 0;
     while (i < 300) : (i += 1) {
         pool.markCurrentFailed();
@@ -221,13 +211,11 @@ test "reset failures clears all" {
 
     var now: u64 = 1_000_000_000_000;
 
-    // Fail server1
     _ = pool.nextServer(now);
     pool.markCurrentFailed();
     pool.markCurrentFailed();
 
-    // Fail server2
-    now += 100_000_000_000; // Skip cooldown
+    now += 100_000_000_000;
     _ = pool.nextServer(now);
     pool.markCurrentFailed();
 
@@ -237,30 +225,23 @@ test "reset failures clears all" {
     try std.testing.expectEqual(@as(u8, 0), pool.servers[1].consecutive_failures);
 }
 
-// Cooldown Behavior Tests
-
 test "cooldown increases with failures" {
     var pool = try ServerPool.init("nats://server:4222");
     var now: u64 = 1_000_000_000_000;
 
-    // First attempt
     _ = pool.nextServer(now);
     pool.markCurrentFailed();
 
-    // 1 failure = 5s cooldown, try at 4s - should fail
     now += 4_000_000_000;
     try std.testing.expect(pool.nextServer(now) == null);
 
-    // Try at 6s - should succeed
     now += 2_000_000_000;
     try std.testing.expect(pool.nextServer(now) != null);
     pool.markCurrentFailed();
 
-    // 2 failures = 10s cooldown, try at 8s - should fail
     now += 8_000_000_000;
     try std.testing.expect(pool.nextServer(now) == null);
 
-    // Try at 12s - should succeed
     now += 4_000_000_000;
     try std.testing.expect(pool.nextServer(now) != null);
 }
@@ -271,14 +252,12 @@ test "all servers on cooldown returns null" {
 
     var now: u64 = 1_000_000_000_000;
 
-    // Fail both servers
     _ = pool.nextServer(now);
     pool.markCurrentFailed();
     _ = pool.nextServer(now);
     pool.markCurrentFailed();
 
-    // Both on cooldown
-    now += 1_000_000_000; // 1 second
+    now += 1_000_000_000;
     try std.testing.expect(pool.nextServer(now) == null);
 }
 
@@ -289,7 +268,6 @@ test "cooldown expires allows retry" {
     _ = pool.nextServer(now);
     pool.markCurrentFailed();
 
-    // Advance past cooldown (5s for 1 failure)
     now += 6_000_000_000;
     try std.testing.expect(pool.nextServer(now) != null);
 }
@@ -300,16 +278,12 @@ test "healthy server chosen over failed" {
 
     const now: u64 = 1_000_000_000_000;
 
-    // Get and fail first server
     _ = pool.nextServer(now);
     pool.markCurrentFailed();
 
-    // Next request should get healthy server
     const server = pool.nextServer(now).?;
     try std.testing.expectEqualStrings("nats://healthy:4222", server.getUrl());
 }
-
-// Connect URLs Tests
 
 test "add from connect_urls" {
     var pool = try ServerPool.init("nats://primary:4222");
@@ -317,7 +291,6 @@ test "add from connect_urls" {
     var urls: [16][256]u8 = undefined;
     var lens: [16]u8 = [_]u8{0} ** 16;
 
-    // Add two URLs
     const url1 = "nats://cluster1:4222";
     const url2 = "nats://cluster2:4222";
 
@@ -341,7 +314,6 @@ test "add from connect_urls skips empty" {
     const url1 = "nats://cluster1:4222";
     @memcpy(urls[0][0..url1.len], url1);
     lens[0] = url1.len;
-    // lens[1] is 0 (empty)
     lens[2] = 0;
 
     pool.addFromConnectUrls(&urls, &lens, 3);
@@ -355,7 +327,6 @@ test "add from connect_urls deduplicates" {
     var urls: [16][256]u8 = undefined;
     var lens: [16]u8 = [_]u8{0} ** 16;
 
-    // Same as primary
     const url1 = "nats://primary:4222";
     @memcpy(urls[0][0..url1.len], url1);
     lens[0] = url1.len;
@@ -417,8 +388,6 @@ test "server getHost returns correct slice" {
 
     try std.testing.expectEqualStrings("myhost", server.getHost());
 }
-
-// Edge Case Tests
 
 test "primary index preserved" {
     var pool = try ServerPool.init("nats://primary:4222");

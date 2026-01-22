@@ -10,11 +10,9 @@ pub const errors = @import("connection/errors.zig");
 pub const server_pool = @import("connection/server_pool.zig");
 pub const io_task = @import("connection/io_task.zig");
 
-// State types
 pub const State = state.State;
 pub const StateMachine = state.StateMachine;
 
-// Event types
 pub const Event = events.Event;
 pub const EventQueue = events.EventQueue;
 pub const ConnectedInfo = events.ConnectedInfo;
@@ -23,12 +21,10 @@ pub const DisconnectReason = events.DisconnectReason;
 pub const MessageInfo = events.MessageInfo;
 pub const ReconnectingInfo = events.ReconnectingInfo;
 
-// Connection errors
 pub const Error = errors.Error;
 pub const parseAuthError = errors.parseAuthError;
 pub const isRetryable = errors.isRetryable;
 
-// Server pool for reconnection
 pub const ServerPool = server_pool.ServerPool;
 
 test {

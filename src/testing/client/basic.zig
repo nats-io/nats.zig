@@ -1,6 +1,4 @@
-//! Basic Tests for NATS Async Client
-//!
-//! Tests for basic async client operations.
+//! Basic Tests for NATS Client
 
 const std = @import("std");
 const utils = @import("../test_utils.zig");
@@ -14,7 +12,7 @@ const auth_port = utils.auth_port;
 const test_token = utils.test_token;
 const ServerManager = utils.ServerManager;
 
-pub fn testClientAsyncBasic(allocator: std.mem.Allocator) void {
+pub fn testClientBasic(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
@@ -22,7 +20,7 @@ pub fn testClientAsyncBasic(allocator: std.mem.Allocator) void {
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
-        .name = "async-client-test",
+        .name = "client-test",
         .sub_queue_size = 64,
         .reconnect = false,
     }) catch |err| {
@@ -32,116 +30,122 @@ pub fn testClientAsyncBasic(allocator: std.mem.Allocator) void {
             "connect failed: {}",
             .{err},
         ) catch "error";
-        reportResult("client_async_basic", false, msg);
+        reportResult("client_basic", false, msg);
         return;
     };
     defer client.deinit(allocator);
 
     if (!client.isConnected()) {
-        reportResult("client_async_basic", false, "not connected");
+        reportResult("client_basic", false, "not connected");
         return;
     }
 
-    const sub = client.subscribe(allocator, "async.basic") catch {
-        reportResult("client_async_basic", false, "subscribe failed");
+    const sub = client.subscribe(allocator, "basic") catch {
+        reportResult("client_basic", false, "subscribe failed");
         return;
     };
     defer sub.deinit(allocator);
 
-    reportResult("client_async_basic", true, "");
+    reportResult("client_basic", true, "");
 }
 
-// ClientAsync Test 2: Multiple concurrent subscriptions
-
-pub fn testClientAsyncTryNext(allocator: std.mem.Allocator) void {
+pub fn testClientTryNext(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
-        reportResult("client_async_try_next", false, "connect failed");
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("client_try_next", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
-    const sub = client.subscribe(allocator, "async.trynext") catch {
-        reportResult("client_async_try_next", false, "sub failed");
+    const sub = client.subscribe(allocator, "trynext") catch {
+        reportResult("client_try_next", false, "sub failed");
         return;
     };
     defer sub.deinit(allocator);
 
-    // No messages yet - should return null immediately
     if (sub.tryNext() != null) {
-        reportResult("client_async_try_next", false, "expected null");
+        reportResult("client_try_next", false, "expected null");
         return;
     }
 
-    reportResult("client_async_try_next", true, "");
+    reportResult("client_try_next", true, "");
 }
 
-// ClientAsync Test 4: Publish and receive using async/await
-
-pub fn testClientAsyncServerInfo(allocator: std.mem.Allocator) void {
+pub fn testClientServerInfo(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
-        reportResult("client_async_server_info", false, "connect failed");
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("client_server_info", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
     if (client.getServerInfo()) |info| {
         if (info.port == test_port) {
-            reportResult("client_async_server_info", true, "");
+            reportResult("client_server_info", true, "");
             return;
         }
     }
-    reportResult("client_async_server_info", false, "no server info");
+    reportResult("client_server_info", false, "no server info");
 }
 
-// ClientAsync Test 9: Rapid subscribe/unsubscribe
-
-pub fn testClientAsyncRapidSubUnsub(allocator: std.mem.Allocator) void {
+pub fn testClientRapidSubUnsub(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
-        reportResult("client_async_rapid_sub", false, "connect failed");
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("client_rapid_sub", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
-    // Rapid sub/unsub 20 times
     for (0..20) |i| {
         var buf: [32]u8 = undefined;
         const subj = std.fmt.bufPrint(&buf, "rapid.{d}", .{i}) catch "e";
         const sub = client.subscribe(allocator, subj) catch {
-            reportResult("client_async_rapid_sub", false, "sub failed");
+            reportResult("client_rapid_sub", false, "sub failed");
             return;
         };
         sub.deinit(allocator);
     }
 
-    // Client should still work
     const sub = client.subscribe(allocator, "rapid.final") catch {
-        reportResult("client_async_rapid_sub", false, "final sub failed");
+        reportResult("client_rapid_sub", false, "final sub failed");
         return;
     };
     defer sub.deinit(allocator);
 
     if (client.isConnected()) {
-        reportResult("client_async_rapid_sub", true, "");
+        reportResult("client_rapid_sub", true, "");
     } else {
-        reportResult("client_async_rapid_sub", false, "disconnected");
+        reportResult("client_rapid_sub", false, "disconnected");
     }
 }
 
@@ -184,7 +188,6 @@ pub fn testClientVerbose(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Publish and flush should work with verbose mode
     client.publish("verbose.test", "data") catch {
         reportResult("client_verbose", false, "publish failed");
         return;
@@ -201,10 +204,14 @@ pub fn testMultipleConnectDisconnect(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    // Connect and disconnect 5 times in a row
     for (0..5) |_| {
         var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-        const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+        const client = nats.Client.connect(
+            allocator,
+            io.io(),
+            url,
+            .{ .reconnect = false },
+        ) catch {
             io.deinit();
             reportResult("multi_connect_disconnect", false, "connect failed");
             return;
@@ -216,12 +223,11 @@ pub fn testMultipleConnectDisconnect(allocator: std.mem.Allocator) void {
     reportResult("multi_connect_disconnect", true, "");
 }
 
-/// Runs all basic async tests.
 pub fn runAll(allocator: std.mem.Allocator) void {
-    testClientAsyncBasic(allocator);
-    testClientAsyncTryNext(allocator);
-    testClientAsyncServerInfo(allocator);
-    testClientAsyncRapidSubUnsub(allocator);
+    testClientBasic(allocator);
+    testClientTryNext(allocator);
+    testClientServerInfo(allocator);
+    testClientRapidSubUnsub(allocator);
     testClientName(allocator);
     testClientVerbose(allocator);
     testMultipleConnectDisconnect(allocator);

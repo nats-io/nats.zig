@@ -64,21 +64,18 @@ pub const ServerPool = struct {
         if (self.count >= MAX_SERVERS) return error.PoolFull;
         if (url.len == 0 or url.len > MAX_URL_LEN) return error.InvalidUrl;
 
-        // Check for duplicates
         for (self.servers[0..self.count]) |*existing| {
             if (std.mem.eql(u8, existing.getUrl(), url)) {
-                return; // Already exists, skip
+                return;
             }
         }
 
         var server: Server = .{};
 
-        // Copy URL
         const url_len: u8 = @intCast(url.len);
         @memcpy(server.url[0..url_len], url);
         server.url_len = url_len;
 
-        // Parse URL to extract host and port
         var remaining = url;
 
         // Strip nats:// prefix
@@ -127,7 +124,7 @@ pub const ServerPool = struct {
             const len = lens[i];
             if (len == 0) continue;
             const url = urls[i][0..len];
-            self.addServer(url) catch continue; // Skip invalid/duplicate
+            self.addServer(url) catch continue;
         }
     }
 
@@ -140,19 +137,16 @@ pub const ServerPool = struct {
         assert(self.count > 0);
         assert(self.current_idx < self.count);
 
-        // Try each server once
         var attempts: u8 = 0;
         while (attempts < self.count) : (attempts += 1) {
-            // Move to next server (round-robin)
             self.current_idx = (self.current_idx + 1) % self.count;
             var server = &self.servers[self.current_idx];
 
-            // Check cooldown
             if (server.consecutive_failures > 0) {
                 const cooldown = FAILURE_COOLDOWN_NS *
                     @as(u64, server.consecutive_failures);
                 if (now_ns - server.last_attempt_ns < cooldown) {
-                    continue; // Still on cooldown
+                    continue;
                 }
             }
 
@@ -160,7 +154,7 @@ pub const ServerPool = struct {
             return server;
         }
 
-        return null; // All servers on cooldown
+        return null;
     }
 
     /// Mark current server as failed.

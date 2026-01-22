@@ -267,7 +267,6 @@ test "EventHandler vtable generation" {
     try std.testing.expect(eh.vtable.onError != null);
     try std.testing.expect(eh.vtable.onLameDuck != null);
 
-    // Test dispatch
     eh.dispatchConnect();
     try std.testing.expectEqual(@as(u32, 1), handler.connect_count);
 
@@ -277,7 +276,6 @@ test "EventHandler vtable generation" {
 }
 
 test "EventHandler partial implementation" {
-    // Handler with only onConnect
     const MinimalHandler = struct {
         called: bool = false,
 
@@ -296,7 +294,6 @@ test "EventHandler partial implementation" {
     try std.testing.expect(eh.vtable.onError == null);
     try std.testing.expect(eh.vtable.onLameDuck == null);
 
-    // Dispatch should work (and not crash for null callbacks)
     eh.dispatchConnect();
     try std.testing.expect(handler.called);
 
@@ -347,7 +344,6 @@ test "EventHandler with external state" {
 }
 
 test "Event union" {
-    // Test all event variants
     const events = [_]Event{
         .{ .connected = {} },
         .{ .disconnected = .{ .err = error.BrokenPipe } },
@@ -366,7 +362,6 @@ test "Event union" {
         switch (event) {
             .connected => {},
             .disconnected => |d| {
-                // Test that err field exists and is optional
                 if (d.err) |err| {
                     _ = @errorName(err);
                 }
@@ -375,7 +370,6 @@ test "Event union" {
             .closed => {},
             .slow_consumer => |sc| try std.testing.expect(sc.sid >= 0),
             .err => |e| {
-                // Test that err is an anyerror
                 _ = @errorName(e.err);
             },
             .lame_duck => {},

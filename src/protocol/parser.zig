@@ -21,7 +21,7 @@ pub inline fn parseU64Fast(s: []const u8) error{
     Overflow,
 }!u64 {
     assert(s.len > 0);
-    if (s.len > 20) return error.Overflow; // u64 max is 20 digits
+    if (s.len > 20) return error.Overflow;
     var v: u64 = 0;
     for (s) |c| {
         if (c < '0' or c > '9') return error.InvalidCharacter;
@@ -37,7 +37,7 @@ pub inline fn parseUsizeFast(s: []const u8) error{
     Overflow,
 }!usize {
     assert(s.len > 0);
-    if (s.len > 20) return error.Overflow; // usize max is 20 digits (64-bit)
+    if (s.len > 20) return error.Overflow;
     var v: usize = 0;
     for (s) |c| {
         if (c < '0' or c > '9') return error.InvalidCharacter;
@@ -179,7 +179,7 @@ pub const Parser = struct {
 inline fn verifyCRLF(data: []const u8, offset: usize) bool {
     if (offset + 2 > data.len) return false;
     const word = @as(u16, @bitCast([2]u8{ data[offset], data[offset + 1] }));
-    return word == 0x0A0D; // '\r\n' in little-endian
+    return word == 0x0A0D;
 }
 
 /// Parse complete MSG using manual byte scanning (no iterator allocation).

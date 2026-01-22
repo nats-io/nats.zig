@@ -1595,7 +1595,7 @@ pub fn checkHealthAndDetectStale(self: *Client) bool {
             "[HEALTH] STALE: pings_outstanding={d} >= max={d}",
             .{ outstanding, self.options.max_pings_outstanding },
         );
-        return true; // Stale - caller should trigger disconnect
+        return true;
     }
 
     // Check if it's time to send PING
@@ -1790,7 +1790,7 @@ pub fn restoreSubscriptions(self: *Client) !void {
 /// Initialize pending buffer for publishes during reconnect.
 fn initPendingBuffer(self: *Client, allocator: Allocator) !void {
     if (self.options.pending_buffer_size == 0) return;
-    if (self.pending_buffer != null) return; // Already initialized
+    if (self.pending_buffer != null) return;
 
     self.pending_buffer = try allocator.alloc(
         u8,
@@ -1984,9 +1984,8 @@ pub fn waitBackoff(self: *Client) void {
 /// Attempt reconnection with exponential backoff.
 /// Can be called automatically (from io_task) or manually by user.
 pub fn reconnect(self: *Client, allocator: Allocator) !void {
-    // Validate state
     if (self.state != .disconnected and self.state != .reconnecting) {
-        if (self.state == .connected) return; // Already connected
+        if (self.state == .connected) return;
         return error.InvalidState;
     }
 

@@ -1,6 +1,4 @@
-//! Auth Tests for NATS Async Client
-//!
-//! Tests for async authentication.
+//! Auth Tests for NATS Client
 
 const std = @import("std");
 const utils = @import("../test_utils.zig");
@@ -14,7 +12,7 @@ const auth_port = utils.auth_port;
 const test_token = utils.test_token;
 const ServerManager = utils.ServerManager;
 
-pub fn testAsyncAuthentication(allocator: std.mem.Allocator) void {
+pub fn testAuthentication(allocator: std.mem.Allocator) void {
     var url_buf: [128]u8 = undefined;
     const url = formatAuthUrl(&url_buf, auth_port, test_token);
 
@@ -22,20 +20,19 @@ pub fn testAsyncAuthentication(allocator: std.mem.Allocator) void {
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
-        reportResult("async_authentication", false, "auth connect failed");
+        reportResult("authentication", false, "auth connect failed");
         return;
     };
     defer client.deinit(allocator);
 
     if (client.isConnected()) {
-        reportResult("async_authentication", true, "");
+        reportResult("authentication", true, "");
     } else {
-        reportResult("async_authentication", false, "not connected");
+        reportResult("authentication", false, "not connected");
     }
 }
 
-/// Test: Authentication failure without token
-pub fn testAsyncAuthenticationFailure(allocator: std.mem.Allocator) void {
+pub fn testAuthenticationFailure(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, auth_port); // No token!
 
@@ -46,9 +43,9 @@ pub fn testAsyncAuthenticationFailure(allocator: std.mem.Allocator) void {
 
     if (result) |client| {
         client.deinit(allocator);
-        reportResult("async_auth_failure", false, "should have failed");
+        reportResult("auth_failure", false, "should have failed");
     } else |_| {
-        reportResult("async_auth_failure", true, "");
+        reportResult("auth_failure", true, "");
     }
 }
 
@@ -86,11 +83,8 @@ pub fn testAuthenticatedPubSub(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: Empty token should fail
-// Verifies that empty token is rejected.
 pub fn testEmptyToken(allocator: std.mem.Allocator) void {
     var url_buf: [128]u8 = undefined;
-    // Empty token
     const url = formatAuthUrl(&url_buf, auth_port, "");
 
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
@@ -99,7 +93,6 @@ pub fn testEmptyToken(allocator: std.mem.Allocator) void {
     const result = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false });
 
     if (result) |client| {
-        // Empty token might connect but fail auth
         if (client.isConnected()) {
             client.deinit(allocator);
             reportResult("empty_token", false, "should fail auth");
@@ -113,11 +106,7 @@ pub fn testEmptyToken(allocator: std.mem.Allocator) void {
     reportResult("empty_token", true, "");
 }
 
-// Test: Token with special characters
-// Verifies tokens with special chars work correctly.
 pub fn testTokenSpecialChars(allocator: std.mem.Allocator) void {
-    // Tests URL parsing with special characters.
-    // Uses correct token but tests parsing robustness.
     var url_buf: [128]u8 = undefined;
     const url = formatAuthUrl(&url_buf, auth_port, test_token);
 
@@ -137,13 +126,10 @@ pub fn testTokenSpecialChars(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: Auth recovery after rejection
-// Verifies client can try to connect again after auth failure.
 pub fn testAuthRejectionRecovery(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // First: fail with wrong token
     var bad_url_buf: [128]u8 = undefined;
     const bad_url = formatAuthUrl(&bad_url_buf, auth_port, "wrong-token");
 
@@ -174,8 +160,6 @@ pub fn testAuthRejectionRecovery(allocator: std.mem.Allocator) void {
     reportResult("auth_rejection_recovery", false, "not connected");
 }
 
-// Test: Multiple auth attempts
-// Verifies multiple auth failures don't break client.
 pub fn testMultipleAuthAttempts(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
@@ -183,7 +167,6 @@ pub fn testMultipleAuthAttempts(allocator: std.mem.Allocator) void {
     var url_buf: [128]u8 = undefined;
     const bad_url = formatAuthUrl(&url_buf, auth_port, "wrong");
 
-    // Try 5 times with wrong token
     var failures: u32 = 0;
     for (0..5) |_| {
         const result = nats.Client.connect(allocator, io.io(), bad_url, .{ .reconnect = false });
@@ -194,7 +177,6 @@ pub fn testMultipleAuthAttempts(allocator: std.mem.Allocator) void {
         }
     }
 
-    // All 5 should fail
     if (failures == 5) {
         reportResult("multiple_auth_attempts", true, "");
     } else {
@@ -204,8 +186,6 @@ pub fn testMultipleAuthAttempts(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: Auth required flag in server info
-// Verifies client detects auth_required flag.
 pub fn testAuthRequiredDetection(allocator: std.mem.Allocator) void {
     var url_buf: [128]u8 = undefined;
     const url = formatAuthUrl(&url_buf, auth_port, test_token);
@@ -233,10 +213,9 @@ pub fn testAuthRequiredDetection(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Runs all async auth tests.
 pub fn runAll(allocator: std.mem.Allocator) void {
-    testAsyncAuthentication(allocator);
-    testAsyncAuthenticationFailure(allocator);
+    testAuthentication(allocator);
+    testAuthenticationFailure(allocator);
     testAuthenticatedPubSub(allocator);
     testEmptyToken(allocator);
     testTokenSpecialChars(allocator);

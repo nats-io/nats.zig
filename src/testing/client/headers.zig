@@ -1,7 +1,4 @@
 //! Headers API Integration Tests
-//!
-//! Tests for publishWithHeaders, publishRequestWithHeaders,
-//! and requestWithHeaders.
 
 const std = @import("std");
 const utils = @import("../test_utils.zig");
@@ -12,7 +9,6 @@ const reportResult = utils.reportResult;
 const formatUrl = utils.formatUrl;
 const test_port = utils.test_port;
 
-/// Test: Publish with single header
 pub fn testHeadersPublishSingle(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -77,7 +73,6 @@ pub fn testHeadersPublishSingle(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: Publish with multiple headers
 pub fn testHeadersPublishMultiple(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -149,7 +144,6 @@ pub fn testHeadersPublishMultiple(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: Publish with headers and empty payload
 pub fn testHeadersPublishEmptyPayload(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -206,7 +200,6 @@ pub fn testHeadersPublishEmptyPayload(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: publishRequestWithHeaders preserves reply-to
 pub fn testHeadersPublishRequest(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -280,7 +273,6 @@ pub fn testHeadersPublishRequest(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: requestWithHeaders with responder
 pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -299,7 +291,6 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
     };
     defer responder.deinit(allocator);
 
-    // Requester client
     var io_req: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_req.deinit();
     const requester = nats.Client.connect(
@@ -313,7 +304,6 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
     };
     defer requester.deinit(allocator);
 
-    // Set up responder subscription
     const sub = responder.subscribe(allocator, "svc.headers") catch {
         reportResult("headers_request_reply", false, "responder sub failed");
         return;
@@ -322,7 +312,6 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
     responder.flush(allocator) catch {};
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    // Responder handler - checks for headers in request
     const Handler = struct {
         fn handle(
             r: *nats.Client,
@@ -354,7 +343,6 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
     });
     defer _ = handler.cancel(io_r.io());
 
-    // Send request with headers
     const hdrs = [_]headers.Entry{
         .{ .key = "X-Request-Id", .value = "test-123" },
     };
@@ -382,7 +370,6 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
     reportResult("headers_request_reply", false, "no reply");
 }
 
-/// Test: requestWithHeaders timeout with no responder
 pub fn testHeadersRequestTimeout(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -429,7 +416,6 @@ pub fn testHeadersRequestTimeout(allocator: std.mem.Allocator) void {
         msg.deinit(allocator);
     }
 
-    // Should complete within reasonable time
     if (elapsed_ms < 5000) {
         reportResult("headers_request_timeout", true, "");
     } else {
@@ -443,12 +429,10 @@ pub fn testHeadersRequestTimeout(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: Cross-client headers (A publishes, B receives)
 pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    // Client A (publisher)
     var io_a: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_a.deinit();
     const client_a = nats.Client.connect(
@@ -462,7 +446,6 @@ pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
     };
     defer client_a.deinit(allocator);
 
-    // Client B (subscriber)
     var io_b: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_b.deinit();
     const client_b = nats.Client.connect(
@@ -476,7 +459,6 @@ pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
     };
     defer client_b.deinit(allocator);
 
-    // B subscribes
     const sub = client_b.subscribe(allocator, "cross.headers") catch {
         reportResult("headers_cross_client", false, "B sub failed");
         return;
@@ -485,7 +467,6 @@ pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
     client_b.flush(allocator) catch {};
     io_b.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    // A publishes with headers
     const hdrs = [_]headers.Entry{
         .{ .key = "X-From", .value = "client-A" },
         .{ .key = "X-Correlation-Id", .value = "corr-456" },
@@ -496,7 +477,6 @@ pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
     };
     client_a.flush(allocator) catch {};
 
-    // B receives and verifies
     if (sub.nextWithTimeout(allocator, 2000) catch null) |msg| {
         defer msg.deinit(allocator);
         if (msg.headers == null) {
@@ -526,7 +506,6 @@ pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
     reportResult("headers_cross_client", false, "no message received");
 }
 
-/// Test: Many headers (40 headers)
 pub fn testHeadersManyEntries(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -553,7 +532,6 @@ pub fn testHeadersManyEntries(allocator: std.mem.Allocator) void {
     client.flush(allocator) catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
-    // Create 40 headers
     const hdrs = [_]headers.Entry{
         .{ .key = "H00", .value = "v00" }, .{ .key = "H01", .value = "v01" },
         .{ .key = "H02", .value = "v02" }, .{ .key = "H03", .value = "v03" },
@@ -609,7 +587,6 @@ pub fn testHeadersManyEntries(allocator: std.mem.Allocator) void {
             reportResult("headers_many_entries", false, detail);
             return;
         }
-        // Verify first and last headers
         const first = parsed.get("H00");
         const last = parsed.get("H39");
         if (first != null and last != null) {
@@ -626,7 +603,6 @@ pub fn testHeadersManyEntries(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: Headers with large values
 pub fn testHeadersLargeValues(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -653,7 +629,6 @@ pub fn testHeadersLargeValues(allocator: std.mem.Allocator) void {
     client.flush(allocator) catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
-    // Create header with 200-char value
     var large_value: [200]u8 = undefined;
     @memset(&large_value, 'X');
 
@@ -695,7 +670,6 @@ pub fn testHeadersLargeValues(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: Headers with special characters (colons in value)
 pub fn testHeadersSpecialChars(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -722,7 +696,6 @@ pub fn testHeadersSpecialChars(allocator: std.mem.Allocator) void {
     client.flush(allocator) catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
-    // Value containing colons (common in URLs, timestamps)
     const hdrs = [_]headers.Entry{
         .{ .key = "X-Timestamp", .value = "2026-01-21T10:30:00Z" },
         .{ .key = "X-URL", .value = "http://example.com:8080/path" },
@@ -770,7 +743,6 @@ pub fn testHeadersSpecialChars(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: Headers with binary payload
 pub fn testHeadersBinaryPayload(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -797,7 +769,6 @@ pub fn testHeadersBinaryPayload(allocator: std.mem.Allocator) void {
     client.flush(allocator) catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
-    // Binary payload with various byte values
     const binary_payload = [_]u8{ 0x00, 0x01, 0xFF, 0xFE, 0x7F, 0x80, 0x00, 0xFF };
 
     const hdrs = [_]headers.Entry{
@@ -838,7 +809,6 @@ pub fn testHeadersBinaryPayload(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: Well-known NATS header (Nats-Msg-Id for JetStream dedup)
 pub fn testHeadersWellKnown(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -865,7 +835,6 @@ pub fn testHeadersWellKnown(allocator: std.mem.Allocator) void {
     client.flush(allocator) catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
-    // Use well-known header name constant
     const hdrs = [_]headers.Entry{
         .{ .key = headers.HeaderName.msg_id, .value = "unique-msg-001" },
     };
@@ -904,7 +873,6 @@ pub fn testHeadersWellKnown(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: Headers case-insensitive lookup
 pub fn testHeadersCaseInsensitive(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -971,7 +939,6 @@ pub fn testHeadersCaseInsensitive(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Runs all headers integration tests.
 pub fn runAll(allocator: std.mem.Allocator) void {
     testHeadersPublishSingle(allocator);
     testHeadersPublishMultiple(allocator);

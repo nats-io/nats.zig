@@ -18,12 +18,10 @@ pub const FixedQueue = subscription.FixedQueue;
 pub const FixedSubscription = subscription.FixedSubscription;
 pub const FixedSubConfig = subscription.FixedSubConfig;
 
-// Inbox functions
 pub const newInbox = inbox.newInbox;
 pub const newInboxBuf = inbox.newInboxBuf;
 pub const isInbox = inbox.isInbox;
 
-// Subject functions
 pub const validatePublish = subject.validatePublish;
 pub const validateSubscribe = subject.validateSubscribe;
 pub const validateQueueGroup = subject.validateQueueGroup;

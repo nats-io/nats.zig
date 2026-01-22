@@ -70,7 +70,6 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     assert(config.subject.len > 0);
     assert(config.msgs > 0);
 
-    // Print start message with current time
     if (bench.TimeOfDay.now()) |tod| {
         var buf: [8]u8 = undefined;
         std.debug.print(
@@ -86,12 +85,10 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         );
     }
 
-    // Create I/O
     var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer threaded.deinit();
     const io = threaded.io();
 
-    // Connect using Client
     const client = nats.Client.connect(allocator, io, config.url, .{
         .name = "bench-pub",
     }) catch |err| {
@@ -100,18 +97,15 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     };
     defer client.deinit(allocator);
 
-    // Create payload buffer
     const payload = try allocator.alloc(u8, config.size);
     defer allocator.free(payload);
     @memset(payload, 'A');
 
-    // Start timing
     var timer = std.time.Timer.start() catch {
         std.debug.print("Timer unavailable\n", .{});
         return error.TimerUnavailable;
     };
 
-    // Publish loop - tight loop, no syscalls per message
     var i: u64 = 0;
     while (i < config.msgs) : (i += 1) {
         client.publish(config.subject, payload) catch |err| {
@@ -120,13 +114,11 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         };
     }
 
-    // Single flush at end
     client.flush(allocator) catch |err| {
         std.debug.print("Flush failed: {}\n", .{err});
         return err;
     };
 
-    // Stop timing and print stats
     const elapsed_ns = timer.read();
     const stats = bench.Stats{
         .elapsed_ns = elapsed_ns,

@@ -75,7 +75,6 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     assert(config.subject.len > 0);
     assert(config.msgs > 0);
 
-    // Queue size: explicit, or default: 65536)
     const queue_size: u32 = if (config.queue_size > 0)
         config.queue_size
     else blk: {
@@ -99,12 +98,10 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         );
     }
 
-    // Create I/O
     var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer threaded.deinit();
     const io = threaded.io();
 
-    // Connect
     const client = nats.Client.connect(allocator, io, config.url, .{
         .name = "bench-sub",
         .sub_queue_size = queue_size,
@@ -114,14 +111,12 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     };
     defer client.deinit(allocator);
 
-    // Subscribe
     var sub = client.subscribe(allocator, config.subject) catch |err| {
         std.debug.print("Subscribe failed: {}\n", .{err});
         return err;
     };
     defer sub.deinit(allocator);
 
-    // Flush subscription registration
     client.flush(allocator) catch |err| {
         std.debug.print("Flush failed: {}\n", .{err});
         return err;
@@ -131,22 +126,17 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         config.subject,
     });
 
-    // Timer starts on first message
     var timer: ?std.time.Timer = null;
     var msg_count: u64 = 0;
     var total_bytes: u64 = 0;
 
-    // Progress interval
     const progress_interval = config.msgs / 10;
     var last_progress: u64 = 0;
 
-    // Receive loop - use fast batch receive with timeout fallback
     var batch_buf: [64]nats.Client.Message = undefined;
     while (msg_count < config.msgs) {
-        // Fast path: try batch receive (non-blocking)
         const batch_count = sub.tryNextBatch(&batch_buf);
         if (batch_count > 0) {
-            // Start timer on first message
             if (timer == null) {
                 timer = std.time.Timer.start() catch {
                     std.debug.print("Timer unavailable\n", .{});
@@ -155,14 +145,12 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
                 std.debug.print("First message received, timing...\n", .{});
             }
 
-            // Count messages and bytes, then deinit each message
             for (batch_buf[0..batch_count]) |*msg| {
                 msg_count += 1;
                 total_bytes += msg.data.len;
                 msg.deinit(allocator);
             }
 
-            // Progress every 10%
             if (config.progress and progress_interval > 0) {
                 const current_progress = msg_count / progress_interval;
                 if (current_progress > last_progress) {
@@ -178,7 +166,6 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
             continue;
         }
 
-        // Slow path: wait with timeout when queue empty
         const msg = sub.nextWithTimeout(allocator, 5000) catch |err| {
             std.debug.print("Receive error: {}\n", .{err});
             return err;
@@ -188,7 +175,6 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         };
         defer msg.deinit(allocator);
 
-        // Start timer on first message
         if (timer == null) {
             timer = std.time.Timer.start() catch {
                 std.debug.print("Timer unavailable\n", .{});
@@ -200,7 +186,6 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         msg_count += 1;
         total_bytes += msg.data.len;
 
-        // Progress every 10%
         if (config.progress and progress_interval > 0) {
             const current_progress = msg_count / progress_interval;
             if (current_progress > last_progress) {
@@ -215,7 +200,6 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         }
     }
 
-    // Stop timing and print stats
     if (timer) |*t| {
         const elapsed_ns = t.read();
         const stats = bench.Stats{
@@ -225,7 +209,6 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         };
         stats.print("subscriber");
 
-        // Report dropped messages if any
         const dropped = sub.getDroppedCount();
         const alloc_failed = sub.getAllocFailedCount();
         if (dropped > 0 or alloc_failed > 0) {

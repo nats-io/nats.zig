@@ -1,6 +1,4 @@
-//! Connection Tests for NATS Async Client
-//!
-//! Tests for async connection handling.
+//! Connection Tests for NATS Client
 
 const std = @import("std");
 const utils = @import("../test_utils.zig");
@@ -14,7 +12,7 @@ const auth_port = utils.auth_port;
 const test_token = utils.test_token;
 const ServerManager = utils.ServerManager;
 
-pub fn testAsyncConnectionRefused(allocator: std.mem.Allocator) void {
+pub fn testConnectionRefused(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
@@ -27,13 +25,13 @@ pub fn testAsyncConnectionRefused(allocator: std.mem.Allocator) void {
 
     if (result) |client| {
         client.deinit(allocator);
-        reportResult("async_connection_refused", false, "expected error");
+        reportResult("connection_refused", false, "expected error");
     } else |_| {
-        reportResult("async_connection_refused", true, "");
+        reportResult("connection_refused", true, "");
     }
 }
 
-pub fn testAsyncConsecutiveConnections(allocator: std.mem.Allocator) void {
+pub fn testConsecutiveConnections(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
@@ -41,41 +39,59 @@ pub fn testAsyncConsecutiveConnections(allocator: std.mem.Allocator) void {
     defer io.deinit();
 
     for (0..3) |i| {
-        const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+        const client = nats.Client.connect(
+            allocator,
+            io.io(),
+            url,
+            .{ .reconnect = false },
+        ) catch {
             var buf: [32]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "connect {d} failed", .{i}) catch "e";
-            reportResult("async_consecutive_connections", false, msg);
+            const msg = std.fmt.bufPrint(
+                &buf,
+                "connect {d} failed",
+                .{i},
+            ) catch "e";
+            reportResult("consecutive_connections", false, msg);
             return;
         };
         client.deinit(allocator);
     }
 
-    reportResult("async_consecutive_connections", true, "");
+    reportResult("consecutive_connections", true, "");
 }
 
-pub fn testAsyncIsConnectedState(allocator: std.mem.Allocator) void {
+pub fn testIsConnectedState(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
-        reportResult("async_is_connected_state", false, "connect failed");
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("is_connected_state", false, "connect failed");
         return;
     };
 
     if (!client.isConnected()) {
         client.deinit(allocator);
-        reportResult("async_is_connected_state", false, "not connected initially");
+        reportResult(
+            "is_connected_state",
+            false,
+            "not connected initially",
+        );
         return;
     }
 
     client.deinit(allocator);
-    reportResult("async_is_connected_state", true, "");
+    reportResult("is_connected_state", true, "");
 }
 
-pub fn testAsyncReconnection(
+pub fn testReconnection(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
 ) void {
@@ -85,14 +101,19 @@ pub fn testAsyncReconnection(
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
-        reportResult("async_reconnection", false, "initial connect failed");
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("reconnection", false, "initial connect failed");
         return;
     };
     defer client.deinit(allocator);
 
     if (!client.isConnected()) {
-        reportResult("async_reconnection", false, "not connected initially");
+        reportResult("reconnection", false, "not connected initially");
         return;
     }
 
@@ -100,15 +121,15 @@ pub fn testAsyncReconnection(
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
-        reportResult("async_reconnection", false, "server restart failed");
+        reportResult("reconnection", false, "server restart failed");
         return;
     };
 
-    reportResult("async_reconnection", true, "");
+    reportResult("reconnection", true, "");
 }
 
 /// Test: New connection after server restart
-pub fn testAsyncServerRestartNewConnection(
+pub fn testServerRestartNewConnection(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
 ) void {
@@ -118,14 +139,19 @@ pub fn testAsyncServerRestartNewConnection(
     var io1: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io1.deinit();
 
-    const client1 = nats.Client.connect(allocator, io1.io(), url, .{ .reconnect = false }) catch {
-        reportResult("async_server_restart", false, "initial connect failed");
+    const client1 = nats.Client.connect(
+        allocator,
+        io1.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("server_restart", false, "initial connect failed");
         return;
     };
 
     if (!client1.isConnected()) {
         client1.deinit(allocator);
-        reportResult("async_server_restart", false, "not connected");
+        reportResult("server_restart", false, "not connected");
         return;
     }
 
@@ -134,24 +160,37 @@ pub fn testAsyncServerRestartNewConnection(
     manager.stopServer(0, io1.io());
     io1.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
-    _ = manager.startServer(allocator, io1.io(), .{ .port = test_port }) catch {
-        reportResult("async_server_restart", false, "restart failed");
+    _ = manager.startServer(
+        allocator,
+        io1.io(),
+        .{ .port = test_port },
+    ) catch {
+        reportResult("server_restart", false, "restart failed");
         return;
     };
 
     var io2: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io2.deinit();
 
-    const client2 = nats.Client.connect(allocator, io2.io(), url, .{ .reconnect = false }) catch {
-        reportResult("async_server_restart", false, "reconnect failed");
+    const client2 = nats.Client.connect(
+        allocator,
+        io2.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("server_restart", false, "reconnect failed");
         return;
     };
     defer client2.deinit(allocator);
 
     if (client2.isConnected()) {
-        reportResult("async_server_restart", true, "");
+        reportResult("server_restart", true, "");
     } else {
-        reportResult("async_server_restart", false, "not connected after restart");
+        reportResult(
+            "server_restart",
+            false,
+            "not connected after restart",
+        );
     }
 }
 
@@ -162,7 +201,12 @@ pub fn testConnectionStateAfterOps(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("state_after_ops", false, "connect failed");
         return;
     };
@@ -211,7 +255,12 @@ pub fn testRapidConnectDisconnect(allocator: std.mem.Allocator) void {
         var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
         defer io.deinit();
 
-        const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+        const client = nats.Client.connect(
+            allocator,
+            io.io(),
+            url,
+            .{ .reconnect = false },
+        ) catch {
             continue;
         };
 
@@ -226,7 +275,11 @@ pub fn testRapidConnectDisconnect(allocator: std.mem.Allocator) void {
         reportResult("rapid_connect_disconnect", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "{d}/50 cycles", .{success}) catch "e";
+        const detail = std.fmt.bufPrint(
+            &buf,
+            "{d}/50 cycles",
+            .{success},
+        ) catch "e";
         reportResult("rapid_connect_disconnect", false, detail);
     }
 }
@@ -276,7 +329,12 @@ pub fn testConnectionDrain(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("connection_drain", false, "connect failed");
         return;
     };
@@ -319,7 +377,12 @@ pub fn testInvalidUrlHandling(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const empty_result = nats.Client.connect(allocator, io.io(), "", .{ .reconnect = false });
+    const empty_result = nats.Client.connect(
+        allocator,
+        io.io(),
+        "",
+        .{ .reconnect = false },
+    );
     if (empty_result) |client| {
         client.deinit(allocator);
         reportResult("invalid_url_handling", false, "empty should fail");
@@ -349,7 +412,12 @@ pub fn testConnectionStateTransitions(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("connection_state", false, "connect failed");
         return;
     };
@@ -387,14 +455,20 @@ pub fn testManyClientSubscriptions(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("many_client_subs", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
     const NUM_SUBS = 100;
-    var subs: [NUM_SUBS]?*nats.Subscription = [_]?*nats.Subscription{null} ** NUM_SUBS;
+    var subs: [NUM_SUBS]?*nats.Subscription =
+        [_]?*nats.Subscription{null} ** NUM_SUBS;
     var created: usize = 0;
 
     defer for (&subs) |*s| {
@@ -417,7 +491,11 @@ pub fn testManyClientSubscriptions(allocator: std.mem.Allocator) void {
 
     if (created != NUM_SUBS) {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}/100", .{created}) catch "e";
+        const detail = std.fmt.bufPrint(
+            &buf,
+            "got {d}/100",
+            .{created},
+        ) catch "e";
         reportResult("many_client_subs", false, detail);
         return;
     }
@@ -429,11 +507,10 @@ pub fn testManyClientSubscriptions(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Runs all async connection tests.
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
-    testAsyncConnectionRefused(allocator);
-    testAsyncConsecutiveConnections(allocator);
-    testAsyncIsConnectedState(allocator);
+    testConnectionRefused(allocator);
+    testConsecutiveConnections(allocator);
+    testIsConnectedState(allocator);
     testConnectionStateAfterOps(allocator);
     testRapidConnectDisconnect(allocator);
     testConnectionOptions(allocator);
@@ -441,6 +518,6 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     testInvalidUrlHandling(allocator);
     testConnectionStateTransitions(allocator);
     testManyClientSubscriptions(allocator);
-    testAsyncReconnection(allocator, manager);
-    testAsyncServerRestartNewConnection(allocator, manager);
+    testReconnection(allocator, manager);
+    testServerRestartNewConnection(allocator, manager);
 }

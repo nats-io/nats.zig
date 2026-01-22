@@ -35,7 +35,6 @@ pub const SidMap = struct {
         assert(isPowerOfTwo(keys.len));
         assert(keys.len <= std.math.maxInt(u32));
 
-        // Initialize all slots to EMPTY
         @memset(vals, EMPTY);
 
         return .{
@@ -79,7 +78,6 @@ pub const SidMap = struct {
         assert(slot <= MAX_SLOT);
         assert(self.cap > 0);
 
-        // Check load factor (max 70%)
         const max_load = self.cap * 7 / 10;
         if (self.len >= max_load) {
             return error.MapFull;
@@ -94,7 +92,6 @@ pub const SidMap = struct {
             const v = self.vals[idx];
 
             if (v == EMPTY) {
-                // Use tombstone slot if found
                 const insert_idx = tomb_idx orelse idx;
                 self.keys[insert_idx] = sid;
                 self.vals[insert_idx] = slot;
@@ -103,12 +100,10 @@ pub const SidMap = struct {
             }
 
             if (v == TOMB) {
-                // Remember first tombstone for reuse
                 if (tomb_idx == null) {
                     tomb_idx = idx;
                 }
             } else if (self.keys[idx] == sid) {
-                // Update existing
                 self.vals[idx] = slot;
                 return;
             }
@@ -116,7 +111,6 @@ pub const SidMap = struct {
             idx = (idx + 1) & mask;
         }
 
-        // Should not reach here if load factor is respected
         unreachable;
     }
 

@@ -11,10 +11,8 @@ const formatUrl = utils.formatUrl;
 const test_port = utils.test_port;
 const ServerManager = utils.ServerManager;
 
-// Additional test ports for multi-server tests
 const reconnect_port: u16 = 14225;
 
-// Ports for multi-server failover tests (14230-14239)
 const failover_port_1: u16 = 14230;
 const failover_port_2: u16 = 14231;
 const failover_port_3: u16 = 14232;
@@ -25,7 +23,6 @@ const failover_port_7: u16 = 14236;
 const failover_port_8: u16 = 14237;
 const failover_port_9: u16 = 14238;
 
-/// Runs all reconnection tests.
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     testAutoReconnectBasic(allocator, manager);
     testSubscriptionRestored(allocator, manager);
@@ -42,34 +39,30 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     testReconnectBackoff(allocator, manager);
     testHealthCheckReconnect(allocator, manager);
 
-    // Group A: Multi-server failover tests
     testFailoverToSecondServer(allocator, manager);
     testFailoverRoundRobin(allocator, manager);
     testAllServersDownThenRecover(allocator, manager);
     testServerCooldownRespected(allocator, manager);
 
-    // Group B: Parallel subscription scenarios
     testMultipleSubsActivelyReceiving(allocator, manager);
     testHighVolumePendingBuffer(allocator, manager);
     testQueueGroupMultiClientReconnect(allocator, manager);
 
-    // Group C: Edge cases
     testRapidServerRestarts(allocator, manager);
     testMultipleReconnectionCycles(allocator, manager);
     testLongDisconnectionRecovery(allocator, manager);
 }
 
-// Basic Reconnection Tests
-
-/// Test: Basic automatic reconnection after server restart.
-fn testAutoReconnectBasic(allocator: std.mem.Allocator, manager: *ServerManager) void {
+fn testAutoReconnectBasic(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Connect with reconnect ENABLED
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .reconnect = true,
         .max_reconnect_attempts = 10,
@@ -86,20 +79,16 @@ fn testAutoReconnectBasic(allocator: std.mem.Allocator, manager: *ServerManager)
         return;
     }
 
-    // Stop server
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
-    // Restart server
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("reconnect_basic", false, "server restart failed");
         return;
     };
 
-    // Give client time to reconnect automatically
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Try an operation to trigger reconnect
     client.publish("test.reconnect", "ping") catch {
         reportResult("reconnect_basic", false, "publish after restart failed");
         return;
@@ -112,8 +101,10 @@ fn testAutoReconnectBasic(allocator: std.mem.Allocator, manager: *ServerManager)
     }
 }
 
-/// Test: Subscription is restored after reconnection.
-fn testSubscriptionRestored(allocator: std.mem.Allocator, manager: *ServerManager) void {
+fn testSubscriptionRestored(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
@@ -130,19 +121,23 @@ fn testSubscriptionRestored(allocator: std.mem.Allocator, manager: *ServerManage
     };
     defer client.deinit(allocator);
 
-    // Create subscription BEFORE server restart
     var sub = client.subscribe(allocator, "test.restore.>") catch {
         reportResult("reconnect_sub_restored", false, "subscribe failed");
         return;
     };
     defer sub.deinit(allocator);
 
-    // Stop and restart server
-    std.debug.print("\n[TEST reconnect_sub_restored] Stopping server...\n", .{});
+    std.debug.print(
+        "\n[TEST reconnect_sub_restored] Stopping server...\n",
+        .{},
+    );
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
-    std.debug.print("[TEST reconnect_sub_restored] Restarting server...\n", .{});
+    std.debug.print(
+        "[TEST reconnect_sub_restored] Restarting server...\n",
+        .{},
+    );
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("reconnect_sub_restored", false, "restart failed");
         return;
@@ -151,7 +146,6 @@ fn testSubscriptionRestored(allocator: std.mem.Allocator, manager: *ServerManage
     std.debug.print("[TEST reconnect_sub_restored] Sleeping 500ms...\n", .{});
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Publish message AFTER reconnect - should be received if sub was restored
     std.debug.print("[TEST reconnect_sub_restored] Publishing...\n", .{});
     client.publish("test.restore.msg", "after-reconnect") catch {
         reportResult("reconnect_sub_restored", false, "publish failed");
@@ -159,11 +153,16 @@ fn testSubscriptionRestored(allocator: std.mem.Allocator, manager: *ServerManage
     };
     std.debug.print("[TEST reconnect_sub_restored] Flushing...\n", .{});
     client.flush(allocator) catch |e| {
-        std.debug.print("[TEST reconnect_sub_restored] Flush error: {s}\n", .{@errorName(e)});
+        std.debug.print(
+            "[TEST reconnect_sub_restored] Flush error: {s}\n",
+            .{@errorName(e)},
+        );
     };
-    std.debug.print("[TEST reconnect_sub_restored] Flush done, checking message...\n", .{});
+    std.debug.print(
+        "[TEST reconnect_sub_restored] Flush done, checking message...\n",
+        .{},
+    );
 
-    // Try to receive the message with timeout (blocking)
     if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
         defer msg.deinit(allocator);
         if (std.mem.eql(u8, msg.data, "after-reconnect")) {
@@ -176,7 +175,6 @@ fn testSubscriptionRestored(allocator: std.mem.Allocator, manager: *ServerManage
     }
 }
 
-/// Test: Multiple subscriptions are all restored after reconnection.
 fn testMultipleSubscriptionsRestored(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -197,7 +195,6 @@ fn testMultipleSubscriptionsRestored(
     };
     defer client.deinit(allocator);
 
-    // Create multiple subscriptions
     var sub1 = client.subscribe(allocator, "multi.sub.one") catch {
         reportResult("reconnect_multi_sub", false, "sub1 failed");
         return;
@@ -216,7 +213,6 @@ fn testMultipleSubscriptionsRestored(
     };
     defer sub3.deinit(allocator);
 
-    // Stop and restart server
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
@@ -227,7 +223,6 @@ fn testMultipleSubscriptionsRestored(
 
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Publish to all subjects
     client.publish("multi.sub.one", "msg1") catch {};
     client.publish("multi.sub.two", "msg2") catch {};
     client.publish("multi.sub.three", "msg3") catch {};
@@ -263,10 +258,10 @@ fn testMultipleSubscriptionsRestored(
     }
 }
 
-// Reconnection Limit Tests
-
-/// Test: Reconnection stops after max attempts exhausted.
-fn testReconnectMaxAttempts(allocator: std.mem.Allocator, manager: *ServerManager) void {
+fn testReconnectMaxAttempts(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
@@ -275,37 +270,35 @@ fn testReconnectMaxAttempts(allocator: std.mem.Allocator, manager: *ServerManage
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .reconnect = true,
-        .max_reconnect_attempts = 2, // Only 2 attempts
+        .max_reconnect_attempts = 2,
         .reconnect_wait_ms = 50,
         .reconnect_wait_max_ms = 100,
-        .ping_interval_ms = 100, // Fast health check to detect killed server
-        .max_pings_outstanding = 1, // Detect stale quickly
+        .ping_interval_ms = 100,
+        .max_pings_outstanding = 1,
     }) catch {
         reportResult("reconnect_max_attempts", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
-    // Stop ALL servers - not just index 0 (startServer appends, so index grows)
     std.debug.print("[TEST max_attempts] Stopping server...\n", .{});
     manager.stopAll(io.io());
 
-    // Wait for reconnect attempts to exhaust (2 attempts * ~100ms each)
     std.debug.print("[TEST max_attempts] Sleeping 1000ms...\n", .{});
     io.io().sleep(.fromMilliseconds(1000), .awake) catch {};
 
     std.debug.print("[TEST max_attempts] Checking state...\n", .{});
-    // Check BEFORE restarting server - client should be disconnected
     const is_disconnected = !client.isConnected();
-    std.debug.print("[TEST max_attempts] isDisconnected={}\n", .{is_disconnected});
+    std.debug.print(
+        "[TEST max_attempts] isDisconnected={}\n",
+        .{is_disconnected},
+    );
 
-    // Start server again for other tests
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("reconnect_max_attempts", false, "restart failed");
         return;
     };
 
-    // Client should have been in closed state after exhausting attempts
     if (is_disconnected) {
         reportResult("reconnect_max_attempts", true, "");
     } else {
@@ -313,8 +306,10 @@ fn testReconnectMaxAttempts(allocator: std.mem.Allocator, manager: *ServerManage
     }
 }
 
-/// Test: Reconnection disabled - client stays disconnected.
-fn testReconnectDisabled(allocator: std.mem.Allocator, manager: *ServerManager) void {
+fn testReconnectDisabled(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
@@ -322,24 +317,20 @@ fn testReconnectDisabled(allocator: std.mem.Allocator, manager: *ServerManager) 
     defer io.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
-        .reconnect = false, // DISABLED
-        .ping_interval_ms = 100, // Fast health check to detect killed server
-        .max_pings_outstanding = 1, // Detect stale quickly
+        .reconnect = false,
+        .ping_interval_ms = 100,
+        .max_pings_outstanding = 1,
     }) catch {
         reportResult("reconnect_disabled", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
-    // Stop ALL servers (startServer appends, so index grows)
     manager.stopAll(io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
-    // Try to flush - this triggers I/O which should fail because socket is dead
-    // and reconnect is disabled
     const flush_result = client.flush(allocator);
 
-    // Restart server for other tests
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("reconnect_disabled", false, "restart failed");
         return;
@@ -347,7 +338,6 @@ fn testReconnectDisabled(allocator: std.mem.Allocator, manager: *ServerManager) 
 
     io.io().sleep(.fromMilliseconds(300), .awake) catch {};
 
-    // Flush should have failed since reconnect is disabled
     if (flush_result) |_| {
         reportResult("reconnect_disabled", false, "flush should fail");
     } else |_| {
@@ -355,10 +345,10 @@ fn testReconnectDisabled(allocator: std.mem.Allocator, manager: *ServerManager) 
     }
 }
 
-// Pending Buffer Tests
-
-/// Test: Pending buffer flushes published messages after reconnect.
-fn testPendingBufferFlush(allocator: std.mem.Allocator, manager: *ServerManager) void {
+fn testPendingBufferFlush(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
@@ -369,38 +359,31 @@ fn testPendingBufferFlush(allocator: std.mem.Allocator, manager: *ServerManager)
         .reconnect = true,
         .max_reconnect_attempts = 10,
         .reconnect_wait_ms = 100,
-        .pending_buffer_size = 1024 * 1024, // 1MB buffer
+        .pending_buffer_size = 1024 * 1024,
     }) catch {
         reportResult("pending_buffer_flush", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
-    // Subscribe first
     var sub = client.subscribe(allocator, "pending.test") catch {
         reportResult("pending_buffer_flush", false, "subscribe failed");
         return;
     };
     defer sub.deinit(allocator);
 
-    // Stop server - client enters reconnecting state
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
-    // Publish while disconnected - should buffer
-    // May fail if not in reconnecting state yet
     client.publish("pending.test", "buffered-message") catch {};
 
-    // Restart server
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("pending_buffer_flush", false, "restart failed");
         return;
     };
 
-    // Wait for reconnect and buffer flush
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Try to receive buffered message
     if (sub.tryNext()) |msg| {
         defer msg.deinit(allocator);
         if (std.mem.eql(u8, msg.data, "buffered-message")) {
@@ -409,12 +392,10 @@ fn testPendingBufferFlush(allocator: std.mem.Allocator, manager: *ServerManager)
             reportResult("pending_buffer_flush", false, "wrong data");
         }
     } else {
-        // Buffer may not have been used depending on timing
         reportResult("pending_buffer_flush", true, "");
     }
 }
 
-/// Test: Publish during reconnect is buffered and delivered.
 fn testPublishDuringReconnect(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -442,10 +423,8 @@ fn testPublishDuringReconnect(
     };
     defer sub.deinit(allocator);
 
-    // Stop server
     manager.stopServer(0, io.io());
 
-    // Immediately try to publish multiple messages
     var published: u8 = 0;
     var i: u8 = 0;
     while (i < 5) : (i += 1) {
@@ -456,7 +435,6 @@ fn testPublishDuringReconnect(
         } else |_| {}
     }
 
-    // Restart server
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("publish_during_reconnect", false, "restart failed");
         return;
@@ -464,7 +442,6 @@ fn testPublishDuringReconnect(
 
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Count received messages
     var received: u8 = 0;
     while (received < 10) {
         if (sub.tryNext()) |msg| {
@@ -475,7 +452,6 @@ fn testPublishDuringReconnect(
         }
     }
 
-    // Success if some messages published and received
     if (published > 0 or received > 0) {
         reportResult("publish_during_reconnect", true, "");
     } else {
@@ -483,9 +459,6 @@ fn testPublishDuringReconnect(
     }
 }
 
-// Stats Tests
-
-/// Test: Reconnect counter increments on reconnection.
 fn testReconnectStatsIncrement(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -498,10 +471,10 @@ fn testReconnectStatsIncrement(
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .reconnect = true,
-        .max_reconnect_attempts = 30, // Enough time for server restart (~1.5s)
+        .max_reconnect_attempts = 30,
         .reconnect_wait_ms = 100,
-        .ping_interval_ms = 100, // Fast health check to detect killed server
-        .max_pings_outstanding = 1, // Detect stale quickly
+        .ping_interval_ms = 100,
+        .max_pings_outstanding = 1,
     }) catch {
         reportResult("reconnect_stats", false, "connect failed");
         return;
@@ -510,7 +483,6 @@ fn testReconnectStatsIncrement(
 
     const initial_reconnects = client.getStats().reconnects;
 
-    // Stop ALL servers (startServer appends, so index grows)
     manager.stopAll(io.io());
 
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
@@ -518,12 +490,10 @@ fn testReconnectStatsIncrement(
         return;
     };
 
-    // Trigger reconnect by doing an operation
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
     client.publish("stats.test", "trigger") catch {};
     client.flush(allocator) catch {};
 
-    // Allow time for stats to be updated after reconnect
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
     const final_reconnects = client.getStats().reconnects;
@@ -535,9 +505,6 @@ fn testReconnectStatsIncrement(
     }
 }
 
-// Queue Group Tests
-
-/// Test: Queue group subscription restored after reconnect.
 fn testReconnectWithQueueGroup(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -558,14 +525,12 @@ fn testReconnectWithQueueGroup(
     };
     defer client.deinit(allocator);
 
-    // Subscribe with queue group
     var sub = client.subscribeQueue(allocator, "queue.test", "workers") catch {
         reportResult("reconnect_queue_group", false, "subscribe failed");
         return;
     };
     defer sub.deinit(allocator);
 
-    // Stop and restart
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
@@ -576,7 +541,6 @@ fn testReconnectWithQueueGroup(
 
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Publish and verify queue group sub works
     client.publish("queue.test", "queue-message") catch {
         reportResult("reconnect_queue_group", false, "publish failed");
         return;
@@ -591,10 +555,10 @@ fn testReconnectWithQueueGroup(
     }
 }
 
-// Multi-Client Tests
-
-/// Test: Multiple clients can reconnect after server restart.
-fn testMultiClientReconnect(allocator: std.mem.Allocator, manager: *ServerManager) void {
+fn testMultiClientReconnect(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
@@ -623,7 +587,6 @@ fn testMultiClientReconnect(allocator: std.mem.Allocator, manager: *ServerManage
     };
     defer client2.deinit(allocator);
 
-    // Stop and restart
     manager.stopServer(0, io1.io());
     io1.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
@@ -634,7 +597,6 @@ fn testMultiClientReconnect(allocator: std.mem.Allocator, manager: *ServerManage
 
     io1.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Both clients should be able to publish
     var failed = false;
     client1.publish("multi.test", "from-client1") catch {
         failed = true;
@@ -650,10 +612,10 @@ fn testMultiClientReconnect(allocator: std.mem.Allocator, manager: *ServerManage
     }
 }
 
-// SID Preservation Tests
-
-/// Test: Subscription SID is preserved after reconnection.
-fn testReconnectPreservesSid(allocator: std.mem.Allocator, manager: *ServerManager) void {
+fn testReconnectPreservesSid(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
@@ -678,7 +640,6 @@ fn testReconnectPreservesSid(allocator: std.mem.Allocator, manager: *ServerManag
 
     const original_sid = sub.sid;
 
-    // Stop and restart
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
@@ -689,7 +650,6 @@ fn testReconnectPreservesSid(allocator: std.mem.Allocator, manager: *ServerManag
 
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // SID should remain the same
     if (sub.sid == original_sid) {
         reportResult("reconnect_preserves_sid", true, "");
     } else {
@@ -697,10 +657,10 @@ fn testReconnectPreservesSid(allocator: std.mem.Allocator, manager: *ServerManag
     }
 }
 
-// Wildcard Subscription Tests
-
-/// Test: Wildcard subscription restored after reconnection.
-fn testReconnectWildcardSub(allocator: std.mem.Allocator, manager: *ServerManager) void {
+fn testReconnectWildcardSub(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
@@ -717,14 +677,12 @@ fn testReconnectWildcardSub(allocator: std.mem.Allocator, manager: *ServerManage
     };
     defer client.deinit(allocator);
 
-    // Subscribe with wildcard
     var sub = client.subscribe(allocator, "wild.*.test.>") catch {
         reportResult("reconnect_wildcard", false, "subscribe failed");
         return;
     };
     defer sub.deinit(allocator);
 
-    // Stop and restart
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
@@ -735,7 +693,6 @@ fn testReconnectWildcardSub(allocator: std.mem.Allocator, manager: *ServerManage
 
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Publish matching subject
     client.publish("wild.card.test.subject", "wildcard-msg") catch {
         reportResult("reconnect_wildcard", false, "publish failed");
         return;
@@ -750,10 +707,10 @@ fn testReconnectWildcardSub(allocator: std.mem.Allocator, manager: *ServerManage
     }
 }
 
-// Backoff Behavior Tests
-
-/// Test: Reconnect uses exponential backoff.
-fn testReconnectBackoff(allocator: std.mem.Allocator, manager: *ServerManager) void {
+fn testReconnectBackoff(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
@@ -765,45 +722,40 @@ fn testReconnectBackoff(allocator: std.mem.Allocator, manager: *ServerManager) v
         .max_reconnect_attempts = 5,
         .reconnect_wait_ms = 100,
         .reconnect_wait_max_ms = 500,
-        .reconnect_jitter_percent = 0, // No jitter for predictable timing
+        .reconnect_jitter_percent = 0,
     }) catch {
         reportResult("reconnect_backoff", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
-    // Stop server - will trigger reconnect attempts
     manager.stopServer(0, io.io());
 
-    // Wait long enough for some backoff iterations
     io.io().sleep(.fromMilliseconds(2000), .awake) catch {};
 
-    // Restart server
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("reconnect_backoff", false, "restart failed");
         return;
     };
 
-    // Test passes - backoff didn't cause infinite loop
     reportResult("reconnect_backoff", true, "");
 }
 
-// Health Check Tests
-
-/// Test: Health check configuration is respected.
-fn testHealthCheckReconnect(allocator: std.mem.Allocator, manager: *ServerManager) void {
+fn testHealthCheckReconnect(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Connect with aggressive health check settings
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .reconnect = true,
         .max_reconnect_attempts = 10,
         .reconnect_wait_ms = 100,
-        .ping_interval_ms = 500, // Fast ping
+        .ping_interval_ms = 500,
         .max_pings_outstanding = 2,
     }) catch {
         reportResult("health_check_reconnect", false, "connect failed");
@@ -811,13 +763,11 @@ fn testHealthCheckReconnect(allocator: std.mem.Allocator, manager: *ServerManage
     };
     defer client.deinit(allocator);
 
-    // Verify client is connected with health check enabled
     if (!client.isConnected()) {
         reportResult("health_check_reconnect", false, "not connected");
         return;
     }
 
-    // Stop and restart quickly
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
@@ -828,7 +778,6 @@ fn testHealthCheckReconnect(allocator: std.mem.Allocator, manager: *ServerManage
 
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Client should still be functional
     client.publish("health.test", "ping") catch {
         reportResult("health_check_reconnect", false, "publish failed");
         return;
@@ -837,9 +786,6 @@ fn testHealthCheckReconnect(allocator: std.mem.Allocator, manager: *ServerManage
     reportResult("health_check_reconnect", true, "");
 }
 
-// Group A: Multi-Server Failover Tests
-
-/// Test: Failover to second server when primary dies.
 fn testFailoverToSecondServer(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -852,10 +798,8 @@ fn testFailoverToSecondServer(
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Clean slate - stop any leftover servers
     manager.stopAll(io.io());
 
-    // Start both servers
     const server1 = manager.startServer(allocator, io.io(), .{
         .port = failover_port_1,
     }) catch {
@@ -872,7 +816,6 @@ fn testFailoverToSecondServer(
     };
     defer server2.stop(io.io());
 
-    // Connect to server1
     const client = nats.Client.connect(allocator, io.io(), url1, .{
         .reconnect = true,
         .max_reconnect_attempts = 10,
@@ -886,14 +829,12 @@ fn testFailoverToSecondServer(
     };
     defer client.deinit(allocator);
 
-    // Add server2 to pool for failover
     client.server_pool.addServer(url2) catch {
         server1.stop(io.io());
         reportResult("failover_to_second", false, "add server failed");
         return;
     };
 
-    // Create subscription
     var sub = client.subscribe(allocator, "failover.test") catch {
         server1.stop(io.io());
         reportResult("failover_to_second", false, "subscribe failed");
@@ -901,7 +842,6 @@ fn testFailoverToSecondServer(
     };
     defer sub.deinit(allocator);
 
-    // Verify subscription works before failover
     client.publish("failover.test", "before") catch {};
     client.flush(allocator) catch {};
 
@@ -913,11 +853,9 @@ fn testFailoverToSecondServer(
         return;
     }
 
-    // Kill server1 (keep server2 running)
     server1.stop(io.io());
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Verify client reconnected to server2 and subscription works
     client.publish("failover.test", "after") catch {
         reportResult("failover_to_second", false, "publish after failed");
         return;
@@ -932,7 +870,6 @@ fn testFailoverToSecondServer(
     }
 }
 
-/// Test: Round-robin failover across multiple servers.
 fn testFailoverRoundRobin(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -947,10 +884,8 @@ fn testFailoverRoundRobin(
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Clean slate - stop any leftover servers
     manager.stopAll(io.io());
 
-    // Start 3 servers
     const server1 = manager.startServer(allocator, io.io(), .{
         .port = failover_port_3,
     }) catch {
@@ -976,7 +911,6 @@ fn testFailoverRoundRobin(
     };
     defer server3.stop(io.io());
 
-    // Connect to server1
     const client = nats.Client.connect(allocator, io.io(), url1, .{
         .reconnect = true,
         .max_reconnect_attempts = 5,
@@ -991,15 +925,12 @@ fn testFailoverRoundRobin(
     };
     defer client.deinit(allocator);
 
-    // Add server2 and server3 to pool
     client.server_pool.addServer(url2) catch {};
     client.server_pool.addServer(url3) catch {};
 
-    // Kill server1 → should reconnect
     server1.stop(io.io());
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Verify still connected
     client.publish("roundrobin.test", "msg1") catch {
         server2.stop(io.io());
         reportResult("failover_round_robin", false, "publish 1 failed");
@@ -1007,11 +938,9 @@ fn testFailoverRoundRobin(
     };
     client.flush(allocator) catch {};
 
-    // Kill server2 → should reconnect to server3
     server2.stop(io.io());
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Verify still connected
     client.publish("roundrobin.test", "msg2") catch {
         reportResult("failover_round_robin", false, "publish 2 failed");
         return;
@@ -1021,7 +950,6 @@ fn testFailoverRoundRobin(
     reportResult("failover_round_robin", true, "");
 }
 
-/// Test: All servers down, then one recovers.
 fn testAllServersDownThenRecover(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -1034,10 +962,8 @@ fn testAllServersDownThenRecover(
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Clean slate - stop any leftover servers
     manager.stopAll(io.io());
 
-    // Start server1
     const server1 = manager.startServer(allocator, io.io(), .{
         .port = failover_port_6,
     }) catch {
@@ -1045,7 +971,6 @@ fn testAllServersDownThenRecover(
         return;
     };
 
-    // Connect to server1
     const client = nats.Client.connect(allocator, io.io(), url1, .{
         .reconnect = true,
         .max_reconnect_attempts = 20,
@@ -1059,10 +984,8 @@ fn testAllServersDownThenRecover(
     };
     defer client.deinit(allocator);
 
-    // Add server2 to pool (not started yet)
     client.server_pool.addServer(url2) catch {};
 
-    // Create subscription
     var sub = client.subscribe(allocator, "recover.test") catch {
         server1.stop(io.io());
         reportResult("all_servers_down_recover", false, "subscribe failed");
@@ -1070,13 +993,10 @@ fn testAllServersDownThenRecover(
     };
     defer sub.deinit(allocator);
 
-    // Kill server1 (no servers running now)
     server1.stop(io.io());
 
-    // Wait a bit (client keeps trying)
     io.io().sleep(.fromMilliseconds(800), .awake) catch {};
 
-    // Now start server2
     const server2 = manager.startServer(allocator, io.io(), .{
         .port = failover_port_7,
     }) catch {
@@ -1085,10 +1005,8 @@ fn testAllServersDownThenRecover(
     };
     defer server2.stop(io.io());
 
-    // Give client time to reconnect
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Verify subscription works
     client.publish("recover.test", "recovered") catch {
         reportResult("all_servers_down_recover", false, "publish failed");
         return;
@@ -1103,7 +1021,6 @@ fn testAllServersDownThenRecover(
     }
 }
 
-/// Test: Server cooldown is respected during failover.
 fn testServerCooldownRespected(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -1116,10 +1033,8 @@ fn testServerCooldownRespected(
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Clean slate - stop any leftover servers
     manager.stopAll(io.io());
 
-    // Only start server2 (server1 never starts)
     const server2 = manager.startServer(allocator, io.io(), .{
         .port = failover_port_9,
     }) catch {
@@ -1128,9 +1043,6 @@ fn testServerCooldownRespected(
     };
     defer server2.stop(io.io());
 
-    // Try to connect to server1 (will fail), but server2 in pool.
-    // Since server1 never started, different approach needed:
-    // Connect to server2 first, then simulate cooldown behavior
     const client = nats.Client.connect(allocator, io.io(), url2, .{
         .reconnect = true,
         .max_reconnect_attempts = 10,
@@ -1141,17 +1053,14 @@ fn testServerCooldownRespected(
     };
     defer client.deinit(allocator);
 
-    // Add server1 (non-existent) to pool
     client.server_pool.addServer(url1) catch {};
 
-    // Verify connected and operational
     client.publish("cooldown.test", "msg") catch {
         reportResult("server_cooldown", false, "publish failed");
         return;
     };
     client.flush(allocator) catch {};
 
-    // Check pool has 2 servers
     if (client.server_pool.serverCount() == 2) {
         reportResult("server_cooldown", true, "");
     } else {
@@ -1159,9 +1068,6 @@ fn testServerCooldownRespected(
     }
 }
 
-// Group B: Parallel Subscription Scenarios
-
-/// Test: Multiple subscriptions actively receiving survive reconnect.
 fn testMultipleSubsActivelyReceiving(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -1172,7 +1078,6 @@ fn testMultipleSubsActivelyReceiving(
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Clean slate and start fresh server
     manager.stopAll(io.io());
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("multi_subs_receiving", false, "server start failed");
@@ -1189,7 +1094,6 @@ fn testMultipleSubsActivelyReceiving(
     };
     defer client.deinit(allocator);
 
-    // Create 5 subscriptions on different subjects
     var sub1 = client.subscribe(allocator, "active.sub.one") catch {
         reportResult("multi_subs_receiving", false, "sub1 failed");
         return;
@@ -1220,7 +1124,6 @@ fn testMultipleSubsActivelyReceiving(
     };
     defer sub5.deinit(allocator);
 
-    // Publish to all subjects and verify receiving before restart
     client.publish("active.sub.one", "pre1") catch {};
     client.publish("active.sub.two", "pre2") catch {};
     client.publish("active.sub.three", "pre3") catch {};
@@ -1261,7 +1164,6 @@ fn testMultipleSubsActivelyReceiving(
         return;
     }
 
-    // Stop and restart server
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
@@ -1272,7 +1174,6 @@ fn testMultipleSubsActivelyReceiving(
 
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Publish to all 5 subjects again
     client.publish("active.sub.one", "post1") catch {};
     client.publish("active.sub.two", "post2") catch {};
     client.publish("active.sub.three", "post3") catch {};
@@ -1280,7 +1181,6 @@ fn testMultipleSubsActivelyReceiving(
     client.publish("active.sub.five", "post5") catch {};
     client.flush(allocator) catch {};
 
-    // Verify ALL 5 subscriptions restored and receiving
     var post_received: u8 = 0;
     if (sub1.nextWithTimeout(allocator, 500) catch null) |m| {
         m.deinit(allocator);
@@ -1316,7 +1216,6 @@ fn testMultipleSubsActivelyReceiving(
     }
 }
 
-/// Test: High volume pending buffer flushes correctly after reconnect.
 fn testHighVolumePendingBuffer(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -1327,7 +1226,6 @@ fn testHighVolumePendingBuffer(
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Clean slate and start fresh server
     manager.stopAll(io.io());
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("high_volume_buffer", false, "server start failed");
@@ -1338,7 +1236,7 @@ fn testHighVolumePendingBuffer(
         .reconnect = true,
         .max_reconnect_attempts = 10,
         .reconnect_wait_ms = 100,
-        .pending_buffer_size = 64 * 1024, // 64KB buffer
+        .pending_buffer_size = 64 * 1024,
     }) catch {
         reportResult("high_volume_buffer", false, "connect failed");
         return;
@@ -1351,7 +1249,6 @@ fn testHighVolumePendingBuffer(
     };
     defer sub.deinit(allocator);
 
-    // Publish 50 messages before server dies
     var published_before: u32 = 0;
     var i: u32 = 0;
     while (i < 50) : (i += 1) {
@@ -1360,10 +1257,8 @@ fn testHighVolumePendingBuffer(
     }
     client.flush(allocator) catch {};
 
-    // Wait for messages to arrive
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
-    // Count messages received before restart
     var received_before: u32 = 0;
     while (received_before < 100) {
         if (sub.nextWithTimeout(allocator, 100) catch null) |msg| {
@@ -1374,11 +1269,9 @@ fn testHighVolumePendingBuffer(
         }
     }
 
-    // Stop ALL servers to ensure current test_port server stops
     manager.stopAll(io.io());
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
-    // Publish 50 more messages while disconnected (should buffer)
     var published_during: u32 = 0;
     i = 0;
     while (i < 50) : (i += 1) {
@@ -1386,7 +1279,6 @@ fn testHighVolumePendingBuffer(
         published_during += 1;
     }
 
-    // Restart server
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("high_volume_buffer", false, "restart failed");
         return;
@@ -1395,7 +1287,6 @@ fn testHighVolumePendingBuffer(
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
     client.flush(allocator) catch {};
 
-    // Count total messages received after reconnect
     var received_after: u32 = 0;
     while (received_after < 100) {
         if (sub.nextWithTimeout(allocator, 200) catch null) |msg| {
@@ -1406,7 +1297,6 @@ fn testHighVolumePendingBuffer(
         }
     }
 
-    // Success if messages published and received
     if (published_before > 0 and received_before > 0) {
         reportResult("high_volume_buffer", true, "");
     } else {
@@ -1420,7 +1310,6 @@ fn testHighVolumePendingBuffer(
     }
 }
 
-/// Test: Queue group across multiple clients survives reconnect.
 fn testQueueGroupMultiClientReconnect(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -1433,20 +1322,22 @@ fn testQueueGroupMultiClientReconnect(
     var io2: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io2.deinit();
 
-    // Clean slate and start fresh server
     manager.stopAll(io1.io());
     _ = manager.startServer(allocator, io1.io(), .{ .port = test_port }) catch {
         reportResult("queue_group_multi_client", false, "server start failed");
         return;
     };
 
-    // Connect 2 clients
     const client1 = nats.Client.connect(allocator, io1.io(), url, .{
         .reconnect = true,
         .max_reconnect_attempts = 10,
         .reconnect_wait_ms = 100,
     }) catch {
-        reportResult("queue_group_multi_client", false, "client1 connect failed");
+        reportResult(
+            "queue_group_multi_client",
+            false,
+            "client1 connect failed",
+        );
         return;
     };
     defer client1.deinit(allocator);
@@ -1456,25 +1347,35 @@ fn testQueueGroupMultiClientReconnect(
         .max_reconnect_attempts = 10,
         .reconnect_wait_ms = 100,
     }) catch {
-        reportResult("queue_group_multi_client", false, "client2 connect failed");
+        reportResult(
+            "queue_group_multi_client",
+            false,
+            "client2 connect failed",
+        );
         return;
     };
     defer client2.deinit(allocator);
 
-    // Both subscribe with same queue group "workers"
-    var sub1 = client1.subscribeQueue(allocator, "qgroup.test", "workers") catch {
+    var sub1 = client1.subscribeQueue(
+        allocator,
+        "qgroup.test",
+        "workers",
+    ) catch {
         reportResult("queue_group_multi_client", false, "sub1 failed");
         return;
     };
     defer sub1.deinit(allocator);
 
-    var sub2 = client2.subscribeQueue(allocator, "qgroup.test", "workers") catch {
+    var sub2 = client2.subscribeQueue(
+        allocator,
+        "qgroup.test",
+        "workers",
+    ) catch {
         reportResult("queue_group_multi_client", false, "sub2 failed");
         return;
     };
     defer sub2.deinit(allocator);
 
-    // Publish 20 messages - should be load balanced
     var i: u8 = 0;
     while (i < 20) : (i += 1) {
         client1.publish("qgroup.test", "msg") catch {};
@@ -1483,7 +1384,6 @@ fn testQueueGroupMultiClientReconnect(
 
     io1.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
-    // Count messages before restart
     var c1_before: u8 = 0;
     var c2_before: u8 = 0;
     while (c1_before + c2_before < 30) {
@@ -1498,7 +1398,6 @@ fn testQueueGroupMultiClientReconnect(
         }
     }
 
-    // Stop and restart server
     manager.stopServer(0, io1.io());
     io1.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
@@ -1509,7 +1408,6 @@ fn testQueueGroupMultiClientReconnect(
 
     io1.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Publish 20 more messages after reconnect
     i = 0;
     while (i < 20) : (i += 1) {
         client1.publish("qgroup.test", "msg") catch {};
@@ -1518,7 +1416,6 @@ fn testQueueGroupMultiClientReconnect(
 
     io1.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
-    // Count messages after restart
     var c1_after: u8 = 0;
     var c2_after: u8 = 0;
     while (c1_after + c2_after < 30) {
@@ -1533,7 +1430,6 @@ fn testQueueGroupMultiClientReconnect(
         }
     }
 
-    // Success if both phases received messages
     const total_before = c1_before + c2_before;
     const total_after = c1_after + c2_after;
 
@@ -1550,9 +1446,6 @@ fn testQueueGroupMultiClientReconnect(
     }
 }
 
-// Group C: Edge Cases
-
-/// Test: Client survives rapid server restarts.
 fn testRapidServerRestarts(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -1563,7 +1456,6 @@ fn testRapidServerRestarts(
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Clean slate and start fresh server
     manager.stopAll(io.io());
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("rapid_restarts", false, "server start failed");
@@ -1574,7 +1466,7 @@ fn testRapidServerRestarts(
         .reconnect = true,
         .max_reconnect_attempts = 20,
         .reconnect_wait_ms = 100,
-        .ping_interval_ms = 100, // Aggressive ping
+        .ping_interval_ms = 100,
         .max_pings_outstanding = 2,
     }) catch {
         reportResult("rapid_restarts", false, "connect failed");
@@ -1588,14 +1480,11 @@ fn testRapidServerRestarts(
     };
     defer sub.deinit(allocator);
 
-    // Perform 3 rapid restart cycles
     var cycle: u8 = 0;
     while (cycle < 3) : (cycle += 1) {
-        // Stop ALL servers to ensure current server stops
         manager.stopAll(io.io());
         io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
-        // Start server (has 500ms built-in)
         _ = manager.startServer(allocator, io.io(), .{
             .port = test_port,
         }) catch {
@@ -1603,11 +1492,9 @@ fn testRapidServerRestarts(
             return;
         };
 
-        // Wait for reconnect
         io.io().sleep(.fromMilliseconds(500), .awake) catch {};
     }
 
-    // Verify client still works
     client.publish("rapid.test", "survived") catch {
         reportResult("rapid_restarts", false, "final publish failed");
         return;
@@ -1616,7 +1503,6 @@ fn testRapidServerRestarts(
 
     if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
         msg.deinit(allocator);
-        // Verify reconnect stats
         const stats = client.getStats();
         if (stats.reconnects >= 3) {
             reportResult("rapid_restarts", true, "");
@@ -1634,7 +1520,6 @@ fn testRapidServerRestarts(
     }
 }
 
-/// Test: Multiple reconnection cycles work correctly.
 fn testMultipleReconnectionCycles(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -1645,7 +1530,6 @@ fn testMultipleReconnectionCycles(
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Clean slate and start fresh server
     manager.stopAll(io.io());
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("multiple_cycles", false, "server start failed");
@@ -1668,10 +1552,8 @@ fn testMultipleReconnectionCycles(
     };
     defer sub.deinit(allocator);
 
-    // Perform 3 reconnection cycles, verifying sub works each time
     var cycle: u8 = 0;
     while (cycle < 3) : (cycle += 1) {
-        // Stop ALL servers to ensure current server stops
         manager.stopAll(io.io());
         io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
@@ -1690,9 +1572,12 @@ fn testMultipleReconnectionCycles(
 
         io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-        // Verify subscription works
         var msg_buf: [32]u8 = undefined;
-        const msg = std.fmt.bufPrint(&msg_buf, "cycle-{d}", .{cycle}) catch "msg";
+        const msg = std.fmt.bufPrint(
+            &msg_buf,
+            "cycle-{d}",
+            .{cycle},
+        ) catch "msg";
 
         client.publish("cycles.test", msg) catch {
             var buf: [32]u8 = undefined;
@@ -1720,7 +1605,6 @@ fn testMultipleReconnectionCycles(
         }
     }
 
-    // Verify stats show 3 reconnects
     const stats = client.getStats();
     if (stats.reconnects == 3) {
         reportResult("multiple_cycles", true, "");
@@ -1735,7 +1619,6 @@ fn testMultipleReconnectionCycles(
     }
 }
 
-/// Test: Client recovers after long disconnection period.
 fn testLongDisconnectionRecovery(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -1746,7 +1629,6 @@ fn testLongDisconnectionRecovery(
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Clean slate and start fresh server
     manager.stopAll(io.io());
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("long_disconnection", false, "server start failed");
@@ -1769,7 +1651,6 @@ fn testLongDisconnectionRecovery(
     };
     defer sub.deinit(allocator);
 
-    // Verify works before
     client.publish("long.test", "before") catch {};
     client.flush(allocator) catch {};
 
@@ -1780,13 +1661,10 @@ fn testLongDisconnectionRecovery(
         return;
     }
 
-    // Kill ALL servers to ensure correct one stopped
     manager.stopAll(io.io());
 
-    // Wait a long time (3 seconds)
     io.io().sleep(.fromMilliseconds(3000), .awake) catch {};
 
-    // Restart server
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("long_disconnection", false, "restart failed");
         return;
@@ -1794,7 +1672,6 @@ fn testLongDisconnectionRecovery(
 
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    // Verify client reconnects and subscription works after long gap
     client.publish("long.test", "after-long-gap") catch {
         reportResult("long_disconnection", false, "publish after failed");
         return;

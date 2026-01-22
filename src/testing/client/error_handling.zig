@@ -1,6 +1,4 @@
 //! Error Handling Integration Tests
-//!
-//! Tests for error handling and reporting functionality.
 
 const std = @import("std");
 const utils = @import("../test_utils.zig");
@@ -11,7 +9,6 @@ const reportResult = utils.reportResult;
 const formatUrl = utils.formatUrl;
 const test_port = utils.test_port;
 
-/// Test: Subject too long returns error (> max_subject_len bytes).
 pub fn testSubjectTooLong(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -50,7 +47,6 @@ pub fn testSubjectTooLong(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: Queue group too long returns error (> max_queue_group_len bytes).
 pub fn testQueueGroupTooLong(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -89,7 +85,6 @@ pub fn testQueueGroupTooLong(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: URL too long returns error (> max_url_len bytes).
 pub fn testUrlTooLong(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
@@ -121,7 +116,6 @@ pub fn testUrlTooLong(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: DrainResult.isClean() returns true when no failures.
 pub fn testDrainResultIsClean(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -136,7 +130,6 @@ pub fn testDrainResultIsClean(allocator: std.mem.Allocator) void {
         return;
     };
 
-    // Subscribe to something
     const sub = client.subscribe(allocator, "drain.test") catch {
         client.deinit(allocator);
         reportResult("drain_result_clean", false, "subscribe failed");
@@ -165,7 +158,6 @@ pub fn testDrainResultIsClean(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Test: Subject at exactly max_subject_len bytes is accepted.
 pub fn testSubjectExactLimit(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -194,7 +186,6 @@ pub fn testSubjectExactLimit(allocator: std.mem.Allocator) void {
     reportResult("subject_exact_limit", true, "");
 }
 
-/// Test: Queue group at exactly max_queue_group_len bytes is accepted.
 pub fn testQueueGroupExactLimit(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -223,7 +214,6 @@ pub fn testQueueGroupExactLimit(allocator: std.mem.Allocator) void {
     reportResult("qg_exact_limit", true, "");
 }
 
-/// Test: resetErrorNotifications method exists and can be called.
 pub fn testResetErrorNotifications(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -244,7 +234,6 @@ pub fn testResetErrorNotifications(allocator: std.mem.Allocator) void {
     reportResult("reset_error_notif", true, "");
 }
 
-/// Runs all error handling tests.
 pub fn runAll(allocator: std.mem.Allocator) void {
     testSubjectTooLong(allocator);
     testQueueGroupTooLong(allocator);

@@ -65,7 +65,6 @@ pub const Slab = struct {
             .alloc_count = 0,
         };
 
-        // Initialize embedded free list (also pre-warms pages)
         var i: u32 = 0;
         while (i < slice_count) : (i += 1) {
             const slice = slab.getSliceByIndex(i);
@@ -89,7 +88,6 @@ pub const Slab = struct {
         const idx = self.free_head;
         const slice = self.getSliceByIndex(idx);
 
-        // Read next-free from slice, update head
         self.free_head = @as(*u32, @ptrCast(@alignCast(slice.ptr))).*;
         self.alloc_count += 1;
 
@@ -102,12 +100,10 @@ pub const Slab = struct {
         const idx = self.ptrToIndex(ptr);
         assert(idx < self.slice_count);
 
-        // Debug: detect double-free by checking if already in free list
         if (builtin.mode == .Debug) {
             assert(!self.isInFreeList(idx));
         }
 
-        // Write current head into slice, update head
         @as(*u32, @ptrCast(@alignCast(ptr))).* = self.free_head;
         self.free_head = idx;
         self.alloc_count -= 1;
@@ -134,12 +130,10 @@ pub const Slab = struct {
         const mem_start = @intFromPtr(self.memory.ptr);
         const mem_end = mem_start + self.memory.len;
 
-        // Validate pointer is within slab memory
         assert(ptr_addr >= mem_start);
         assert(ptr_addr < mem_end);
 
         const offset = ptr_addr - mem_start;
-        // Validate pointer is aligned to slice boundary
         assert(offset % self.slice_size == 0);
 
         return @intCast(offset / self.slice_size);
@@ -220,7 +214,6 @@ pub const TieredSlab = struct {
             }
         }
 
-        // Tier exhausted or size too large - use fallback
         self.fallback_count += 1;
         return self.fallback.alloc(u8, size) catch null;
     }
@@ -231,7 +224,6 @@ pub const TieredSlab = struct {
 
         const ptr = buf.ptr;
 
-        // Check each tier (inlined for predictable branches)
         inline for (&self.tiers) |*tier| {
             if (tier.contains(ptr)) {
                 tier.free(ptr);
@@ -239,7 +231,6 @@ pub const TieredSlab = struct {
             }
         }
 
-        // Not from slab - must be fallback allocation
         self.fallback_count -= 1;
         self.fallback.free(buf);
     }
@@ -333,10 +324,7 @@ pub const SlabAllocator = struct {
         _ = ctx;
         _ = alignment;
         _ = ret_addr;
-        // Slab slices are fixed size - resize within slice is always OK
-        // For slab allocations, check if new_len fits in original slice
         if (new_len <= buf.len) return true;
-        // Can't grow beyond original slice
         return false;
     }
 
@@ -352,7 +340,6 @@ pub const SlabAllocator = struct {
         _ = alignment;
         _ = new_len;
         _ = ret_addr;
-        // Remap not supported - return null to indicate realloc needed
         return null;
     }
 
@@ -369,29 +356,24 @@ pub const SlabAllocator = struct {
     }
 };
 
-// Tests
 test "Slab basic alloc/free" {
     var slab = try Slab.init(256, 16);
     defer slab.deinit();
 
-    // Allocate all slices
     var ptrs: [16][]u8 = undefined;
     for (&ptrs) |*p| {
         p.* = slab.alloc() orelse unreachable;
     }
 
-    // Should be exhausted
     try std.testing.expect(slab.alloc() == null);
     try std.testing.expectEqual(@as(u32, 16), slab.getAllocCount());
 
-    // Free all
     for (ptrs) |p| {
         slab.free(p.ptr);
     }
 
     try std.testing.expectEqual(@as(u32, 0), slab.getAllocCount());
 
-    // Should be able to allocate again
     const p = slab.alloc() orelse unreachable;
     try std.testing.expect(p.len == 256);
 }
@@ -401,19 +383,15 @@ test "TieredSlab tier selection" {
     var ts = try TieredSlab.init(fallback);
     defer ts.deinit();
 
-    // Small allocation -> tier 0
     const small = ts.alloc(100) orelse unreachable;
     try std.testing.expect(ts.containsPtr(small.ptr));
 
-    // Medium allocation -> tier 2
     const medium = ts.alloc(800) orelse unreachable;
     try std.testing.expect(ts.containsPtr(medium.ptr));
 
-    // Large allocation -> fallback
     const large = ts.alloc(20000) orelse unreachable;
     try std.testing.expect(!ts.containsPtr(large.ptr));
 
-    // Free all
     ts.free(small);
     ts.free(medium);
     ts.free(large);
@@ -430,7 +408,6 @@ test "SlabAllocator interface" {
     var sa = SlabAllocator{ .slab = &ts };
     const alloc = sa.allocator();
 
-    // Use like normal allocator
     const buf = try alloc.alloc(u8, 200);
     try std.testing.expect(buf.len == 200);
 

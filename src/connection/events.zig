@@ -180,14 +180,13 @@ test "event queue full" {
 
     const event: Event = .drain_started;
 
-    // Fill the queue
     var i: usize = 0;
     while (i < EventQueue.CAPACITY) : (i += 1) {
         try std.testing.expect(queue.push(event));
     }
 
     try std.testing.expect(queue.isFull());
-    try std.testing.expect(!queue.push(event)); // Should fail
+    try std.testing.expect(!queue.push(event));
 
     // Pop one and push should work again
     _ = queue.pop();

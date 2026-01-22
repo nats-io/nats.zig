@@ -104,15 +104,12 @@ pub fn run(client: *Client, allocator: Allocator) void {
             }
         }
 
-        // Made-progress loop: process all available data without blocking
         var made_progress = true;
         while (made_progress) {
             made_progress = false;
 
-            // Drain return queue only if non-empty (prevents queue overflow)
             if (client.return_queue.len() > 0) drainReturnQueue(client);
 
-            // Route buffered messages (no I/O)
             const route_result = tryRouteBufferedMessages(client, allocator);
             if (route_result == .progress) made_progress = true;
             if (route_result == .disconnected) {
@@ -127,7 +124,6 @@ pub fn run(client: *Client, allocator: Allocator) void {
                 break :outer;
             }
 
-            // Only read if routing made no progress (empty/partial)
             if (!made_progress) {
                 const read_result = tryFillBuffer(client);
                 if (read_result == .canceled) break :outer;
@@ -195,7 +191,7 @@ inline fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
         .revents = 0,
     }};
     const ready = posix.poll(&fds, timeout_ms) catch return .no_data;
-    if (ready == 0) return .no_data; // Timeout
+    if (ready == 0) return .no_data;
 
     // Single load, combined checks (avoid 3 separate loads)
     const revents = fds[0].revents;
@@ -219,14 +215,13 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
     const poll_result = pollForData(fd, POLL_TIMEOUT_MS);
 
     if (poll_result == .disconnected) {
-        return .disconnected; // POLLHUP/POLLERR - server killed
+        return .disconnected;
     }
     if (poll_result == .no_data) {
         if (dbg.enabled) client.io_task_stats.fill_poll_timeouts += 1;
-        return .no_progress; // Timeout or no data
+        return .no_progress;
     }
 
-    // Track buffer size before read
     const before = reader.buffered().len;
     if (dbg.enabled) client.io_task_stats.fill_buffered_hits += before;
 
@@ -247,7 +242,6 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
         return .no_progress;
     };
 
-    // Only report progress when new data read
     const after = reader.buffered().len;
     if (after > before) {
         if (dbg.enabled) client.io_task_stats.fill_read_success += 1;
@@ -269,11 +263,9 @@ inline fn tryRouteBufferedMessages(
     // HOT PATH: Non-atomic read - see module doc "State checks (hot path)"
     if (client.state == .closed) return .canceled;
 
-    // Check what's already buffered (no I/O)
     const data = reader.buffered();
     if (data.len == 0) return .no_progress;
 
-    // Parse and route messages
     var offset: usize = 0;
     while (offset < data.len) {
         var consumed: usize = 0;
@@ -307,7 +299,7 @@ inline fn tryRouteBufferedMessages(
                     .{ client.protocol_errors, bytes_skipped },
                 );
             } else {
-                break; // No CRLF found, need more data
+                break;
             }
             continue;
         };
@@ -364,7 +356,6 @@ inline fn tryRouteBufferedMessages(
         }
     }
 
-    // Toss consumed data
     if (offset > 0) {
         reader.toss(offset);
         return .progress;
@@ -381,7 +372,6 @@ inline fn routeMessageToSub(
 ) void {
     const sub = client.getSubscriptionBySid(args.sid) orelse return;
 
-    // Allocate message with backing buffer (direct slab call, no vtable)
     const subj_len = args.subject.len;
     const payload_len = args.payload.len;
     const reply_len = if (args.reply_to) |rt| rt.len else 0;
@@ -414,14 +404,12 @@ inline fn routeMessageToSub(
         return;
     };
 
-    // Copy all data into backing buffer (better CPU pipelining)
     @memcpy(buf[0..subj_end], args.subject);
     @memcpy(buf[subj_end..payload_end], args.payload);
     if (args.reply_to) |rt| {
         @memcpy(buf[payload_end..reply_end], rt);
     }
 
-    // Create slices after all copies complete
     const subject = buf[0..subj_end];
     const data_slice = buf[subj_end..payload_end];
     const reply_to: ?[]const u8 = if (reply_len > 0)
@@ -460,7 +448,6 @@ inline fn routeHMessageToSub(
 ) void {
     const sub = client.getSubscriptionBySid(args.sid) orelse return;
 
-    // Compute lengths upfront
     const subj_len = args.subject.len;
     const data_len = args.payload.len;
     const hdr_len = args.headers.len;
@@ -474,7 +461,6 @@ inline fn routeHMessageToSub(
     const reply_end = hdr_end + reply_len;
     assert(reply_end == total_size);
 
-    // Allocate message with backing buffer (direct slab call, no vtable)
     const buf = slab.alloc(total_size) orelse {
         sub.alloc_failed_msgs += 1;
         // Rate-limit: push event on 1st failure OR after interval msgs
@@ -496,7 +482,6 @@ inline fn routeHMessageToSub(
         return;
     };
 
-    // Copy all data into backing buffer (better CPU pipelining)
     @memcpy(buf[0..subj_end], args.subject);
     @memcpy(buf[subj_end..data_end], args.payload);
     @memcpy(buf[data_end..hdr_end], args.headers);
@@ -504,7 +489,6 @@ inline fn routeHMessageToSub(
         @memcpy(buf[hdr_end..reply_end], rt);
     }
 
-    // Create slices after all copies complete
     const subject = buf[0..subj_end];
     const data_slice = buf[subj_end..data_end];
     const headers = buf[data_end..hdr_end];
@@ -524,11 +508,9 @@ inline fn routeHMessageToSub(
         .return_queue = &client.return_queue,
     };
 
-    // Push to subscription queue
     sub.pushMessage(msg) catch {
         sub.dropped_msgs += 1;
         slab.free(buf);
-        // Push slow_consumer event (only on first drop to avoid flood)
         if (sub.dropped_msgs == 1) {
             client.pushEvent(.{ .slow_consumer = .{ .sid = args.sid } });
         }
@@ -541,27 +523,20 @@ inline fn routeHMessageToSub(
 fn handleDisconnect(client: *Client, allocator: Allocator) bool {
     @atomicStore(State, &client.state, .disconnected, .release);
 
-    // Push disconnected event (no specific error captured at this level)
     client.pushEvent(.{ .disconnected = .{ .err = null } });
 
-    // Backup subscriptions before reconnect (error = subs won't restore)
     client.backupSubscriptions() catch |err| {
         dbg.print("backupSubscriptions failed: {s}", .{@errorName(err)});
-        // Error event already pushed by backupSubscriptions
     };
 
-    // Try reconnection
     if (tryReconnectLoop(client, allocator)) {
-        // Restore subscriptions after successful reconnect
         client.restoreSubscriptions() catch {
             dbg.print("Failed to restore subscriptions after reconnect", .{});
         };
 
-        // Push reconnected event
         client.pushEvent(.{ .reconnected = {} });
         return true;
     } else {
-        // Reconnection failed or canceled
         @atomicStore(State, &client.state, .closed, .release);
         client.pushEvent(.{ .closed = {} });
         return false;
@@ -592,7 +567,6 @@ fn tryReconnectLoop(client: *Client, allocator: Allocator) bool {
             };
         }
 
-        // Try each server in pool
         for (client.server_pool.servers[0..client.server_pool.count]) |*server| {
             client.tryConnect(allocator, server) catch continue;
             @atomicStore(State, &client.state, .connected, .release);
@@ -627,7 +601,6 @@ fn handleServerError(client: *Client, msg: []const u8) bool {
         break :blk events.Error.ServerError;
     };
 
-    // Push error event to user
     client.pushEvent(.{ .err = .{ .err = err_type, .msg = msg } });
 
     // Fatal errors trigger disconnect/reconnect

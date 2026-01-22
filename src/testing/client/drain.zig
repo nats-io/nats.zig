@@ -1,6 +1,4 @@
-//! Drain Tests for NATS Async Client
-//!
-//! Tests for async drain operations.
+//! Drain Tests for NATS  Client
 
 const std = @import("std");
 const utils = @import("../test_utils.zig");
@@ -14,71 +12,76 @@ const auth_port = utils.auth_port;
 const test_token = utils.test_token;
 const ServerManager = utils.ServerManager;
 
-pub fn testAsyncDrainOperation(allocator: std.mem.Allocator) void {
+pub fn testDrainOperation(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
-        reportResult("async_drain_operation", false, "connect failed");
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("drain_operation", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
-    // Create some subscriptions
     const sub1 = client.subscribe(allocator, "drain.test.1") catch {
-        reportResult("async_drain_operation", false, "sub1 failed");
+        reportResult("drain_operation", false, "sub1 failed");
         return;
     };
     defer sub1.deinit(allocator);
 
     const sub2 = client.subscribe(allocator, "drain.test.2") catch {
-        reportResult("async_drain_operation", false, "sub2 failed");
+        reportResult("drain_operation", false, "sub2 failed");
         return;
     };
     defer sub2.deinit(allocator);
 
     client.flush(allocator) catch {};
 
-    // Drain should clean up everything
     _ = client.drain(allocator) catch {
-        reportResult("async_drain_operation", false, "drain failed");
+        reportResult("drain_operation", false, "drain failed");
         return;
     };
 
-    // After drain, client should not be connected
     if (!client.isConnected()) {
-        reportResult("async_drain_operation", true, "");
+        reportResult("drain_operation", true, "");
     } else {
-        reportResult("async_drain_operation", false, "still connected");
+        reportResult("drain_operation", false, "still connected");
     }
 }
 
-/// Test: Drain cleans up subscriptions
-pub fn testAsyncDrainCleansUp(allocator: std.mem.Allocator) void {
+pub fn testDrainCleansUp(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
-        reportResult("async_drain_cleanup", false, "connect failed");
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("drain_cleanup", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
-    // Create subscriptions and publish some messages
     const sub1 = client.subscribe(allocator, "drain.cleanup.1") catch {
-        reportResult("async_drain_cleanup", false, "sub1 failed");
+        reportResult("drain_cleanup", false, "sub1 failed");
         return;
     };
     defer sub1.deinit(allocator);
 
     const sub2 = client.subscribe(allocator, "drain.cleanup.2") catch {
-        reportResult("async_drain_cleanup", false, "sub2 failed");
+        reportResult("drain_cleanup", false, "sub2 failed");
         return;
     };
     defer sub2.deinit(allocator);
@@ -87,20 +90,17 @@ pub fn testAsyncDrainCleansUp(allocator: std.mem.Allocator) void {
     client.publish("drain.cleanup.2", "msg2") catch {};
     client.flush(allocator) catch {};
 
-    // Small delay for messages to arrive
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    // Drain - should clean up all subscriptions and close connection
     _ = client.drain(allocator) catch {
-        reportResult("async_drain_cleanup", false, "drain failed");
+        reportResult("drain_cleanup", false, "drain failed");
         return;
     };
 
-    // Verify state
     if (!client.isConnected()) {
-        reportResult("async_drain_cleanup", true, "");
+        reportResult("drain_cleanup", true, "");
     } else {
-        reportResult("async_drain_cleanup", false, "still connected after drain");
+        reportResult("drain_cleanup", false, "still connected after drain");
     }
 }
 
@@ -111,19 +111,22 @@ pub fn testDrainTwice(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("drain_twice", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
-    // First drain
     _ = client.drain(allocator) catch {
         reportResult("drain_twice", false, "first drain failed");
         return;
     };
 
-    // Second drain should be safe (no-op or error, but not crash)
     _ = client.drain(allocator) catch {};
 
     reportResult("drain_twice", true, "");
@@ -136,13 +139,17 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
         reportResult("drain_many_subs", false, "connect failed");
         return;
     };
     defer client.deinit(allocator);
 
-    // Create 20 subscriptions
     var subs: [20]?*nats.Subscription = undefined;
     @memset(&subs, null);
 
@@ -153,7 +160,11 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
     var created: usize = 0;
     for (0..20) |i| {
         var sub_buf: [32]u8 = undefined;
-        const subject = std.fmt.bufPrint(&sub_buf, "drain.many.{d}", .{i}) catch {
+        const subject = std.fmt.bufPrint(
+            &sub_buf,
+            "drain.many.{d}",
+            .{i},
+        ) catch {
             continue;
         };
         subs[i] = client.subscribe(allocator, subject) catch break;
@@ -167,7 +178,6 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
         return;
     };
 
-    // Subs cleaned by defer above
     if (!client.isConnected() and created >= 15) {
         reportResult("drain_many_subs", true, "");
     } else {
@@ -175,10 +185,9 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Runs all async drain tests.
 pub fn runAll(allocator: std.mem.Allocator) void {
-    testAsyncDrainOperation(allocator);
-    testAsyncDrainCleansUp(allocator);
+    testDrainOperation(allocator);
+    testDrainCleansUp(allocator);
     testDrainTwice(allocator);
     testDrainWithManySubscriptions(allocator);
 }

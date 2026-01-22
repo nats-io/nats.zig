@@ -1,6 +1,6 @@
-//! Async Client Test Suite
+//! Client Test Suite
 //!
-//! Re-exports all async client test modules.
+//! Re-exports all client test modules.
 
 const std = @import("std");
 const utils = @import("../test_utils.zig");
