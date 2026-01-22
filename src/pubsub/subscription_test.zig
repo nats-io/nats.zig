@@ -110,7 +110,7 @@ test "FixedQueue wraparound interleaved push pop" {
     try q.push(6);
     try testing.expectEqual(@as(?u32, 3), q.tryPop());
 
-    // Continue until we've wrapped multiple times
+    // Continue until wrapped multiple times
     try q.push(7);
     try testing.expectEqual(@as(?u32, 4), q.tryPop());
     try q.push(8);
@@ -785,7 +785,7 @@ test "FixedSubscription queue group with dots" {
     var client = TestClient{};
     var sub = TestSub.initEmpty();
 
-    // Note: NATS queue groups typically don't have dots but we accept them
+    // NATS queue groups typically don't have dots but are accepted
     try sub.activate(&client, 1, "test", "group.name");
     try testing.expectEqualStrings("group.name", sub.queueGroup().?);
 }

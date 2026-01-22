@@ -116,8 +116,8 @@ pub fn testEmptyToken(allocator: std.mem.Allocator) void {
 // Test: Token with special characters
 // Verifies tokens with special chars work correctly.
 pub fn testTokenSpecialChars(allocator: std.mem.Allocator) void {
-    // Note: This tests URL parsing with special characters
-    // We use the correct token but test parsing robustness
+    // Tests URL parsing with special characters.
+    // Uses correct token but tests parsing robustness.
     var url_buf: [128]u8 = undefined;
     const url = formatAuthUrl(&url_buf, auth_port, test_token);
 

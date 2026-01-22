@@ -10,8 +10,8 @@
 //!
 //! **State checks (hot path)**: Uses plain reads, NOT atomics.
 //! - Rationale: "close-then-cancel" pattern in Client.deinit() ensures safe exit
-//! - If we read stale `.connected` instead of `.closed`, we try socket op
-//! - Socket op fails (already closed), error handler checks state, we exit
+//! - Stale `.connected` read triggers socket op attempt
+//! - Socket op fails (already closed), error handler checks state, task exits
 //! - Worst case: one extra loop iteration, no corruption or crash
 //! - Benefit: avoids atomic overhead in hot loop (~2.5M msg/s throughput)
 //!
@@ -77,7 +77,7 @@ pub fn run(client: *Client, allocator: Allocator) void {
         if (dbg.enabled) loop_count += 1;
         // HOT PATH: Exit check - intentionally non-atomic for performance.
         // Safe because of "close-then-cancel" pattern (see module doc).
-        // If stale read misses .closed, socket op will fail and we exit anyway.
+        // Stale .closed read causes socket op failure, task exits anyway.
         if (client.state == .closed) break :outer;
 
         // Periodic health check (detects stale connections when server killed)
@@ -186,7 +186,7 @@ const PollResult = enum {
 /// Poll socket for readable data with timeout (cross-platform).
 /// Also detects disconnect via POLLHUP/POLLERR.
 /// NOTE: On Linux, POLLIN and POLLHUP can both be set when there's
-/// buffered data AND the connection is closing. We prioritize POLLHUP
+/// buffered data AND the connection is closing. POLLHUP is prioritized
 /// to detect dead connections even with buffered data.
 inline fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
     var fds = [_]posix.pollfd{.{
@@ -247,7 +247,7 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
         return .no_progress;
     };
 
-    // Only report progress if we actually read new data
+    // Only report progress when new data read
     const after = reader.buffered().len;
     if (after > before) {
         if (dbg.enabled) client.io_task_stats.fill_read_success += 1;

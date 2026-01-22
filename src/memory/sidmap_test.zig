@@ -209,25 +209,13 @@ test "SidMap slot MAX_SLOT" {
     try std.testing.expectEqual(MAX_SLOT, map.get(100).?);
 }
 
-// NOTE: Sentinel Value Protection
-// SidMap.put() uses assert(slot <= MAX_SLOT) to prevent TOMB/EMPTY corruption.
-// In debug builds: assertion failure if slot >= 0xFFFE
-// In release builds: assert is stripped - corruption would occur silently!
-//
-// KNOWN LIMITATION: This is defense-in-depth only. The caller MUST ensure
-// slot values come from a trusted source (e.g., subscription slot indices).
-// There is no runtime error returned - only compile-time assert protection.
-//
-// If you need runtime validation, wrap put() or check before calling.
+// Sentinel protection: put() asserts slot <= MAX_SLOT to prevent TOMB/EMPTY
+// corruption. Debug builds fail assertion; release builds strip assert.
 
 test "SidMap sentinel values documented" {
-    // Document the sentinel values for reference
     try std.testing.expectEqual(@as(u16, 0xFFFF), EMPTY);
     try std.testing.expectEqual(@as(u16, 0xFFFE), TOMB);
     try std.testing.expectEqual(@as(u16, 0xFFFD), MAX_SLOT);
-
-    // MAX_SLOT is the highest valid slot value
-    // TOMB and EMPTY are reserved for internal map state
 }
 
 test "SidMap valid slot range" {
@@ -251,7 +239,7 @@ test "SidMap exact load factor boundary" {
     var map: SidMap = .init(&keys, &vals);
 
     // 70% of 8 = 5.6, truncated to 5
-    // So max_load = 5, we can insert while len < 5
+    // So max_load = 5, inserts allowed while len < 5
     try map.put(1, 0); // len=1
     try map.put(2, 1); // len=2
     try map.put(3, 2); // len=3
@@ -331,7 +319,7 @@ test "SidMap tombstone lookup continues probing" {
     var vals: [8]u16 = undefined;
     var map: SidMap = .init(&keys, &vals);
 
-    // Insert entries that will cluster (we can't control hash, but insert many)
+    // Insert entries that will cluster (hash not controllable, insert many)
     try map.put(100, 0);
     try map.put(200, 1);
     try map.put(300, 2);

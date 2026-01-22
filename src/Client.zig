@@ -1871,7 +1871,7 @@ fn cleanupForReconnect(self: *Client) void {
     self.stream.close(self.io);
 
     // Clear server info (will be refreshed on reconnect)
-    // Note: Don't free - we'll get new info from server
+    // Don't free - server sends new info on reconnect
 }
 
 /// Attempt connection to a single server.
@@ -2283,11 +2283,11 @@ pub const Subscription = struct {
         const client = self.client;
         const can_send = client.state.canSend();
 
-        // Acquire mutex for thread-safe cleanup (fixes CODE-REVIEW 1.4)
+        // Acquire mutex for thread-safe cleanup
         client.read_mutex.lockUncancelable(client.io);
         defer client.read_mutex.unlock(client.io);
 
-        // Track if we successfully sent UNSUB
+        // Track UNSUB send success
         var send_failed = false;
 
         // Send UNSUB protocol if connected
@@ -2311,7 +2311,7 @@ pub const Subscription = struct {
             client.free_count += 1;
         }
 
-        // Close queue (inside mutex - fixes CODE-REVIEW 1.4)
+        // Close queue (inside mutex)
         self.queue.close(client.io);
 
         // Mark as unsubscribed

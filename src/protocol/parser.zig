@@ -253,7 +253,7 @@ inline fn parseFullMsgFast(
     // Calculate total message size: header + payload + trailing \r\n
     const total_len = header_len + payload_len + 2;
 
-    // Check if we have the complete message
+    // Check for complete message
     if (data.len < total_len) return null;
 
     // Verify trailing CRLF with u16 comparison
@@ -375,7 +375,7 @@ inline fn parseFullHMsgFast(
     // Calculate total message size: header line + content + trailing \r\n
     const total_len = header_len + total_content_len + 2;
 
-    // Check if we have the complete message
+    // Check for complete message
     if (data.len < total_len) return null;
 
     // Verify trailing CRLF with u16 comparison

@@ -298,7 +298,7 @@ pub fn testProtocolPartialMsgPayload(allocator: std.mem.Allocator) void {
     var parser: protocol.Parser = .{};
     var consumed: usize = 0;
 
-    // MSG header says 10 bytes, but we only provide 5
+    // MSG header says 10 bytes, but only 5 provided
     const partial_msg = "MSG test.subject 1 10\r\nhello";
 
     const partial_result = parser.parse(allocator, partial_msg, &consumed) catch {

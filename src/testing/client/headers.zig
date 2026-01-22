@@ -334,7 +334,7 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
             if (s.nextWithTimeout(a, 2000) catch null) |req| {
                 defer req.deinit(a);
                 if (req.reply_to) |reply_inbox| {
-                    // Verify we received headers
+                    // Verify headers received
                     if (req.headers != null) {
                         r.publish(reply_inbox, "headers-received") catch {};
                     } else {

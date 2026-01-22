@@ -91,7 +91,7 @@ pub const AllResults = struct {
     // Table 3: Fire starter
     table3: [5][MAX_RUNS]BenchRun = .{.{BenchRun{}} ** MAX_RUNS} ** 5,
 
-    // Track how many valid runs we got per client
+    // Track valid runs per client
     table1_counts: [5]usize = .{0} ** 5,
     table2_1_counts: [5]usize = .{0} ** 5,
     table2_2_counts: [5]usize = .{0} ** 5,
@@ -531,7 +531,7 @@ fn readAllFromPipe(io: Io, pipe: ?File, buf: []u8) []const u8 {
     return buf[0..total];
 }
 
-/// Read until we see end markers indicating output is complete.
+/// Read until end markers indicating output is complete.
 fn readUntilDone(io: Io, pipe: ?File, buf: []u8, timeout_ns: u64) []const u8 {
     const file = pipe orelse return "";
     var total: usize = 0;

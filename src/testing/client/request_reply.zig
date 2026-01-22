@@ -27,8 +27,8 @@ pub fn testAsyncRequestMethod(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Verify the request method exists and can be called
-    // We expect it to return null (timeout) since no responder exists
+    // Verify the request method exists and can be called.
+    // Expected: null (timeout) since no responder exists.
     // Use a short timeout to keep tests fast
     const result = client.request(
         allocator,
@@ -46,7 +46,7 @@ pub fn testAsyncRequestMethod(allocator: std.mem.Allocator) void {
         msg.deinit(allocator);
     }
 
-    // Test passes if we got here without error
+    // Test passes if reached here without error
     if (client.isConnected()) {
         reportResult("async_request_method", true, "");
     } else {
@@ -355,7 +355,7 @@ pub fn testRequestTimeout(allocator: std.mem.Allocator) void {
 
     if (result) |msg| {
         msg.deinit(allocator);
-        // If we got a reply (no_responders message), still pass
+        // Got a reply (no_responders message), still pass
         // as long as the request mechanism works
         reportResult("request_timeout", true, "");
         return;

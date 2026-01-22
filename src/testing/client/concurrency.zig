@@ -254,7 +254,7 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     };
     publisher.flush(allocator) catch {};
 
-    // We should receive at least the second message
+    // Should receive at least the second message
     var received: u32 = 0;
     for (0..2) |_| {
         if (sub.nextWithTimeout(allocator, 500) catch null) |m| {

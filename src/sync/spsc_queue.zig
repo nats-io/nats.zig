@@ -61,7 +61,7 @@ pub fn SpscQueue(comptime T: type) type {
         /// Push item (producer only). Returns false if full.
         /// O(1), lock-free, never blocks.
         pub fn push(self: *Self, item: T) bool {
-            // .monotonic: we're the only head writer, no sync needed for own read
+            // .monotonic: single head writer, no sync needed for own read
             const head = self.head.load(.monotonic);
             // .acquire: must see consumer's tail updates to know slots are free
             const tail = self.tail.load(.acquire);
@@ -81,7 +81,7 @@ pub fn SpscQueue(comptime T: type) type {
         /// Pop item (consumer only). Returns null if empty.
         /// O(1), lock-free, never blocks.
         pub fn pop(self: *Self) ?T {
-            // .monotonic: we're the only tail writer, no sync needed for own read
+            // .monotonic: single tail writer, no sync needed for own read
             const tail = self.tail.load(.monotonic);
             // .acquire: must see producer's buffer writes that happened before
             // their .release store to head
@@ -103,7 +103,7 @@ pub fn SpscQueue(comptime T: type) type {
         /// O(n), lock-free, never blocks.
         /// Same memory ordering rationale as pop() - see module doc.
         pub fn popBatch(self: *Self, out: []T) usize {
-            // .monotonic: we're the only tail writer
+            // .monotonic: single tail writer
             const tail = self.tail.load(.monotonic);
             // .acquire: must see producer's buffer writes
             const head = self.head.load(.acquire);

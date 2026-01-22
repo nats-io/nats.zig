@@ -94,7 +94,7 @@ pub const SidMap = struct {
             const v = self.vals[idx];
 
             if (v == EMPTY) {
-                // Use tombstone slot if we found one
+                // Use tombstone slot if found
                 const insert_idx = tomb_idx orelse idx;
                 self.keys[insert_idx] = sid;
                 self.vals[insert_idx] = slot;

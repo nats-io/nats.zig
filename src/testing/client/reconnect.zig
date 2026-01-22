@@ -475,7 +475,7 @@ fn testPublishDuringReconnect(
         }
     }
 
-    // Success if we published some and received some
+    // Success if some messages published and received
     if (published > 0 or received > 0) {
         reportResult("publish_during_reconnect", true, "");
     } else {
@@ -784,7 +784,7 @@ fn testReconnectBackoff(allocator: std.mem.Allocator, manager: *ServerManager) v
         return;
     };
 
-    // Test passes if we get here - backoff didn't cause infinite loop
+    // Test passes - backoff didn't cause infinite loop
     reportResult("reconnect_backoff", true, "");
 }
 
@@ -1128,8 +1128,8 @@ fn testServerCooldownRespected(
     };
     defer server2.stop(io.io());
 
-    // Try to connect to server1 (will fail), but server2 in pool
-    // Since server1 never started, we need a different approach:
+    // Try to connect to server1 (will fail), but server2 in pool.
+    // Since server1 never started, different approach needed:
     // Connect to server2 first, then simulate cooldown behavior
     const client = nats.Client.connect(allocator, io.io(), url2, .{
         .reconnect = true,
@@ -1144,7 +1144,7 @@ fn testServerCooldownRespected(
     // Add server1 (non-existent) to pool
     client.server_pool.addServer(url1) catch {};
 
-    // Verify we're connected and can operate
+    // Verify connected and operational
     client.publish("cooldown.test", "msg") catch {
         reportResult("server_cooldown", false, "publish failed");
         return;
@@ -1406,7 +1406,7 @@ fn testHighVolumePendingBuffer(
         }
     }
 
-    // Success if we published and received some messages
+    // Success if messages published and received
     if (published_before > 0 and received_before > 0) {
         reportResult("high_volume_buffer", true, "");
     } else {
@@ -1780,7 +1780,7 @@ fn testLongDisconnectionRecovery(
         return;
     }
 
-    // Kill ALL servers to ensure we stop the right one
+    // Kill ALL servers to ensure correct one stopped
     manager.stopAll(io.io());
 
     // Wait a long time (3 seconds)
