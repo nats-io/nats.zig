@@ -125,9 +125,7 @@ pub const Options = struct {
     nkey_seed: ?[]const u8 = null,
     /// JWT for authentication.
     jwt: ?[]const u8 = null,
-    /// Read/write buffer size. Must be >= max message size you expect.
-    /// Default 256KB is suitable for most workloads. Increase if sending
-    /// large messages (NATS max_payload default is 1MB).
+    /// Read/write buffer size. Must be >= max message size you expect (1MB).
     buffer_size: usize = defaults.Connection.buffer_size,
     /// TCP receive buffer size hint. Larger values allow more messages to
     /// queue in the kernel before backpressure kicks in. Default 256KB.
