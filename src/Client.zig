@@ -39,6 +39,7 @@ const headers = @import("protocol/headers.zig");
 pub const HeaderEntry = headers.Entry;
 
 const nkey_auth = @import("auth.zig");
+const creds_auth = nkey_auth.creds;
 
 const Client = @This();
 
@@ -124,6 +125,12 @@ pub const Options = struct {
     nkey_sign_fn: ?*const fn (nonce: []const u8, sig: *[64]u8) bool = null,
     /// JWT for authentication.
     jwt: ?[]const u8 = null,
+    /// Credentials file path (.creds file with JWT + NKey seed).
+    /// Mutually exclusive with jwt/nkey_seed options.
+    creds_file: ?[]const u8 = null,
+    /// Credentials content (alternative to file path).
+    /// Use when credentials are loaded from environment/memory.
+    creds: ?[]const u8 = null,
     /// Read/write buffer size. Must be >= max message size you expect (1MB).
     buffer_size: usize = defaults.Connection.buffer_size,
     /// TCP receive buffer size hint. Larger values allow more messages to
@@ -752,16 +759,50 @@ fn handshake(
         user = null;
     }
 
-    // NKey authentication: sign nonce if seed provided
-    // Priority: nkey_seed > nkey_seed_file > nkey_sign_fn
+    // Authentication: sign nonce if credentials provided
+    // Priority: creds_file > creds > nkey_seed > nkey_seed_file > nkey_sign_fn
     var sig_buf: [86]u8 = undefined;
     var pubkey_buf: [56]u8 = undefined;
     var sig_slice: ?[]const u8 = null;
     var pubkey_slice: ?[]const u8 = null;
+    // Buffer for credentials file (must outlive signing operation)
+    var creds_buf: [8192]u8 = undefined;
     // Buffer for seed from file (must outlive signing operation)
     var file_seed_buf: [128]u8 = undefined;
+    // JWT to send (may come from opts.jwt or parsed credentials)
+    var jwt_to_send: ?[]const u8 = opts.jwt;
 
-    if (opts.nkey_seed) |seed| {
+    if (opts.creds_file) |path| {
+        // Load credentials from file (propagates file system errors)
+        const creds = try creds_auth.loadFile(self.io, path, &creds_buf);
+        jwt_to_send = creds.jwt;
+
+        if (self.server_info.?.nonce) |nonce| {
+            var kp = nkey_auth.KeyPair.fromSeed(creds.seed) catch {
+                return error.InvalidNKeySeed;
+            };
+            defer kp.wipe();
+
+            sig_slice = kp.signEncoded(nonce, &sig_buf);
+            pubkey_slice = kp.publicKey(&pubkey_buf);
+        }
+        // Note: creds_buf contains JWT (not secret) and seed.
+        // Seed is wiped via kp.wipe(). Buffer on stack gets overwritten.
+    } else if (opts.creds) |content| {
+        // Parse credentials from provided content
+        const creds = try creds_auth.parse(content);
+        jwt_to_send = creds.jwt;
+
+        if (self.server_info.?.nonce) |nonce| {
+            var kp = nkey_auth.KeyPair.fromSeed(creds.seed) catch {
+                return error.InvalidNKeySeed;
+            };
+            defer kp.wipe();
+
+            sig_slice = kp.signEncoded(nonce, &sig_buf);
+            pubkey_slice = kp.publicKey(&pubkey_buf);
+        }
+    } else if (opts.nkey_seed) |seed| {
         if (self.server_info.?.nonce) |nonce| {
             var kp = nkey_auth.KeyPair.fromSeed(seed) catch {
                 return error.InvalidNKeySeed;
@@ -812,7 +853,7 @@ fn handshake(
         .headers = opts.headers,
         .no_responders = opts.no_responders,
         .tls_required = opts.tls_required,
-        .jwt = opts.jwt,
+        .jwt = jwt_to_send,
         .nkey = pubkey_slice,
         .sig = sig_slice,
     };

@@ -1,6 +1,6 @@
 //! NATS Integration Tests
 //!
-//! Tests against a real nats-server instance.
+//! Tests against a nats-server instance.
 //! Run with: zig build test-integration
 
 const std = @import("std");
@@ -14,8 +14,10 @@ const ServerManager = utils.ServerManager;
 const test_port = utils.test_port;
 const auth_port = utils.auth_port;
 const nkey_port = utils.nkey_port;
+const jwt_port = utils.jwt_port;
 const test_token = utils.test_token;
 const test_nkey_seed = utils.test_nkey_seed;
+const jwt_config_file = utils.jwt_config_file;
 const reportResult = utils.reportResult;
 const formatUrl = utils.formatUrl;
 const formatAuthUrl = utils.formatAuthUrl;
@@ -66,6 +68,15 @@ pub fn main() !void {
         std.process.exit(1);
     };
 
+    std.debug.print("Starting JWT server on port {d}...\n", .{jwt_port});
+    _ = manager.startServer(allocator, io, .{
+        .port = jwt_port,
+        .config_file = jwt_config_file,
+    }) catch |err| {
+        std.debug.print("Failed to start JWT server: {}\n", .{err});
+        std.process.exit(1);
+    };
+
     io.sleep(.fromMilliseconds(200), .awake) catch {};
 
     std.debug.print("\nRunning tests...\n\n", .{});
@@ -83,7 +94,6 @@ pub fn main() !void {
     }
 }
 
-/// Writes NKey server config file with derived public key.
 fn writeNKeyConfig(io: std.Io) !void {
     const Dir = std.Io.Dir;
 
@@ -111,7 +121,6 @@ fn writeNKeyConfig(io: std.Io) !void {
     try writer.interface.flush();
 }
 
-/// Deletes NKey server config file.
 fn deleteNKeyConfig(io: std.Io) void {
     const Dir = std.Io.Dir;
     Dir.deleteFile(Dir.cwd(), io, nkey_config_path) catch {};

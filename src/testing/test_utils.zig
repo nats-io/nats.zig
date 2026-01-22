@@ -7,16 +7,19 @@ pub const server_manager = @import("server_manager.zig");
 pub const ServerManager = server_manager.ServerManager;
 pub const ServerConfig = server_manager.ServerConfig;
 
-// Test configuration
 pub const test_port: u16 = 14222;
 pub const auth_port: u16 = 14223;
 pub const nkey_port: u16 = 14224;
+pub const jwt_port: u16 = 14225;
 pub const test_token = "test-secret-token";
 pub const test_nkey_seed =
     "SUAMK2FG4MI6UE3ACF3FK3OIQBCEIEZV7NSWFFEW63UXMRLFM2XLAXK4GY";
 pub const test_nkey_seed_file = "/tmp/nats-test-nkey.seed";
+pub const jwt_config_file = "src/testing/configs/jwt.conf";
+pub const test_creds_file = "src/testing/configs/TestUser.creds";
+pub const test_jwt_seed =
+    "SUACH75SWCM5D2JMJM6EKLR2WDARVGZT4QC6LX3AGHSWOMVAKERABBBRWM";
 
-// Test counters (mutable global state for test reporting)
 pub var tests_passed: u32 = 0;
 pub var tests_failed: u32 = 0;
 
@@ -46,13 +49,11 @@ pub fn formatAuthUrl(buf: []u8, port: u16, token: []const u8) []const u8 {
     ) catch "invalid";
 }
 
-/// Resets test counters (useful between test runs).
 pub fn resetCounters() void {
     tests_passed = 0;
     tests_failed = 0;
 }
 
-/// Returns a summary of test results.
 pub fn getSummary() struct { passed: u32, failed: u32, total: u32 } {
     return .{
         .passed = tests_passed,
