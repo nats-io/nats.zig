@@ -15,8 +15,7 @@ const auth_port = utils.auth_port;
 const test_token = utils.test_token;
 const ServerManager = utils.ServerManager;
 
-// Test: Concurrent subscriptions from multiple async operations
-// Verifies SID allocation is safe under concurrent subscribe calls.
+/// Verifies SID allocation is safe under concurrent subscribe calls.
 pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -30,8 +29,6 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Create 10 subscriptions sequentially (to test SID allocation)
-    // In a real concurrent scenario, these would be launched via io.async()
     const NUM_SUBS = 10;
     var subs: [NUM_SUBS]?*nats.Subscription = [_]?*nats.Subscription{null} ** NUM_SUBS;
     var created: u32 = 0;
@@ -54,7 +51,6 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
         created += 1;
     }
 
-    // All 10 subscriptions should be created with unique SIDs
     if (created != NUM_SUBS) {
         var buf: [32]u8 = undefined;
         const detail = std.fmt.bufPrint(&buf, "got {d}/10", .{created}) catch "e";
@@ -62,7 +58,6 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
         return;
     }
 
-    // Verify all SIDs are unique
     var sids: [NUM_SUBS]u64 = undefined;
     for (0..NUM_SUBS) |i| {
         if (subs[i]) |sub| {
@@ -84,8 +79,7 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: Rapid publish operations
-// Verifies publish is safe under rapid consecutive calls.
+/// Verifies publish is safe under rapid consecutive calls.
 pub fn testRapidPublish(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -110,7 +104,6 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
         return;
     };
 
-    // Publish 100 messages as fast as possible (no flush between)
     const NUM_MSGS = 100;
     var published: u32 = 0;
     for (0..NUM_MSGS) |_| {
@@ -133,7 +126,6 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
         return;
     }
 
-    // Receive all messages
     var received: u32 = 0;
     for (0..NUM_MSGS) |_| {
         if (sub.nextWithTimeout(allocator, 100) catch null) |m| {
@@ -151,8 +143,7 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: Concurrent subscribe and unsubscribe
-// Verifies subscribe/unsubscribe interleaving is safe.
+/// Verifies subscribe/unsubscribe interleaving is safe.
 pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -166,19 +157,16 @@ pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Interleave subscribe and unsubscribe operations
     const CYCLES = 20;
     var current_sub: ?*nats.Subscription = null;
 
     for (0..CYCLES) |i| {
-        // Unsubscribe previous if exists
         if (current_sub) |sub| {
             sub.unsubscribe() catch {};
             sub.deinit(allocator);
             current_sub = null;
         }
 
-        // Subscribe to new subject
         var subject_buf: [32]u8 = undefined;
         const subject = std.fmt.bufPrint(
             &subject_buf,
@@ -192,7 +180,6 @@ pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
         };
     }
 
-    // Clean up last subscription
     if (current_sub) |sub| {
         sub.deinit(allocator);
     }
@@ -204,8 +191,7 @@ pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: Message delivery during subscribe
-// Verifies messages published while subscribing are handled correctly.
+/// Verifies messages published while subscribing are handled correctly.
 pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -213,48 +199,39 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Publisher client
     const publisher = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("race_sub_delivery", false, "pub connect failed");
         return;
     };
     defer publisher.deinit(allocator);
 
-    // Subscriber client
     const subscriber = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("race_sub_delivery", false, "sub connect failed");
         return;
     };
     defer subscriber.deinit(allocator);
 
-    // Subscribe
     const sub = subscriber.subscribe(allocator, "race.delivery") catch {
         reportResult("race_sub_delivery", false, "subscribe failed");
         return;
     };
     defer sub.deinit(allocator);
 
-    // Flush immediately (subscribe is in flight)
     subscriber.flush(allocator) catch {};
 
-    // Publish immediately (before subscribe may be registered)
     publisher.publish("race.delivery", "race-msg-1") catch {
         reportResult("race_sub_delivery", false, "publish1 failed");
         return;
     };
     publisher.flush(allocator) catch {};
-
-    // Small delay
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    // Publish again (subscribe should be registered now)
     publisher.publish("race.delivery", "race-msg-2") catch {
         reportResult("race_sub_delivery", false, "publish2 failed");
         return;
     };
     publisher.flush(allocator) catch {};
 
-    // Should receive at least the second message
     var received: u32 = 0;
     for (0..2) |_| {
         if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
@@ -263,7 +240,6 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
         }
     }
 
-    // At minimum, should receive the second message
     if (received >= 1) {
         reportResult("race_sub_delivery", true, "");
     } else {
@@ -271,8 +247,7 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: Unsubscribe while messages are in flight
-// Verifies unsubscribe during message delivery doesn't crash.
+/// Verifies unsubscribe during message delivery doesn't crash.
 pub fn testRaceUnsubscribeVsDelivery(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -300,22 +275,18 @@ pub fn testRaceUnsubscribeVsDelivery(allocator: std.mem.Allocator) void {
         return;
     };
 
-    // Publish many messages
     for (0..50) |_| {
         client.publish("race.unsub", "msg") catch {};
     }
     client.flush(allocator) catch {};
 
-    // Unsubscribe while messages are likely in flight
     sub.unsubscribe() catch {};
 
-    // Publish more (should be dropped, no crash)
     for (0..50) |_| {
         client.publish("race.unsub", "msg") catch {};
     }
     client.flush(allocator) catch {};
 
-    // Connection should still be healthy
     if (client.isConnected()) {
         reportResult("race_unsub_delivery", true, "");
     } else {
@@ -323,8 +294,7 @@ pub fn testRaceUnsubscribeVsDelivery(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: SID allocation after many subscribe/unsubscribe cycles
-// Verifies SID allocation remains consistent after slot recycling.
+/// Verifies SID allocation remains consistent after slot recycling.
 pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -338,11 +308,9 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Track all SIDs seen
     var seen_sids: [100]u64 = undefined;
     var seen_count: usize = 0;
 
-    // Do many subscribe/unsubscribe cycles
     for (0..50) |i| {
         var subject_buf: [32]u8 = undefined;
         const subject = std.fmt.bufPrint(
@@ -356,9 +324,7 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
             return;
         };
 
-        // Record SID
         if (seen_count < seen_sids.len) {
-            // SIDs should always be unique (monotonically increasing)
             for (seen_sids[0..seen_count]) |prev_sid| {
                 if (prev_sid == sub.sid) {
                     reportResult("sid_allocation_recycle", false, "SID reused");
@@ -373,7 +339,6 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
         sub.deinit(allocator);
     }
 
-    // Verify SIDs are monotonically increasing
     for (1..seen_count) |i| {
         if (seen_sids[i] <= seen_sids[i - 1]) {
             reportResult("sid_allocation_recycle", false, "non-monotonic SIDs");
@@ -388,8 +353,7 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: Multiple clients sharing Io
-// Verifies multiple clients can share the same Io.Threaded.
+/// Verifies multiple clients can share the same Io.Threaded.
 pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -397,7 +361,6 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Create 3 clients sharing the same Io
     const client1 = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
         reportResult("multi_client_shared_io", false, "client1 failed");
         return;
@@ -416,7 +379,6 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     };
     defer client3.deinit(allocator);
 
-    // Subscribe on client1
     const sub = client1.subscribe(allocator, "shared.io.test") catch {
         reportResult("multi_client_shared_io", false, "subscribe failed");
         return;
@@ -426,7 +388,6 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     client1.flush(allocator) catch {};
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    // Publish from client2 and client3
     client2.publish("shared.io.test", "from-client2") catch {
         reportResult("multi_client_shared_io", false, "pub2 failed");
         return;
@@ -439,7 +400,6 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     client2.flush(allocator) catch {};
     client3.flush(allocator) catch {};
 
-    // Should receive both messages
     var received: u32 = 0;
     for (0..2) |_| {
         if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
@@ -457,8 +417,7 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: Parallel async receive operations
-// Uses io.async() to receive from multiple subscriptions concurrently.
+/// Uses io.async() to receive from multiple subscriptions concurrently.
 pub fn testParallelAsyncReceive(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -472,7 +431,6 @@ pub fn testParallelAsyncReceive(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Create 3 subscriptions
     const sub1 = client.subscribe(allocator, "parallel.1") catch {
         reportResult("parallel_async_recv", false, "sub1 failed");
         return;
@@ -496,28 +454,23 @@ pub fn testParallelAsyncReceive(allocator: std.mem.Allocator) void {
         return;
     };
 
-    // Publish to all
     client.publish("parallel.1", "msg1") catch {};
     client.publish("parallel.2", "msg2") catch {};
     client.publish("parallel.3", "msg3") catch {};
     client.flush(allocator) catch {};
 
-    // Receive using async/await pattern
     var received: u32 = 0;
 
-    // Receive from sub1
     if (sub1.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);
         received += 1;
     }
 
-    // Receive from sub2
     if (sub2.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);
         received += 1;
     }
 
-    // Receive from sub3
     if (sub3.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);
         received += 1;
@@ -532,8 +485,7 @@ pub fn testParallelAsyncReceive(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: Rapid flush operations
-// Verifies multiple rapid flushes don't cause issues.
+/// Verifies multiple rapid flushes don't cause issues.
 pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -547,7 +499,6 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Many rapid flushes (even without data)
     var success: u32 = 0;
     for (0..50) |_| {
         client.flush(allocator) catch {
@@ -563,7 +514,6 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
         return;
     }
 
-    // Interleave publish and flush
     for (0..50) |_| {
         client.publish("flush.test", "x") catch {};
         client.flush(allocator) catch {};
@@ -576,8 +526,7 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: Stats thread safety
-// Verifies stats are updated correctly under concurrent operations.
+/// Verifies stats are updated correctly under concurrent operations.
 pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -601,14 +550,12 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
 
     const before = client.getStats();
 
-    // Publish 100 messages
     const NUM_MSGS: u64 = 100;
     for (0..NUM_MSGS) |_| {
         client.publish("stats.test", "stat-msg") catch {};
     }
     client.flush(allocator) catch {};
 
-    // Receive all
     for (0..NUM_MSGS) |_| {
         if (sub.nextWithTimeout(allocator, 100) catch null) |m| {
             m.deinit(allocator);
@@ -617,7 +564,6 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
 
     const after = client.getStats();
 
-    // Verify stats increased
     const msgs_out_diff = after.msgs_out - before.msgs_out;
     const msgs_in_diff = after.msgs_in - before.msgs_in;
 

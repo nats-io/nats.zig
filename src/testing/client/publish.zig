@@ -59,8 +59,6 @@ pub fn testClientAsyncPubSub(allocator: std.mem.Allocator) void {
     reportResult("client_async_pubsub", false, "no message received");
 }
 
-// ClientAsync Test 5: Wildcard subscription
-
 pub fn testClientAsyncPublishReply(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -102,8 +100,6 @@ pub fn testClientAsyncPublishReply(allocator: std.mem.Allocator) void {
     reportResult("client_async_pub_reply", false, "no reply_to");
 }
 
-// ClientAsync Test 12: Queue group support
-
 pub fn testAsyncPublishEmptyPayload(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -141,8 +137,6 @@ pub fn testAsyncPublishEmptyPayload(allocator: std.mem.Allocator) void {
 
     reportResult("async_publish_empty_payload", false, "no empty message");
 }
-
-// Test: Publish large payload (within buffer limits)
 
 pub fn testAsyncPublishLargePayload(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
@@ -190,8 +184,6 @@ pub fn testAsyncPublishLargePayload(allocator: std.mem.Allocator) void {
     reportResult("async_publish_large_payload", false, "wrong size");
 }
 
-// Test: Rapid fire publishing
-
 pub fn testAsyncPublishRapidFire(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -205,7 +197,6 @@ pub fn testAsyncPublishRapidFire(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Publish 1000 messages rapidly
     for (0..1000) |_| {
         client.publish("async.rapid", "msg") catch {
             reportResult("async_publish_rapid_fire", false, "pub failed");
@@ -222,8 +213,6 @@ pub fn testAsyncPublishRapidFire(allocator: std.mem.Allocator) void {
     }
 }
 
-// Test: Publish with no subscribers
-
 pub fn testAsyncPublishNoSubscribers(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -237,7 +226,6 @@ pub fn testAsyncPublishNoSubscribers(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Should succeed even with no subscribers
     client.publish("async.nosub", "message") catch {
         reportResult("async_publish_no_subscribers", false, "pub failed");
         return;
@@ -295,13 +283,11 @@ pub fn testPublishBatching(allocator: std.mem.Allocator) void {
     defer sub.deinit(allocator);
     client.flush(allocator) catch {};
 
-    // Publish multiple messages then flush once (batching)
     client.publish("batch.test", "data1") catch {};
     client.publish("batch.test", "data2") catch {};
     client.publish("batch.test", "data3") catch {};
-    client.flush(allocator) catch {}; // Single flush for all
+    client.flush(allocator) catch {};
 
-    // Should receive all messages
     var received: u32 = 0;
     for (0..3) |_| {
         if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
@@ -387,11 +373,10 @@ pub fn testPublishToWildcardFails(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Publishing to wildcard subjects should fail (wildcards are for subscribe)
+    // Wildcards are only valid for subscribe, not publish
     const result1 = client.publish("foo.*", "data");
     const result2 = client.publish("foo.>", "data");
 
-    // Both should fail - wildcards not allowed in publish subjects
     const star_failed = if (result1) |_| false else |_| true;
     const gt_failed = if (result2) |_| false else |_| true;
 

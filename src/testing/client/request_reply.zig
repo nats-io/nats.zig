@@ -27,9 +27,6 @@ pub fn testAsyncRequestMethod(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Verify the request method exists and can be called.
-    // Expected: null (timeout) since no responder exists.
-    // Use a short timeout to keep tests fast
     const result = client.request(
         allocator,
         "nonexistent.service.test",
@@ -40,13 +37,10 @@ pub fn testAsyncRequestMethod(allocator: std.mem.Allocator) void {
         return;
     };
 
-    // Either null (timeout) or a message (if somehow routed) is acceptable
-    // The important thing is that the method works without crashing
     if (result) |msg| {
         msg.deinit(allocator);
     }
 
-    // Test passes if reached here without error
     if (client.isConnected()) {
         reportResult("async_request_method", true, "");
     } else {
@@ -73,7 +67,6 @@ pub fn testAsyncRequestReturns(allocator: std.mem.Allocator) void {
         return;
     };
 
-    // Request to non-existent service with 100ms timeout
     const result = client.request(
         allocator,
         "nonexistent.service.test2",
@@ -96,8 +89,6 @@ pub fn testAsyncRequestReturns(allocator: std.mem.Allocator) void {
         msg.deinit(allocator);
     }
 
-    // Test that the function returns within reasonable time (< 5 seconds)
-    // This verifies the timeout mechanism works, even if not perfectly precise
     if (elapsed_ms < 5000) {
         reportResult("async_request_returns", true, "");
     } else {
@@ -111,9 +102,6 @@ pub fn testAsyncRequestReturns(allocator: std.mem.Allocator) void {
     }
 }
 
-// Drain Tests
-
-/// Test: Drain operation closes connection
 pub fn testAsyncReplyToPreserved(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -176,7 +164,6 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
     };
     defer requester.deinit(allocator);
 
-    // Set up responder subscription
     const sub = responder.subscribe(allocator, "test.service") catch {
         reportResult("request_reply_success", false, "responder sub failed");
         return;
@@ -185,7 +172,6 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
     responder.flush(allocator) catch {};
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    // Start a task to handle the request
     const Handler = struct {
         fn handle(
             r: *nats.Client,
@@ -204,7 +190,6 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
         }
     };
 
-    // Start responder in background
     var handler = io_r.io().async(Handler.handle, .{
         responder,
         sub,
@@ -213,7 +198,6 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
     });
     defer _ = handler.cancel(io_r.io());
 
-    // Send request
     const reply = requester.request(
         allocator,
         "test.service",
@@ -257,7 +241,6 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
     };
     defer client_b.deinit(allocator);
 
-    // B subscribes to service
     const sub = client_b.subscribe(allocator, "cross.service") catch {
         reportResult("cross_client_reqrep", false, "B sub failed");
         return;
@@ -266,7 +249,6 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
     client_b.flush(allocator) catch {};
     io_b.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    // B handles request in background
     const Handler = struct {
         fn handle(
             b: *nats.Client,
@@ -293,7 +275,6 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
     });
     defer _ = handler.cancel(io_b.io());
 
-    // A sends request
     const reply = client_a.request(
         allocator,
         "cross.service",
@@ -336,7 +317,6 @@ pub fn testRequestTimeout(allocator: std.mem.Allocator) void {
         return;
     };
 
-    // Request with 200ms timeout, no responder
     const result = client.request(
         allocator,
         "timeout.service.noexist",
@@ -361,7 +341,6 @@ pub fn testRequestTimeout(allocator: std.mem.Allocator) void {
         return;
     }
 
-    // Should return within reasonable time (less than 5 seconds)
     if (elapsed_ms < 5000) {
         reportResult("request_timeout", true, "");
     } else {
@@ -393,7 +372,6 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
     };
     defer requester.deinit(allocator);
 
-    // Set up responder subscription
     const sub = responder.subscribe(allocator, "large.service") catch {
         reportResult("request_large_payload", false, "responder sub failed");
         return;
@@ -402,7 +380,6 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
     responder.flush(allocator) catch {};
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    // Start a task to handle the request
     const Handler = struct {
         fn handle(
             r: *nats.Client,
@@ -414,7 +391,6 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
             if (s.nextWithTimeout(a, 2000) catch null) |req| {
                 defer req.deinit(a);
                 if (req.reply_to) |reply_inbox| {
-                    // Reply with same size payload
                     r.publish(reply_inbox, req.data) catch {};
                     r.flush(a) catch {};
                 }
@@ -422,7 +398,6 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
         }
     };
 
-    // Start responder in background
     var handler = io_r.io().async(Handler.handle, .{
         responder,
         sub,
@@ -431,7 +406,6 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
     });
     defer _ = handler.cancel(io_r.io());
 
-    // Create 1KB payload
     const payload = allocator.alloc(u8, 1024) catch {
         reportResult("request_large_payload", false, "alloc failed");
         return;
@@ -439,7 +413,6 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
     defer allocator.free(payload);
     @memset(payload, 'X');
 
-    // Send request with large payload
     const reply = requester.request(
         allocator,
         "large.service",
@@ -483,7 +456,6 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
     };
     defer requester.deinit(allocator);
 
-    // Set up responder subscription
     const sub = responder.subscribe(allocator, "multi.service") catch {
         reportResult("multi_requests_seq", false, "responder sub failed");
         return;
@@ -492,7 +464,6 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
     responder.flush(allocator) catch {};
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    // Responder handler - handles multiple requests
     const Handler = struct {
         fn handle(
             r: *nats.Client,
@@ -521,7 +492,6 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
     });
     defer _ = handler.cancel(io_r.io());
 
-    // Send 5 requests sequentially
     var success_count: u32 = 0;
     for (0..5) |_| {
         const reply = requester.request(

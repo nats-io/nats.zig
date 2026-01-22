@@ -27,12 +27,10 @@ pub fn testSubjectTooLong(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Create a subject that exceeds max_subject_len by 1
     const max_len = defaults.Limits.max_subject_len;
     var long_subject: [max_len + 1]u8 = undefined;
     @memset(&long_subject, 'a');
 
-    // Try to subscribe - should fail with SubjectTooLong
     const result = client.subscribe(allocator, &long_subject);
     if (result) |sub| {
         sub.deinit(allocator);
@@ -68,12 +66,10 @@ pub fn testQueueGroupTooLong(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Create a queue group that exceeds max_queue_group_len by 1
     const max_len = defaults.Limits.max_queue_group_len;
     var long_qg: [max_len + 1]u8 = undefined;
     @memset(&long_qg, 'q');
 
-    // Try to subscribe with long queue group - should fail
     const result = client.subscribeQueue(allocator, "test.subject", &long_qg);
     if (result) |sub| {
         sub.deinit(allocator);
@@ -98,7 +94,6 @@ pub fn testUrlTooLong(allocator: std.mem.Allocator) void {
     var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io.deinit();
 
-    // Create a URL that exceeds max_url_len by 1
     const max_len = defaults.Server.max_url_len;
     var long_url: [max_len + 1]u8 = undefined;
     const prefix = "nats://localhost:";
@@ -148,14 +143,12 @@ pub fn testDrainResultIsClean(allocator: std.mem.Allocator) void {
         return;
     };
 
-    // Drain should succeed cleanly
     const result = client.drain(allocator) catch {
         sub.deinit(allocator);
         client.deinit(allocator);
         reportResult("drain_result_clean", false, "drain failed");
         return;
     };
-    // After drain, subscription and client still need deinit
     sub.deinit(allocator);
     client.deinit(allocator);
 
@@ -188,12 +181,10 @@ pub fn testSubjectExactLimit(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Create a subject that's exactly at the limit
     const max_len = defaults.Limits.max_subject_len;
     var subject_max: [max_len]u8 = undefined;
     @memset(&subject_max, 'a');
 
-    // Should succeed - at limit, not over it
     const sub = client.subscribe(allocator, &subject_max) catch {
         reportResult("subject_exact_limit", false, "subscribe failed");
         return;
@@ -219,12 +210,10 @@ pub fn testQueueGroupExactLimit(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Create a queue group that's exactly at the limit
     const max_len = defaults.Limits.max_queue_group_len;
     var qg_max: [max_len]u8 = undefined;
     @memset(&qg_max, 'q');
 
-    // Should succeed - at limit, not over it
     const sub = client.subscribeQueue(allocator, "test.subject", &qg_max) catch {
         reportResult("qg_exact_limit", false, "subscribe failed");
         return;
@@ -250,7 +239,6 @@ pub fn testResetErrorNotifications(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    // Just verify the method can be called without error
     client.resetErrorNotifications();
 
     reportResult("reset_error_notif", true, "");
