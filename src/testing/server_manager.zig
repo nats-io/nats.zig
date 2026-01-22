@@ -106,7 +106,7 @@ pub const ServerInstance = struct {
             io.sleep(.fromMilliseconds(100), .awake) catch {};
             std.debug.print("[SERVER] Server killed, waited 100ms\n", .{});
         } else {
-            std.debug.print("[SERVER] No process to kill!\n", .{});
+            // std.debug.print("[SERVER] No process to kill!\n", .{});
         }
         assert(self.process == null);
     }
