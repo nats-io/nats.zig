@@ -15,9 +15,11 @@ const test_port = utils.test_port;
 const auth_port = utils.auth_port;
 const nkey_port = utils.nkey_port;
 const jwt_port = utils.jwt_port;
+const tls_port = utils.tls_port;
 const test_token = utils.test_token;
 const test_nkey_seed = utils.test_nkey_seed;
 const jwt_config_file = utils.jwt_config_file;
+const tls_config_file = utils.tls_config_file;
 const reportResult = utils.reportResult;
 const formatUrl = utils.formatUrl;
 const formatAuthUrl = utils.formatAuthUrl;
@@ -74,6 +76,15 @@ pub fn main() !void {
         .config_file = jwt_config_file,
     }) catch |err| {
         std.debug.print("Failed to start JWT server: {}\n", .{err});
+        std.process.exit(1);
+    };
+
+    std.debug.print("Starting TLS server on port {d}...\n", .{tls_port});
+    _ = manager.startServer(allocator, io, .{
+        .port = tls_port,
+        .config_file = tls_config_file,
+    }) catch |err| {
+        std.debug.print("Failed to start TLS server: {}\n", .{err});
         std.process.exit(1);
     };
 

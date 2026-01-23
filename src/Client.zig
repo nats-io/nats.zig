@@ -17,6 +17,8 @@ const Allocator = std.mem.Allocator;
 
 const Io = std.Io;
 const net = Io.net;
+const tls = std.crypto.tls;
+const Certificate = std.crypto.Certificate;
 
 const protocol = @import("protocol.zig");
 const Parser = protocol.Parser;
@@ -115,6 +117,20 @@ pub const Options = struct {
     no_responders: bool = true,
     /// Require TLS connection.
     tls_required: bool = false,
+
+    // TLS OPTIONS
+
+    /// Path to CA certificate file (PEM). Null = use system CAs.
+    tls_ca_file: ?[]const u8 = null,
+    /// Path to client certificate file for mTLS (PEM).
+    tls_cert_file: ?[]const u8 = null,
+    /// Path to client private key file for mTLS (PEM).
+    tls_key_file: ?[]const u8 = null,
+    /// Skip server certificate verification (INSECURE - testing only).
+    tls_insecure_skip_verify: bool = false,
+    /// Perform TLS handshake before NATS protocol (required by some proxies).
+    tls_handshake_first: bool = false,
+
     /// NKey seed for authentication.
     nkey_seed: ?[]const u8 = null,
     /// NKey seed file path (alternative to nkey_seed).
@@ -177,7 +193,7 @@ pub const Options = struct {
     event_handler: ?EventHandler = null,
 };
 
-/// Connection statistics (Go client parity).
+/// Connection statistics
 /// Thread ownership: io_task exclusively writes msgs_in/bytes_in,
 /// main thread exclusively writes msgs_out/bytes_out. No concurrent
 /// modifications to same counter, so atomics are not needed.
@@ -195,7 +211,7 @@ pub const Stats = struct {
 };
 
 /// Debug counters for io_task buffer operations.
-/// Only incremented when dbg.enabled (debug builds).
+/// Only incremented when dbg.enabled.
 /// Written exclusively by io_task thread, safe to read after deinit.
 pub const IoTaskStats = struct {
     /// Number of tryFillBuffer() calls.
@@ -209,7 +225,7 @@ pub const IoTaskStats = struct {
 };
 
 /// Subscription backup for restoration after reconnect.
-/// Stores essential subscription state with inline buffers (no allocation).
+/// Stores essential subscription state with inline buffers.
 pub const SubBackup = struct {
     sid: u64 = 0,
     subject_buf: [256]u8 = undefined,
@@ -229,7 +245,7 @@ pub const SubBackup = struct {
     }
 };
 
-/// Result of drain operation for visibility into cleanup quality.
+/// Result of drain operation.
 pub const DrainResult = struct {
     /// Count of UNSUB commands that failed to encode.
     unsub_failures: u16 = 0,
@@ -255,6 +271,7 @@ pub const ParsedUrl = struct {
     port: u16,
     user: ?[]const u8,
     pass: ?[]const u8,
+    use_tls: bool,
 };
 
 /// Fixed subscription limits (from defaults.zig).
@@ -268,12 +285,16 @@ comptime {
     assert(SIDMAP_CAPACITY >= MAX_SUBSCRIPTIONS);
 }
 
-/// Parses a NATS URL like nats://user:pass@host:port
+/// Parses a NATS URL like nats://user:pass@host:port or tls://host:port
 pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     if (url.len == 0) return error.InvalidUrl;
     var remaining = url;
+    var use_tls = false;
 
-    if (std.mem.startsWith(u8, remaining, "nats://")) {
+    if (std.mem.startsWith(u8, remaining, "tls://")) {
+        remaining = remaining[6..];
+        use_tls = true;
+    } else if (std.mem.startsWith(u8, remaining, "nats://")) {
         remaining = remaining[7..];
     }
 
@@ -313,6 +334,7 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
         .port = port,
         .user = user,
         .pass = pass,
+        .use_tls = use_tls,
     };
 }
 
@@ -323,6 +345,10 @@ io: Io,
 stream: net.Stream,
 reader: net.Stream.Reader,
 writer: net.Stream.Writer,
+/// Active reader interface (TCP or TLS). Set once at connection, used by io_task.
+active_reader: *Io.Reader = undefined,
+/// Active writer interface (TCP or TLS). Set once at connection, used by io_task.
+active_writer: *Io.Writer = undefined,
 options: Options,
 
 read_buffer: []u8,
@@ -349,10 +375,10 @@ tcp_rcvbuf_set: bool = false,
 // Fast path cache for single-subscription case
 cached_sub: ?*Sub = null,
 
-// Cached max_payload from server_info (avoids optional unwrap in hot path)
+// Cached max_payload from server_info
 max_payload: usize = 1024 * 1024,
 
-// Slab allocator for message buffers (~26 MB pre-allocated)
+// Slab allocator for message buffers
 tiered_slab: TieredSlab = undefined,
 
 // Return queue for cross-thread buffer deallocation (main -> reader thread)
@@ -407,6 +433,22 @@ callback_task_future: ?Io.Future(void) = null,
 event_handler: ?EventHandler = null,
 /// Flag to track if lame duck event has been fired.
 lame_duck_notified: bool = false,
+
+// TLS state
+/// TLS client instance (owns decryption state).
+tls_client: ?tls.Client = null,
+/// TLS read buffer (must be at least tls.Client.min_buffer_len).
+tls_read_buffer: ?[]u8 = null,
+/// TLS write buffer (must be at least tls.Client.min_buffer_len).
+tls_write_buffer: ?[]u8 = null,
+/// CA certificate bundle for verification.
+ca_bundle: ?Certificate.Bundle = null,
+/// Whether TLS is enabled for this connection.
+use_tls: bool = false,
+/// Host for TLS SNI and certificate verification.
+tls_host: [256]u8 = undefined,
+/// Length of tls_host.
+tls_host_len: u8 = 0,
 
 /// Connects to a NATS server.
 ///
@@ -470,6 +512,25 @@ pub fn connect(
     client.event_handler = opts.event_handler;
     client.lame_duck_notified = false;
 
+    // Initialize TLS state
+    client.tls_client = null;
+    client.tls_read_buffer = null;
+    client.tls_write_buffer = null;
+    client.ca_bundle = null;
+    // Determine if TLS should be used: URL scheme, explicit option, or CA file set
+    client.use_tls = parsed.use_tls or opts.tls_required or
+        opts.tls_ca_file != null or opts.tls_handshake_first;
+    client.tls_host = undefined;
+    client.tls_host_len = 0;
+
+    // Store host for TLS SNI and certificate verification
+    if (client.use_tls) {
+        if (parsed.host.len > 255) return error.HostTooLong;
+        const host_len: u8 = @intCast(parsed.host.len);
+        @memcpy(client.tls_host[0..host_len], parsed.host);
+        client.tls_host_len = host_len;
+    }
+
     // Initialize slab allocator (critical for O(1) message allocation)
     client.tiered_slab = TieredSlab.init(allocator) catch |err| {
         allocator.destroy(client);
@@ -493,6 +554,10 @@ pub fn connect(
         if (client.server_info) |*info| {
             info.deinit(allocator);
         }
+        // TLS cleanup
+        if (client.tls_read_buffer) |buf| allocator.free(buf);
+        if (client.tls_write_buffer) |buf| allocator.free(buf);
+        if (client.ca_bundle) |*bundle| bundle.deinit(allocator);
         allocator.destroy(client);
     }
 
@@ -551,6 +616,9 @@ pub fn connect(
     client.io = io;
     client.reader = client.stream.reader(io, client.read_buffer);
     client.writer = client.stream.writer(io, client.write_buffer);
+    // Default to TCP reader/writer (updated by upgradeTls if TLS is used)
+    client.active_reader = &client.reader.interface;
+    client.active_writer = &client.writer.interface;
     client.options = opts;
 
     client.sidmap_keys = undefined;
@@ -560,7 +628,14 @@ pub fn connect(
         client.free_slots[i] = @intCast(MAX_SUBSCRIPTIONS - 1 - i);
     }
 
+    // TLS-first mode: upgrade to TLS before NATS protocol
+    if (client.use_tls and opts.tls_handshake_first) {
+        try client.upgradeTls(allocator, opts);
+    }
+
     try client.handshake(allocator, opts, parsed);
+    // Note: TLS upgrade (if needed) now happens inside handshake(),
+    // between receiving INFO and sending CONNECT per NATS protocol.
 
     assert(url.len <= defaults.Server.max_url_len);
     const url_len: u8 = @intCast(url.len);
@@ -621,7 +696,10 @@ pub fn connect(
             callbackTaskFn,
             .{client},
         ) catch blk: {
-            dbg.print("WARNING: callback concurrent() failed, using async()", .{});
+            dbg.print(
+                "WARNING: callback concurrent() failed, using async()",
+                .{},
+            );
             break :blk io.async(callbackTaskFn, .{client});
         };
 
@@ -707,6 +785,95 @@ fn callbackTaskFn(client: *Client) void {
     dbg.print("callback_task: EXITED (state closed)", .{});
 }
 
+/// Upgrades the connection to TLS.
+/// Allocates TLS buffers, loads CA certificates, and performs handshake.
+fn upgradeTls(
+    self: *Client,
+    allocator: Allocator,
+    opts: Options,
+) !void {
+    assert(self.use_tls);
+    assert(self.tls_client == null);
+    assert(self.tls_host_len > 0);
+
+    // Allocate TLS buffers if not already done
+    if (self.tls_read_buffer == null) {
+        self.tls_read_buffer =
+            try allocator.alloc(u8, defaults.Tls.buffer_size);
+    }
+    errdefer if (self.tls_read_buffer) |buf| {
+        allocator.free(buf);
+        self.tls_read_buffer = null;
+    };
+
+    if (self.tls_write_buffer == null) {
+        self.tls_write_buffer =
+            try allocator.alloc(u8, defaults.Tls.buffer_size);
+    }
+    errdefer if (self.tls_write_buffer) |buf| {
+        allocator.free(buf);
+        self.tls_write_buffer = null;
+    };
+
+    // Load CA bundle (unless insecure mode)
+    if (!opts.tls_insecure_skip_verify) {
+        if (self.ca_bundle == null) {
+            self.ca_bundle = .{};
+        }
+        const now = try Io.Clock.real.now(self.io);
+        if (opts.tls_ca_file) |ca_path| {
+            // Load custom CA bundle from file (propagates file system errors)
+            try self.ca_bundle.?.addCertsFromFilePathAbsolute(
+                allocator,
+                self.io,
+                now,
+                ca_path,
+            );
+        } else {
+            // Use system CAs
+            try self.ca_bundle.?.rescan(allocator, self.io, now);
+        }
+    }
+
+    // Generate entropy for TLS handshake
+    var entropy: [tls.Client.Options.entropy_len]u8 = undefined;
+    self.io.randomSecure(&entropy) catch {
+        self.io.random(&entropy);
+    };
+
+    // Get current timestamp for certificate validation
+    const now = try Io.Clock.real.now(self.io);
+
+    // Build TLS options with inline unions
+    const tls_opts: tls.Client.Options = .{
+        .host = if (opts.tls_insecure_skip_verify)
+            .no_verification
+        else
+            .{ .explicit = self.tls_host[0..self.tls_host_len] },
+        .ca = if (opts.tls_insecure_skip_verify)
+            .no_verification
+        else
+            .{ .bundle = self.ca_bundle.? },
+        .read_buffer = self.tls_read_buffer.?,
+        .write_buffer = self.tls_write_buffer.?,
+        .entropy = &entropy,
+        .realtime_now_seconds = now.toSeconds(),
+    };
+
+    // Perform TLS handshake (propagates TLS errors)
+    self.tls_client = try tls.Client.init(
+        &self.reader.interface,
+        &self.writer.interface,
+        tls_opts,
+    );
+
+    // Update active reader/writer to TLS (no branching in io_task hot path)
+    self.active_reader = &self.tls_client.?.reader;
+    self.active_writer = &self.tls_client.?.writer;
+
+    dbg.print("TLS handshake completed", .{});
+}
+
 /// Performs NATS handshake (INFO/CONNECT exchange).
 fn handshake(
     self: *Client,
@@ -718,11 +885,13 @@ fn handshake(
     assert(self.state == .connecting or self.state == .reconnecting);
     assert(parsed.host.len > 0);
 
-    const reader = &self.reader.interface;
-    const writer = &self.writer.interface;
+    // Use active reader (TLS or TCP depending on connection state)
+    // Note: writer is fetched later after potential TLS upgrade
+    const reader = self.active_reader;
 
     // Read INFO from server with connection timeout
-    const info_data = try self.peekWithTimeout(reader, opts.connect_timeout_ns);
+    const info_data =
+        try self.peekWithTimeout(reader, opts.connect_timeout_ns);
 
     var consumed: usize = 0;
     const cmd = self.parser.parse(allocator, info_data, &consumed) catch {
@@ -749,7 +918,20 @@ fn handshake(
         return error.NoInfoReceived;
     }
 
-    // Send CONNECT
+    // TLS upgrade: after INFO, before CONNECT (per NATS protocol)
+    // Server sends INFO in plain text, then expects TLS handshake if required
+    if (self.use_tls and self.tls_client == null) {
+        const server_tls =
+            if (self.server_info) |info| info.tls_required else false;
+        if (server_tls or opts.tls_required or opts.tls_ca_file != null) {
+            try self.upgradeTls(allocator, opts);
+        }
+    }
+
+    // Send CONNECT (now over TLS if upgraded)
+    // Re-fetch writer since TLS upgrade may have changed active_writer
+    const writer_for_connect = self.active_writer;
+
     const pass = opts.pass orelse parsed.pass;
     var user = opts.user orelse parsed.user;
     var auth_token = opts.auth_token;
@@ -858,11 +1040,11 @@ fn handshake(
         .sig = sig_slice,
     };
 
-    protocol.Encoder.encodeConnect(writer, connect_opts) catch {
+    protocol.Encoder.encodeConnect(writer_for_connect, connect_opts) catch {
         return error.EncodingFailed;
     };
 
-    writer.flush() catch {
+    writer_for_connect.flush() catch {
         return error.WriteFailed;
     };
 
@@ -876,7 +1058,7 @@ fn handshake(
 fn checkAuthRejection(self: *Client) !void {
     assert(self.state == .connected);
 
-    const reader = &self.reader.interface;
+    const reader = self.active_reader;
 
     // Brief sleep to allow server to respond with -ERR if auth fails
     self.io.sleep(.fromMilliseconds(100), .awake) catch {};
@@ -1011,7 +1193,9 @@ pub fn subscribeQueue(
     if (queue_group) |qg| try pubsub.validateQueueGroup(qg);
 
     // Validate lengths for backup buffer compatibility
-    if (subject.len > defaults.Limits.max_subject_len) return error.SubjectTooLong;
+    if (subject.len > defaults.Limits.max_subject_len)
+        return error.SubjectTooLong;
+
     if (queue_group) |qg| {
         if (qg.len > defaults.Limits.max_queue_group_len) {
             return error.QueueGroupTooLong;
@@ -1078,7 +1262,7 @@ pub fn subscribeQueue(
     self.sub_ptrs[slot_idx] = sub;
     self.cached_sub = sub;
 
-    const writer = &self.writer.interface;
+    const writer = self.active_writer;
     protocol.Encoder.encodeSub(writer, .{
         .subject = subject,
         .queue_group = queue_group,
@@ -1123,7 +1307,7 @@ pub fn publish(
     try self.write_mutex.lock(self.io);
     defer self.write_mutex.unlock(self.io);
 
-    const writer = &self.writer.interface;
+    const writer = self.active_writer;
     protocol.Encoder.encodePub(writer, .{
         .subject = subject,
         .reply_to = null,
@@ -1157,7 +1341,7 @@ pub fn publishRequest(
     try self.write_mutex.lock(self.io);
     defer self.write_mutex.unlock(self.io);
 
-    const writer = &self.writer.interface;
+    const writer = self.active_writer;
     protocol.Encoder.encodePub(writer, .{
         .subject = subject,
         .reply_to = reply_to,
@@ -1199,7 +1383,7 @@ pub fn publishWithHeaders(
     try self.write_mutex.lock(self.io);
     defer self.write_mutex.unlock(self.io);
 
-    const writer = &self.writer.interface;
+    const writer = self.active_writer;
     protocol.Encoder.encodeHPubWithEntries(writer, .{
         .subject = subject,
         .reply_to = null,
@@ -1245,7 +1429,7 @@ pub fn publishRequestWithHeaders(
     try self.write_mutex.lock(self.io);
     defer self.write_mutex.unlock(self.io);
 
-    const writer = &self.writer.interface;
+    const writer = self.active_writer;
     protocol.Encoder.encodeHPubWithEntries(writer, .{
         .subject = subject,
         .reply_to = reply_to,
@@ -1363,7 +1547,13 @@ pub fn flush(self: *Client, allocator: Allocator) !void {
 
     try self.write_mutex.lock(self.io);
     defer self.write_mutex.unlock(self.io);
-    self.writer.interface.flush() catch return error.WriteFailed;
+    self.active_writer.flush() catch return error.WriteFailed;
+
+    // TLS: active_writer.flush() only encrypts to TCP buffer.
+    // Must also flush the underlying TCP writer to send to network.
+    if (self.use_tls) {
+        self.writer.interface.flush() catch return error.WriteFailed;
+    }
 }
 
 /// Sends a request and waits for a reply with timeout.
@@ -1507,7 +1697,7 @@ pub fn drain(self: *Client, alloc: Allocator) !DrainResult {
     assert(self.next_sid >= 1);
 
     var result: DrainResult = .{};
-    const writer = &self.writer.interface;
+    const writer = self.active_writer;
 
     // Acquire mutex for subscription cleanup (prevents races with next())
     self.read_mutex.lockUncancelable(self.io);
@@ -1596,6 +1786,12 @@ pub fn getServerInfo(self: *const Client) ?*const ServerInfo {
     return null;
 }
 
+/// Returns true if connection is using TLS.
+pub fn isTls(self: *const Client) bool {
+    assert(self.next_sid >= 1);
+    return self.use_tls;
+}
+
 /// Returns true if TCP_NODELAY was successfully set.
 pub fn isTcpNoDelaySet(self: *const Client) bool {
     return self.tcp_nodelay_set;
@@ -1636,7 +1832,7 @@ pub inline fn getSubscriptionBySid(self: *Client, sid: u64) ?*Sub {
 /// Sends PONG response.
 fn sendPong(self: *Client) !void {
     assert(self.state.canSend());
-    const writer = &self.writer.interface;
+    const writer = self.active_writer;
     writer.writeAll("PONG\r\n") catch {
         return error.WriteFailed;
     };
@@ -1648,7 +1844,7 @@ fn sendPong(self: *Client) !void {
 /// Sends PING for health check.
 fn sendPing(self: *Client) !void {
     assert(self.state == .connected);
-    const writer = &self.writer.interface;
+    const writer = self.active_writer;
     writer.writeAll("PING\r\n") catch {
         return error.WriteFailed;
     };
@@ -1677,7 +1873,8 @@ pub fn checkHealthAndDetectStale(self: *Client) bool {
     if (self.state != .connected) return false;
 
     const now_ns = getNowNs() catch return false;
-    const interval_ns: u64 = @as(u64, self.options.ping_interval_ms) * 1_000_000;
+    const interval_ns: u64 =
+        @as(u64, self.options.ping_interval_ms) * 1_000_000;
 
     // Check if too many PINGs outstanding (connection stale)
     const outstanding = self.pings_outstanding.load(.monotonic);
@@ -1692,7 +1889,10 @@ pub fn checkHealthAndDetectStale(self: *Client) bool {
     // Check if it's time to send PING
     const last_ping = self.last_ping_sent_ns.load(.monotonic);
     if (now_ns - last_ping >= interval_ns) {
-        dbg.print("[HEALTH] Sending PING, pings_outstanding={d}", .{outstanding});
+        dbg.print(
+            "[HEALTH] Sending PING, pings_outstanding={d}",
+            .{outstanding},
+        );
         self.sendPing() catch |err| {
             dbg.print("[HEALTH] PING failed: {s}", .{@errorName(err)});
             // Write failure indicates disconnection
@@ -1791,6 +1991,21 @@ pub fn deinit(self: *Client, alloc: Allocator) void {
     // Free pending buffer
     self.deinitPendingBuffer(alloc);
 
+    // Free TLS resources
+    self.tls_client = null;
+    if (self.tls_read_buffer) |buf| {
+        alloc.free(buf);
+        self.tls_read_buffer = null;
+    }
+    if (self.tls_write_buffer) |buf| {
+        alloc.free(buf);
+        self.tls_write_buffer = null;
+    }
+    if (self.ca_bundle) |*bundle| {
+        bundle.deinit(alloc);
+        self.ca_bundle = null;
+    }
+
     alloc.free(self.read_buffer);
     alloc.free(self.write_buffer);
     alloc.destroy(self);
@@ -1859,7 +2074,7 @@ pub fn backupSubscriptions(self: *Client) error{SubjectTooLong}!void {
 pub fn restoreSubscriptions(self: *Client) !void {
     if (self.sub_backup_count == 0) return;
 
-    const writer = &self.writer.interface;
+    const writer = self.active_writer;
 
     for (self.sub_backups[0..self.sub_backup_count]) |*backup| {
         if (backup.sid == 0) continue;
@@ -1945,10 +2160,10 @@ fn flushPendingBuffer(self: *Client) !void {
     if (self.pending_buffer_pos == 0) return;
 
     const buf = self.pending_buffer orelse return;
-    self.writer.interface.writeAll(buf[0..self.pending_buffer_pos]) catch {
+    self.active_writer.writeAll(buf[0..self.pending_buffer_pos]) catch {
         return error.WriteFailed;
     };
-    self.writer.interface.flush() catch return error.WriteFailed;
+    self.active_writer.flush() catch return error.WriteFailed;
     self.pending_buffer_pos = 0;
     dbg.pendingBuffer("FLUSHED", 0, self.pending_buffer_capacity);
 }
@@ -1960,6 +2175,9 @@ fn cleanupForReconnect(self: *Client) void {
 
     // Close old stream
     self.stream.close(self.io);
+
+    // Reset TLS state (reuse buffers and CA bundle)
+    self.tls_client = null;
 
     // Clear server info (will be refreshed on reconnect)
     // Don't free - server sends new info on reconnect
@@ -2013,16 +2231,35 @@ pub fn tryConnect(
     // Reinitialize reader/writer with existing buffers
     self.reader = self.stream.reader(self.io, self.read_buffer);
     self.writer = self.stream.writer(self.io, self.write_buffer);
+    // Reset to TCP reader/writer (upgradeTls will update if needed)
+    self.active_reader = &self.reader.interface;
+    self.active_writer = &self.writer.interface;
 
-    // Parse URL to get auth info
+    // Parse URL to get auth info and TLS flag
     const parsed = parseUrl(server.getUrl()) catch ParsedUrl{
         .host = host,
         .port = port,
         .user = null,
         .pass = null,
+        .use_tls = self.use_tls,
     };
 
-    // Perform handshake
+    // Update TLS host for reconnection (server might have different hostname)
+    if (self.use_tls) {
+        const actual_host = server.getHost();
+        if (actual_host.len > 0 and actual_host.len <= 255) {
+            const host_len: u8 = @intCast(actual_host.len);
+            @memcpy(self.tls_host[0..host_len], actual_host);
+            self.tls_host_len = host_len;
+        }
+    }
+
+    // TLS-first mode: upgrade to TLS before NATS protocol
+    if (self.use_tls and self.options.tls_handshake_first) {
+        try self.upgradeTls(allocator, self.options);
+    }
+
+    // Perform handshake (includes TLS upgrade after INFO if needed)
     try self.handshake(allocator, self.options, parsed);
 
     // Initialize health check timestamps (atomics)
@@ -2420,7 +2657,10 @@ pub const Subscription = struct {
         // Ensure unsubscribed (errors ignored - like Rust Drop)
         if (self.state != .unsubscribed) {
             self.unsubscribe() catch |err| {
-                dbg.print("deinit: unsubscribe failed: {s}", .{@errorName(err)});
+                dbg.print(
+                    "deinit: unsubscribe failed: {s}",
+                    .{@errorName(err)},
+                );
             };
         }
 
@@ -2446,6 +2686,7 @@ test "parse url" {
         try std.testing.expectEqualSlices(u8, "localhost", parsed.host);
         try std.testing.expectEqual(@as(u16, 4222), parsed.port);
         try std.testing.expect(parsed.user == null);
+        try std.testing.expect(!parsed.use_tls);
     }
 
     {
@@ -2454,18 +2695,46 @@ test "parse url" {
         try std.testing.expectEqual(@as(u16, 4222), parsed.port);
         try std.testing.expectEqualSlices(u8, "user", parsed.user.?);
         try std.testing.expectEqualSlices(u8, "pass", parsed.pass.?);
+        try std.testing.expect(!parsed.use_tls);
     }
 
     {
         const parsed = try parseUrl("localhost");
         try std.testing.expectEqualSlices(u8, "localhost", parsed.host);
         try std.testing.expectEqual(@as(u16, 4222), parsed.port);
+        try std.testing.expect(!parsed.use_tls);
     }
 
     {
         const parsed = try parseUrl("127.0.0.1:4223");
         try std.testing.expectEqualSlices(u8, "127.0.0.1", parsed.host);
         try std.testing.expectEqual(@as(u16, 4223), parsed.port);
+        try std.testing.expect(!parsed.use_tls);
+    }
+}
+
+test "parse url tls scheme" {
+    {
+        const parsed = try parseUrl("tls://secure.example.com:4222");
+        try std.testing.expectEqualSlices(u8, "secure.example.com", parsed.host);
+        try std.testing.expectEqual(@as(u16, 4222), parsed.port);
+        try std.testing.expect(parsed.use_tls);
+    }
+
+    {
+        const parsed = try parseUrl("tls://user:pass@secure.example.com:4222");
+        try std.testing.expectEqualSlices(u8, "secure.example.com", parsed.host);
+        try std.testing.expectEqual(@as(u16, 4222), parsed.port);
+        try std.testing.expectEqualSlices(u8, "user", parsed.user.?);
+        try std.testing.expectEqualSlices(u8, "pass", parsed.pass.?);
+        try std.testing.expect(parsed.use_tls);
+    }
+
+    {
+        const parsed = try parseUrl("tls://localhost");
+        try std.testing.expectEqualSlices(u8, "localhost", parsed.host);
+        try std.testing.expectEqual(@as(u16, 4222), parsed.port);
+        try std.testing.expect(parsed.use_tls);
     }
 }
 

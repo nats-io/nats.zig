@@ -27,6 +27,7 @@ pub const error_handling = @import("error_handling.zig");
 pub const headers = @import("headers.zig");
 pub const nkey = @import("nkey.zig");
 pub const jwt = @import("jwt.zig");
+pub const tls = @import("tls.zig");
 
 /// Runs all async client tests.
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -48,6 +49,7 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     concurrency.runAll(allocator);
     nkey.runAll(allocator);
     jwt.runAll(allocator);
+    tls.runAll(allocator, manager);
     reconnect.runAll(allocator, manager);
     error_handling.runAll(allocator);
     headers.runAll(allocator);

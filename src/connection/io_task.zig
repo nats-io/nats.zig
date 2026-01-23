@@ -203,17 +203,74 @@ inline fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
     return .no_data;
 }
 
-/// Try to fill buffer without blocking forever (cross-platform).
+/// Try to fill buffer without blocking forever.
 /// Uses poll() to check for data, then fillMore() to read.
+/// For TLS: loops until we get decrypted data or no more TCP data available.
+/// This handles TLS record fragmentation where a record spans multiple TCP segments.
 inline fn tryFillBuffer(client: *Client) ReadResult {
     if (dbg.enabled) client.io_task_stats.fill_calls += 1;
     // HOT PATH: Non-atomic read - see module doc "State checks (hot path)"
     if (client.state == .closed) return .canceled;
 
-    const reader = &client.reader.interface;
-
-    // Cross-platform poll to check if socket has data or disconnect
+    const reader = client.active_reader;
     const fd = client.stream.socket.handle;
+    const before = reader.buffered().len;
+    if (dbg.enabled) client.io_task_stats.fill_buffered_hits += before;
+
+    // TLS: loop until we decrypt data or truly no more data available.
+    // Key insight: encrypted data may be in TCP reader's buffer (not socket).
+    // After TLS decrypts one record, more encrypted records may remain in the
+    // TCP buffer. poll() only sees the socket, not the TCP reader's buffer!
+    // So we must: 1) check TCP buffer first, 2) only poll if TCP buffer empty.
+    if (client.use_tls) {
+        while (true) {
+            if (client.state == .closed) return .canceled;
+
+            // Check if TCP reader has buffered encrypted data (poll can't see this)
+            const tcp_buffered = client.reader.interface.buffered().len;
+
+            if (tcp_buffered == 0) {
+                // TCP buffer empty - poll socket for more encrypted data
+                const poll_result = pollForData(fd, POLL_TIMEOUT_MS);
+                if (poll_result == .disconnected) return .disconnected;
+                if (poll_result == .no_data) {
+                    if (dbg.enabled)
+                        client.io_task_stats.fill_poll_timeouts += 1;
+                    // No more data anywhere - return what we have
+                    return if (reader.buffered().len > before)
+                        .progress
+                    else
+                        .no_progress;
+                }
+            }
+            // Either TCP buffer has data, or poll said socket has data
+
+            reader.fillMore() catch |err| {
+                if (err == error.Canceled) return .canceled;
+                if (err == error.EndOfStream or
+                    err == error.ConnectionResetByPeer or
+                    err == error.BrokenPipe or
+                    err == error.NotOpenForReading)
+                {
+                    return .disconnected;
+                }
+                // Other errors: check if we made progress before failing
+                return if (reader.buffered().len > before)
+                    .progress
+                else
+                    .no_progress;
+            };
+
+            // Got decrypted data - success
+            if (reader.buffered().len > before) {
+                if (dbg.enabled) client.io_task_stats.fill_read_success += 1;
+                return .progress;
+            }
+            // No decrypted data yet - TLS needs more data, loop
+        }
+    }
+
+    // Non-TLS: simple poll + read
     const poll_result = pollForData(fd, POLL_TIMEOUT_MS);
 
     if (poll_result == .disconnected) {
@@ -224,11 +281,7 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
         return .no_progress;
     }
 
-    const before = reader.buffered().len;
-    if (dbg.enabled) client.io_task_stats.fill_buffered_hits += before;
-
     // Re-check state before read (race with deinit closing socket)
-    // HOT PATH: Non-atomic read - see module doc "State checks (hot path)"
     if (client.state == .closed) return .canceled;
 
     // Socket has data → fillMore() will return immediately
@@ -259,7 +312,7 @@ inline fn tryRouteBufferedMessages(
     client: *Client,
     allocator: Allocator,
 ) ReadResult {
-    const reader = &client.reader.interface;
+    const reader = client.active_reader;
     const slab = &client.tiered_slab;
 
     // HOT PATH: Non-atomic read - see module doc "State checks (hot path)"
@@ -277,7 +330,7 @@ inline fn tryRouteBufferedMessages(
             &consumed,
         ) catch {
             // Scan to next CRLF for recovery (skip corrupted data)
-            // Uses SIMD on supported platforms - faster than byte-by-byte
+            // Uses SIMD on supported platforms
             if (std.mem.indexOf(u8, data[offset..], "\r\n")) |crlf_pos| {
                 const bytes_skipped = crlf_pos + 2;
                 offset += bytes_skipped;
@@ -322,10 +375,10 @@ inline fn tryRouteBufferedMessages(
                     client.write_mutex.lock(client.io) catch
                         return .disconnected;
                     defer client.write_mutex.unlock(client.io);
-                    client.writer.interface.writeAll("PONG\r\n") catch {
+                    client.active_writer.writeAll("PONG\r\n") catch {
                         return .disconnected;
                     };
-                    client.writer.interface.flush() catch return .disconnected;
+                    client.active_writer.flush() catch return .disconnected;
                 },
                 .pong => {
                     dbg.print("Got PONG, resetting pings_outstanding", .{});

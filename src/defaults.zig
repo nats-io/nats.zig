@@ -147,3 +147,10 @@ pub const ErrorReporting = struct {
     /// This prevents event queue flooding during sustained error conditions.
     pub const notify_interval_msgs: u64 = 100_000;
 };
+
+/// TLS configuration.
+pub const Tls = struct {
+    /// TLS read/write buffer size (must be >= tls.Client.min_buffer_len).
+    /// Using 32KB for good performance.
+    pub const buffer_size: usize = 32 * 1024;
+};

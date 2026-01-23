@@ -681,6 +681,82 @@ When multiple auth options are set:
 
 ---
 
+## TLS/SSL
+
+Secure connections using native Zig TLS
+
+### Enabling TLS
+
+Three ways to enable TLS:
+
+```zig
+// 1. URL scheme (recommended)
+const client = try nats.Client.connect(allocator, io, "tls://localhost:4443", .{});
+
+// 2. Explicit option
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4443", .{
+    .tls_required = true,
+});
+
+// 3. Automatic - if server requires TLS, client upgrades automatically
+```
+
+### TLS Options
+
+```zig
+const client = try nats.Client.connect(allocator, io, "tls://localhost:4443", .{
+    // Server certificate verification (production)
+    .tls_ca_file = "/path/to/ca.pem",         // CA certificate file
+
+    // Skip verification (development only!)
+    .tls_insecure_skip_verify = true,         // Trust any server cert
+
+    // TLS-first handshake (for TLS-terminating proxies)
+    .tls_handshake_first = true,              // TLS before NATS protocol
+});
+```
+
+### Mutual TLS (mTLS)
+
+For client certificate authentication:
+
+```zig
+const client = try nats.Client.connect(allocator, io, "tls://localhost:4443", .{
+    .tls_ca_file = "/path/to/ca.pem",         // Server CA
+    .tls_cert_file = "/path/to/client.pem",   // Client certificate
+    .tls_key_file = "/path/to/client-key.pem", // Client private key
+});
+```
+
+### Checking TLS Status
+
+```zig
+const client = try nats.Client.connect(allocator, io, url, .{});
+
+if (client.isTls()) {
+    std.debug.print("Connection is encrypted\n", .{});
+}
+
+// Server TLS info (from INFO message)
+if (client.getServerInfo()) |info| {
+    std.debug.print("Server requires TLS: {}\n", .{info.tls_required});
+    std.debug.print("Server supports TLS: {}\n", .{info.tls_available});
+}
+```
+
+### TLS Options Reference
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `tls_required` | `bool` | Force TLS connection |
+| `tls_ca_file` | `?[]const u8` | CA certificate file path (PEM) |
+| `tls_cert_file` | `?[]const u8` | Client certificate for mTLS (PEM) |
+| `tls_key_file` | `?[]const u8` | Client private key for mTLS (PEM) |
+| `tls_insecure_skip_verify` | `bool` | Skip server certificate verification |
+| `tls_handshake_first` | `bool` | TLS handshake before NATS protocol |
+
+---
+
 ## Event Callbacks
 
 Handle connection lifecycle events using the `EventHandler` pattern - a type-safe,
@@ -949,7 +1025,7 @@ nats bench sub test.subject --msgs=100000
 | JetStream | Planned |
 | Key-Value | Planned |
 | Object Store | Planned |
-| TLS | Planned |
+| TLS | Complete |
 
 ## License
 

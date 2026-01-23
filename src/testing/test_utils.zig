@@ -20,6 +20,15 @@ pub const test_creds_file = "src/testing/configs/TestUser.creds";
 pub const test_jwt_seed =
     "SUACH75SWCM5D2JMJM6EKLR2WDARVGZT4QC6LX3AGHSWOMVAKERABBBRWM";
 
+// TLS test constants
+pub const tls_port: u16 = 14226;
+pub const tls_config_file = "src/testing/configs/tls.conf";
+pub const tls_ca_file = "src/testing/certs/rootCA.pem";
+pub const tls_server_cert = "src/testing/certs/server-cert.pem";
+pub const tls_server_key = "src/testing/certs/server-key.pem";
+pub const tls_client_cert = "src/testing/certs/client-cert.pem";
+pub const tls_client_key = "src/testing/certs/client-key.pem";
+
 pub var tests_passed: u32 = 0;
 pub var tests_failed: u32 = 0;
 
@@ -47,6 +56,13 @@ pub fn formatAuthUrl(buf: []u8, port: u16, token: []const u8) []const u8 {
         "nats://{s}@127.0.0.1:{d}",
         .{ token, port },
     ) catch "invalid";
+}
+
+/// Formats a TLS NATS URL for the given port.
+/// Uses localhost since test certificates are issued for localhost.
+pub fn formatTlsUrl(buf: []u8, port: u16) []const u8 {
+    const fmt = "tls://localhost:{d}";
+    return std.fmt.bufPrint(buf, fmt, .{port}) catch "invalid";
 }
 
 pub fn resetCounters() void {
