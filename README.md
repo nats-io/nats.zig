@@ -6,18 +6,20 @@
 
 A [Zig](https://ziglang.org/) client for the [NATS messaging system](https://nats.io).
 
-Production-grade implementation for Zig 0.16+. Native async I/O, zero C dependencies,
-comptime configuration. Designed for high-throughput, low-latency messaging where
-Zig's performance and memory control shine.
+Native Zig. Zero dependencies. Built on `std.Io`.
 
-## Features
+## Design Choices
 
-- Native Zig implementation (zero C dependencies)
-- Built on `std.Io` for async-aware I/O
-- Inline routing architecture for optimal performance
-- Full cancellation support via `std.Io.Future`
-- Headers support (NATS 2.2+)
-- Go-inspired API design
+**Memory architecture:**
+- TieredSlab allocator for O(1) message buffers - 5 size tiers, embedded free lists, pre-allocated via mmap
+- SidMap for O(1) subscription routing - zero-allocation hash map with caller-provided backing arrays
+- Lock-free SpscQueue for cross-thread message passing - documented memory ordering, no mutexes in hot path
+- Return queue for contention-free buffer recycling between threads
+
+**API:**
+- One subscription model, three retrieval methods: `next()` (blocking), `tryNext()` (polling), `nextWithTimeout()` (bounded)
+- Batch operations: `nextBatch()` drains multiple messages at once
+- Comptime event handlers via `@hasDecl()` - only implemented callbacks are dispatched
 
 ## Requirements
 
