@@ -84,6 +84,24 @@ pub fn main() !void {
 }
 ```
 
+## Examples
+
+Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
+
+| Example | Run | Description |
+|---------|-----|-------------|
+| simple | `run-simple` | Basic pub/sub - connect, subscribe, publish, receive |
+| request_reply | `run-request-reply` | RPC pattern with automatic inbox handling |
+| queue_groups | `run-queue-groups` | Load-balanced workers with `io.concurrent()` |
+| polling_loop | `run-polling-loop` | Non-blocking `tryNext()` with priority scheduling |
+| select | `run-select` | Race subscription against timeout with `io.select()` |
+| batch_throughput | `run-batch-throughput` | `nextBatch()` for bulk receives, stats monitoring |
+| reconnection | `run-reconnection` | Auto-reconnect, backoff, buffer during disconnect |
+| events | `run-events` | EventHandler callbacks with external state |
+| graceful_shutdown | `run-graceful-shutdown` | `drain()` lifecycle, pre-shutdown health checks |
+
+Source: `src/examples/`
+
 ## API Quick Reference
 
 | Want to... | Method | Returns |
@@ -1303,6 +1321,28 @@ zig build perf-test -- --msgs=100000 --size=16B
 # Format code
 zig build fmt
 ```
+
+## Integration Tests
+
+26 test modules covering connection, authentication, pub/sub, reconnection, and edge cases.
+
+```bash
+# Run all integration tests (starts nats-server instances automatically)
+zig build test-integration
+```
+
+| Category | Tests |
+|----------|-------|
+| Connection | basic, refused, consecutive, multi-client |
+| Auth | token, NKey (Ed25519), JWT/credentials |
+| TLS | connection, insecure mode, pub/sub over TLS, reconnect |
+| Pub/Sub | publish, subscribe, wildcards, queue groups, headers |
+| Request/Reply | basic, timeout handling |
+| Reconnection | 25+ scenarios: auto-reconnect, subscription restore, failover, backoff, queue groups, multi-server |
+| Lifecycle | drain, stats, state notifications, graceful shutdown |
+| Edge Cases | subject limits, double unsubscribe, concurrent access, stress (500+ msgs) |
+
+Source: `src/testing/client/`
 
 ## Benchmarks
 
