@@ -52,6 +52,11 @@ pub const Stats = Client.Stats;
 pub const Event = Client.Event;
 pub const EventHandler = Client.EventHandler;
 
+// Events module exports
+const events = @import("events.zig");
+pub const EventError = events.Error;
+pub const statusText = events.statusText;
+
 // Convenience exports
 pub const newInbox = pubsub.newInbox;
 pub const validateSubject = pubsub.validatePublish;

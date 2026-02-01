@@ -64,6 +64,29 @@ pub const Error = error{
     UrlTooLong,
 };
 
+/// Returns a human-readable description for NATS errors.
+/// For errors not in the NATS Error set, returns the error name.
+pub fn statusText(err: anyerror) []const u8 {
+    return switch (err) {
+        Error.SlowConsumer => "Slow consumer - subscription queue full",
+        Error.PermissionViolation => "Permission denied by server",
+        Error.StaleConnection => "Connection stale - ping timeout exceeded",
+        Error.ServerError => "Server error response",
+        Error.AuthorizationViolation => "Authorization failed",
+        Error.MaxConnectionsExceeded => "Server connection limit reached",
+        Error.SubscriptionRestoreFailed => "Failed to restore subscriptions",
+        Error.AllocationFailed => "Message allocation failed - slab exhausted",
+        Error.ProtocolParseError => "Protocol parse error - malformed data",
+        Error.SubjectTooLong => "Subject exceeds maximum length",
+        Error.QueueGroupTooLong => "Queue group exceeds maximum length",
+        Error.DrainIncomplete => "Drain completed with failures",
+        Error.TcpNoDelayFailed => "Failed to set TCP_NODELAY",
+        Error.TcpRcvBufFailed => "Failed to set TCP receive buffer",
+        Error.UrlTooLong => "URL exceeds maximum length",
+        else => @errorName(err),
+    };
+}
+
 /// Events pushed from io_task to callback_task.
 /// These represent connection lifecycle changes and async errors.
 pub const Event = union(enum) {
@@ -436,4 +459,32 @@ test "Event union" {
             },
         }
     }
+}
+
+test "statusText for known errors" {
+    // Test known NATS errors
+    try std.testing.expectEqualStrings(
+        "Slow consumer - subscription queue full",
+        statusText(Error.SlowConsumer),
+    );
+    try std.testing.expectEqualStrings(
+        "Permission denied by server",
+        statusText(Error.PermissionViolation),
+    );
+    try std.testing.expectEqualStrings(
+        "Authorization failed",
+        statusText(Error.AuthorizationViolation),
+    );
+    try std.testing.expectEqualStrings(
+        "Message allocation failed - slab exhausted",
+        statusText(Error.AllocationFailed),
+    );
+}
+
+test "statusText for unknown errors" {
+    // Unknown errors should return error name
+    try std.testing.expectEqualStrings(
+        "OutOfMemory",
+        statusText(error.OutOfMemory),
+    );
 }

@@ -250,6 +250,13 @@ pub const Options = struct {
     drain_timeout_ms: u32 = 30_000,
     /// Default timeout for flush operations (ms).
     flush_timeout_ms: u32 = 10_000,
+
+    // ADDITIONAL SERVERS
+
+    /// Additional server URLs for reconnection pool.
+    /// These are added to the server pool after the primary URL.
+    /// Max MAX_SERVERS total (see connection/server_pool.zig).
+    servers: ?[]const []const u8 = null,
 };
 
 /// Connection statistics
@@ -721,6 +728,13 @@ pub fn connect(
         return error.InvalidUrl;
     };
     client.server_pool_initialized = true;
+
+    // Add additional servers from options
+    if (opts.servers) |servers| {
+        for (servers) |server_url| {
+            client.server_pool.addServer(server_url) catch continue;
+        }
+    }
 
     if (opts.discover_servers) {
         if (client.server_info) |info| {
@@ -3320,6 +3334,8 @@ pub const Subscription = struct {
     // Pending limits (flow control)
     /// Maximum pending messages allowed in queue. 0 = no limit.
     pending_limit: usize = 0,
+    /// Maximum pending bytes allowed in queue. 0 = no limit.
+    pending_bytes_limit: usize = 0,
 
     // Pending bytes tracking (for statistics)
     /// Current bytes pending in queue. Updated by io_task on push.
@@ -3625,6 +3641,18 @@ pub const Subscription = struct {
         return self.pending_limit;
     }
 
+    /// Sets the maximum pending bytes limit.
+    /// When exceeded, new messages are dropped (slow consumer).
+    /// Set to 0 for no limit (default).
+    pub fn setPendingBytesLimit(self: *Subscription, bytes_limit: usize) void {
+        self.pending_bytes_limit = bytes_limit;
+    }
+
+    /// Returns the current pending bytes limit. 0 means no limit.
+    pub fn getPendingBytesLimit(self: *const Subscription) usize {
+        return self.pending_bytes_limit;
+    }
+
     /// Returns true if the subscription is valid and can receive messages.
     pub fn isValid(self: *const Subscription) bool {
         if (self.client_destroyed) return false;
@@ -3721,16 +3749,24 @@ pub const Subscription = struct {
     pub fn pushMessage(self: *Subscription, msg: Message) !void {
         const queue_len = self.queue.len();
 
-        // Check pending limit if set (flow control)
+        // Check pending message limit if set (flow control)
         if (self.pending_limit > 0 and queue_len >= self.pending_limit) {
+            return error.QueueFull;
+        }
+
+        // Use backing_buf.len (always set for io_task messages) - avoids
+        // 4 field accesses in msg.size()
+        const msg_size = if (msg.backing_buf) |buf| buf.len else msg.size();
+
+        // Check pending bytes limit if set (flow control)
+        if (self.pending_bytes_limit > 0 and
+            self.pending_bytes + msg_size > self.pending_bytes_limit)
+        {
             return error.QueueFull;
         }
 
         if (!self.queue.push(msg)) return error.QueueFull;
 
-        // Use backing_buf.len (always set for io_task messages) - avoids
-        // 4 field accesses in msg.size()
-        const msg_size = if (msg.backing_buf) |buf| buf.len else msg.size();
         self.pending_bytes += msg_size;
 
         // High watermarks (queue_len + 1 = new length after push)
