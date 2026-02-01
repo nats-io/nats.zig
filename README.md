@@ -1,6 +1,14 @@
+<p align="center">
+  <img src="logo/logo.png" width="300">
+</p>
+
 # nats.zig
 
-Production-grade NATS client for Zig 0.16+.
+A [Zig](https://ziglang.org/) client for the [NATS messaging system](https://nats.io).
+
+Production-grade implementation for Zig 0.16+. Native async I/O, zero C dependencies,
+comptime configuration. Designed for high-throughput, low-latency messaging where
+Zig's performance and memory control shine.
 
 ## Features
 
@@ -14,7 +22,7 @@ Production-grade NATS client for Zig 0.16+.
 ## Requirements
 
 - Zig 0.16.0 or later
-- NATS server (for runtime)
+- NATS server (for integration tests and benchmarks)
 
 ## Installation
 
