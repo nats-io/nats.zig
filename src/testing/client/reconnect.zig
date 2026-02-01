@@ -11,7 +11,7 @@ const formatUrl = utils.formatUrl;
 const test_port = utils.test_port;
 const ServerManager = utils.ServerManager;
 
-const reconnect_port: u16 = 14225;
+const reconnect_port: u16 = 14227;
 
 const failover_port_1: u16 = 14230;
 const failover_port_2: u16 = 14231;
@@ -37,6 +37,7 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     testReconnectWildcardSub(allocator, manager);
     testPublishDuringReconnect(allocator, manager);
     testReconnectBackoff(allocator, manager);
+    testCustomReconnectDelay(allocator, manager);
     testHealthCheckReconnect(allocator, manager);
 
     testFailoverToSecondServer(allocator, manager);
@@ -739,6 +740,81 @@ fn testReconnectBackoff(
     };
 
     reportResult("reconnect_backoff", true, "");
+}
+
+/// Track calls for custom delay callback test (atomic for cross-thread visibility)
+var custom_delay_calls: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+fn customDelayCallback(attempt: u32) u32 {
+    _ = custom_delay_calls.fetchAdd(1, .seq_cst);
+    // Simple linear backoff: 50ms per attempt
+    return attempt * 50;
+}
+
+fn testCustomReconnectDelay(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, reconnect_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    defer io.deinit();
+
+    // Reset call counter
+    custom_delay_calls.store(0, .seq_cst);
+
+    // Start our own dedicated server for this test
+    const server = manager.startServer(allocator, io.io(), .{
+        .port = reconnect_port,
+    }) catch {
+        reportResult("custom_reconnect_delay", false, "server start failed");
+        return;
+    };
+
+    const client = nats.Client.connect(allocator, io.io(), url, .{
+        .reconnect = true,
+        .max_reconnect_attempts = 10,
+        .custom_reconnect_delay = customDelayCallback,
+        .ping_interval_ms = 100,
+        .max_pings_outstanding = 1,
+    }) catch {
+        server.stop(io.io());
+        reportResult("custom_reconnect_delay", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    // Stop the specific server we started to trigger reconnect attempts
+    server.stop(io.io());
+
+    // Wait for disconnect detection and multiple reconnect attempts
+    // Callback returns attempt*50ms, so attempts 2,3,4 = 100+150+200 = 450ms
+    io.io().sleep(.fromMilliseconds(1500), .awake) catch {};
+
+    // Restart server on same port
+    const server2 = manager.startServer(allocator, io.io(), .{
+        .port = reconnect_port,
+    }) catch {
+        reportResult("custom_reconnect_delay", false, "restart failed");
+        return;
+    };
+    defer server2.stop(io.io());
+
+    // Wait for reconnection
+    io.io().sleep(.fromMilliseconds(500), .awake) catch {};
+
+    // Callback should have been called at least once (for attempt 2+)
+    const calls = custom_delay_calls.load(.seq_cst);
+    if (calls >= 1) {
+        reportResult("custom_reconnect_delay", true, "");
+    } else {
+        var buf: [32]u8 = undefined;
+        const detail = std.fmt.bufPrint(&buf, "calls={d}", .{
+            calls,
+        }) catch "e";
+        reportResult("custom_reconnect_delay", false, detail);
+    }
 }
 
 fn testHealthCheckReconnect(
@@ -1639,6 +1715,7 @@ fn testLongDisconnectionRecovery(
         .reconnect = true,
         .max_reconnect_attempts = 30,
         .reconnect_wait_ms = 200,
+        .reconnect_wait_max_ms = 500,
     }) catch {
         reportResult("long_disconnection", false, "connect failed");
         return;
@@ -1670,7 +1747,7 @@ fn testLongDisconnectionRecovery(
         return;
     };
 
-    io.io().sleep(.fromMilliseconds(500), .awake) catch {};
+    io.io().sleep(.fromMilliseconds(1000), .awake) catch {};
 
     client.publish("long.test", "after-long-gap") catch {
         reportResult("long_disconnection", false, "publish after failed");

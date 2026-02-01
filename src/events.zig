@@ -99,6 +99,18 @@ pub const Event = union(enum) {
     /// Protocol parse error (malformed data recovered via CRLF skip).
     /// Rate-limited: fires on first error, then every 100k messages.
     protocol_error: struct { bytes_skipped: usize, count: u64 },
+
+    /// New servers discovered via cluster INFO (connect_urls).
+    /// count is the number of new servers added to the pool.
+    discovered_servers: struct { count: u8 },
+
+    /// Connection entering drain mode.
+    /// Fired when drain() is called on the client.
+    draining: void,
+
+    /// Subscription auto-unsubscribe limit reached.
+    /// Fired when a subscription hits its max messages limit.
+    subscription_complete: struct { sid: u64 },
 };
 
 /// Type-erased event handler using std.mem.Allocator vtable pattern.
@@ -125,6 +137,9 @@ pub const EventHandler = struct {
         onClose: ?*const fn (*anyopaque) void = null,
         onError: ?*const fn (*anyopaque, anyerror) void = null,
         onLameDuck: ?*const fn (*anyopaque) void = null,
+        onDiscoveredServers: ?*const fn (*anyopaque, u8) void = null,
+        onDraining: ?*const fn (*anyopaque) void = null,
+        onSubscriptionComplete: ?*const fn (*anyopaque, u64) void = null,
     };
 
     /// Create handler from concrete type using comptime.
@@ -155,6 +170,18 @@ pub const EventHandler = struct {
                 const self: *T = @ptrCast(@alignCast(p));
                 self.onLameDuck();
             }
+            fn onDiscoveredServers(p: *anyopaque, count: u8) void {
+                const self: *T = @ptrCast(@alignCast(p));
+                self.onDiscoveredServers(count);
+            }
+            fn onDraining(p: *anyopaque) void {
+                const self: *T = @ptrCast(@alignCast(p));
+                self.onDraining();
+            }
+            fn onSubscriptionComplete(p: *anyopaque, sid: u64) void {
+                const self: *T = @ptrCast(@alignCast(p));
+                self.onSubscriptionComplete(sid);
+            }
         };
 
         const vtable = comptime blk: {
@@ -181,6 +208,18 @@ pub const EventHandler = struct {
                     null,
                 .onLameDuck = if (@hasDecl(T, "onLameDuck"))
                     gen.onLameDuck
+                else
+                    null,
+                .onDiscoveredServers = if (@hasDecl(T, "onDiscoveredServers"))
+                    gen.onDiscoveredServers
+                else
+                    null,
+                .onDraining = if (@hasDecl(T, "onDraining"))
+                    gen.onDraining
+                else
+                    null,
+                .onSubscriptionComplete = if (@hasDecl(T, "onSubscriptionComplete"))
+                    gen.onSubscriptionComplete
                 else
                     null,
             };
@@ -220,6 +259,21 @@ pub const EventHandler = struct {
     /// Dispatch lame duck event to handler.
     pub fn dispatchLameDuck(self: EventHandler) void {
         if (self.vtable.onLameDuck) |f| f(self.ptr);
+    }
+
+    /// Dispatch discovered servers event to handler.
+    pub fn dispatchDiscoveredServers(self: EventHandler, count: u8) void {
+        if (self.vtable.onDiscoveredServers) |f| f(self.ptr, count);
+    }
+
+    /// Dispatch draining event to handler.
+    pub fn dispatchDraining(self: EventHandler) void {
+        if (self.vtable.onDraining) |f| f(self.ptr);
+    }
+
+    /// Dispatch subscription complete event to handler.
+    pub fn dispatchSubscriptionComplete(self: EventHandler, sid: u64) void {
+        if (self.vtable.onSubscriptionComplete) |f| f(self.ptr, sid);
     }
 };
 
@@ -345,6 +399,9 @@ test "Event union" {
         .{ .lame_duck = {} },
         .{ .alloc_failed = .{ .sid = 1, .count = 5 } },
         .{ .protocol_error = .{ .bytes_skipped = 128, .count = 3 } },
+        .{ .discovered_servers = .{ .count = 3 } },
+        .{ .draining = {} },
+        .{ .subscription_complete = .{ .sid = 42 } },
     };
 
     for (events) |event| {
@@ -369,6 +426,13 @@ test "Event union" {
             .protocol_error => |pe| {
                 try std.testing.expect(pe.bytes_skipped > 0);
                 try std.testing.expect(pe.count > 0);
+            },
+            .discovered_servers => |ds| {
+                try std.testing.expect(ds.count > 0);
+            },
+            .draining => {},
+            .subscription_complete => |sc| {
+                try std.testing.expect(sc.sid > 0);
             },
         }
     }

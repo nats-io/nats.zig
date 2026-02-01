@@ -185,9 +185,114 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
     }
 }
 
+/// Test subscription waitDrained with messages consumed.
+pub fn testSubWaitDrained(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    defer io.deinit();
+
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("sub_wait_drained", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    const sub = client.subscribe(allocator, "wait.drained") catch {
+        reportResult("sub_wait_drained", false, "subscribe failed");
+        return;
+    };
+    defer sub.deinit(allocator);
+    client.flush(allocator) catch {};
+
+    // Publish some messages
+    for (0..5) |_| {
+        client.publish("wait.drained", "data") catch {};
+    }
+    client.flush(allocator) catch {};
+
+    // Wait for messages to arrive
+    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
+
+    // Start draining
+    sub.drain() catch {
+        reportResult("sub_wait_drained", false, "drain failed");
+        return;
+    };
+
+    // Consume all messages
+    for (0..10) |_| {
+        const msg = sub.tryNext();
+        if (msg) |m| {
+            m.deinit(allocator);
+        } else break;
+    }
+
+    // Now wait for drain to complete (should succeed immediately)
+    sub.waitDrained(1000) catch |err| {
+        var buf: [32]u8 = undefined;
+        const detail = std.fmt.bufPrint(&buf, "waitDrained: {s}", .{
+            @errorName(err),
+        }) catch "e";
+        reportResult("sub_wait_drained", false, detail);
+        return;
+    };
+
+    // Queue should be empty now
+    if (sub.pending() == 0) {
+        reportResult("sub_wait_drained", true, "");
+    } else {
+        reportResult("sub_wait_drained", false, "queue not empty");
+    }
+}
+
+/// Test waitDrained returns error.NotDraining if not draining.
+pub fn testWaitDrainedNotDraining(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    defer io.deinit();
+
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("wait_not_draining", false, "connect failed");
+        return;
+    };
+    defer client.deinit(allocator);
+
+    const sub = client.subscribe(allocator, "not.draining") catch {
+        reportResult("wait_not_draining", false, "subscribe failed");
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    // Try waitDrained without calling drain() first
+    sub.waitDrained(100) catch |err| {
+        if (err == error.NotDraining) {
+            reportResult("wait_not_draining", true, "");
+            return;
+        }
+    };
+
+    reportResult("wait_not_draining", false, "expected NotDraining");
+}
+
 pub fn runAll(allocator: std.mem.Allocator) void {
     testDrainOperation(allocator);
     testDrainCleansUp(allocator);
     testDrainTwice(allocator);
     testDrainWithManySubscriptions(allocator);
+    testSubWaitDrained(allocator);
+    testWaitDrainedNotDraining(allocator);
 }

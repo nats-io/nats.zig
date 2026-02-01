@@ -114,21 +114,24 @@ pub const ServerPool = struct {
     }
 
     /// Add servers from ServerInfo connect_urls.
+    /// Returns the number of new servers that were added (not duplicates).
     pub fn addFromConnectUrls(
         self: *ServerPool,
         urls: []const [256]u8,
         lens: []const u8,
         count: u8,
-    ) void {
+    ) u8 {
         assert(urls.len >= count);
         assert(lens.len >= count);
 
+        const before = self.count;
         for (0..count) |i| {
             const len = lens[i];
             if (len == 0) continue;
             const url = urls[i][0..len];
             self.addServer(url) catch continue;
         }
+        return self.count - before;
     }
 
     /// Get next server for connection attempt (round-robin).

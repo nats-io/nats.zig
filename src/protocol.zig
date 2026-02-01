@@ -12,6 +12,7 @@ pub const commands = @import("protocol/commands.zig");
 pub const parser = @import("protocol/parser.zig");
 pub const encoder = @import("protocol/encoder.zig");
 pub const headers = @import("protocol/headers.zig");
+pub const header_map = @import("protocol/header_map.zig");
 pub const errors = @import("protocol/errors.zig");
 
 // Re-export common types
@@ -27,6 +28,7 @@ pub const SubArgs = commands.SubArgs;
 
 pub const Parser = parser.Parser;
 pub const Encoder = encoder.Encoder;
+pub const HeaderMap = header_map.HeaderMap;
 
 // Protocol errors
 pub const Error = errors.Error;

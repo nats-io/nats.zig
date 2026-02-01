@@ -94,6 +94,18 @@ pub fn main() !void {
 | Receive (with timeout) | `sub.nextWithTimeout(allocator, timeout_ms)` | `!?Message` |
 | Batch receive | `sub.nextBatch(io, buf)` | `!usize` |
 | Check drops | `sub.getDroppedCount()` | `u64` |
+| Auto-unsubscribe | `sub.autoUnsubscribe(max_msgs)` | `!void` |
+| Check pending | `sub.pending()` | `usize` |
+| Check delivered | `sub.delivered()` | `u64` |
+| Check valid | `sub.isValid()` | `bool` |
+| Respond to message | `msg.respond(client, data)` | `!void` |
+| Message size | `msg.size()` | `usize` |
+| Connection status | `client.getStatus()` | `State` |
+| Server RTT | `client.getRtt()` | `!u64` |
+| Server URL | `client.getConnectedUrl()` | `?[]const u8` |
+| Server ID | `client.getConnectedServerId()` | `?[]const u8` |
+| Flush with timeout | `client.flushTimeout(alloc, timeout_ns)` | `!void` |
+| Force reconnect | `client.forceReconnect()` | `!void` |
 
 ---
 
@@ -577,6 +589,16 @@ const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .
     // Keepalive
     .ping_interval_ms = 120_000,   // PING every 2 minutes
     .max_pings_outstanding = 2,    // Disconnect after 2 missed PONGs
+
+    // Inbox prefix (for request/reply)
+    .inbox_prefix = "_INBOX",      // Custom inbox prefix
+
+    // Connection behavior
+    .retry_on_failed_connect = false,     // Retry on initial failure
+    .no_randomize = false,                // Don't randomize server order
+    .ignore_discovered_servers = false,   // Only use explicit servers
+    .drain_timeout_ms = 30_000,           // Default drain timeout
+    .flush_timeout_ms = 10_000,           // Default flush timeout
 });
 ```
 
@@ -851,6 +873,309 @@ const client = try nats.Client.connect(allocator, io, url, .{
     .reconnect = false,  // Disable auto-reconnect
 });
 // On disconnect: onDisconnect() called, then onClose(), no reconnect attempts
+```
+
+---
+
+## Connection Information
+
+Access server details and connection state:
+
+```zig
+// Server details (from INFO response)
+if (client.getConnectedUrl()) |url| {
+    std.debug.print("Connected to: {s}\n", .{url});
+}
+if (client.getConnectedServerId()) |id| {
+    std.debug.print("Server ID: {s}\n", .{id});
+}
+if (client.getConnectedServerName()) |name| {
+    std.debug.print("Server name: {s}\n", .{name});
+}
+if (client.getConnectedServerVersion()) |version| {
+    std.debug.print("Server version: {s}\n", .{version});
+}
+
+// Payload and feature info
+const max_payload = client.getMaxPayload();
+const supports_headers = client.headersSupported();
+
+// Server pool (for cluster connections)
+const server_count = client.getServerCount();
+for (0..server_count) |i| {
+    if (client.getServerUrl(@intCast(i))) |url| {
+        std.debug.print("Known server: {s}\n", .{url});
+    }
+}
+```
+
+### Connection State
+
+```zig
+const State = @import("nats").connection.State;
+
+// Get current state
+const status = client.getStatus();
+switch (status) {
+    .connected => std.debug.print("Connected\n", .{}),
+    .reconnecting => std.debug.print("Reconnecting...\n", .{}),
+    .draining => std.debug.print("Draining\n", .{}),
+    .closed => std.debug.print("Closed\n", .{}),
+    else => {},
+}
+
+// Convenience checks
+if (client.isClosed()) { /* permanently closed */ }
+if (client.isDraining()) { /* draining subscriptions */ }
+if (client.isReconnecting()) { /* attempting reconnect */ }
+
+// Subscription count
+const num_subs = client.numSubscriptions();
+```
+
+### RTT Measurement
+
+Measure round-trip time to the server:
+
+```zig
+const rtt_ns = try client.getRtt();
+const rtt_ms = @as(f64, @floatFromInt(rtt_ns)) / 1_000_000.0;
+std.debug.print("RTT: {d:.2}ms\n", .{rtt_ms});
+```
+
+---
+
+## Connection Control
+
+### Flush with Timeout
+
+```zig
+// Flush with 5 second timeout
+client.flushTimeout(allocator, 5_000_000_000) catch |err| {
+    if (err == error.Timeout) {
+        std.debug.print("Flush timed out\n", .{});
+    }
+};
+```
+
+### Force Reconnect
+
+Manually trigger a reconnection:
+
+```zig
+try client.forceReconnect();
+// Connection closes, io_task starts reconnection process
+```
+
+### Drain with Timeout
+
+```zig
+const result = client.drainTimeout(allocator, 30_000_000_000) catch |err| {
+    if (err == error.Timeout) {
+        std.debug.print("Drain timed out\n", .{});
+    }
+    return err;
+};
+if (!result.isClean()) {
+    std.debug.print("Drain had failures\n", .{});
+}
+```
+
+---
+
+## Subscription Control
+
+### Auto-Unsubscribe
+
+Automatically unsubscribe after receiving a specific number of messages:
+
+```zig
+const sub = try client.subscribe(allocator, "events.>");
+
+// Auto-unsubscribe after 10 messages
+try sub.autoUnsubscribe(10);
+
+// Process messages (subscription closes after 10th)
+while (sub.isValid()) {
+    if (sub.tryNext()) |msg| {
+        defer msg.deinit(allocator);
+        processMessage(msg);
+    }
+}
+```
+
+### Subscription Statistics
+
+```zig
+// Messages waiting in queue
+const pending = sub.pending();
+
+// Messages delivered (only tracked if autoUnsubscribe was called)
+const delivered = sub.delivered();
+
+// Check if subscription is still valid
+if (sub.isValid()) {
+    // Can still receive messages
+}
+```
+
+### Per-Subscription Drain
+
+Drain a single subscription while keeping others active:
+
+```zig
+try sub.drain();
+// Subscription stops receiving new messages
+// Already-queued messages can still be consumed
+```
+
+---
+
+## HeaderMap Builder
+
+For programmatic header construction:
+
+```zig
+const nats = @import("nats");
+
+var headers: nats.HeaderMap = .{};
+defer headers.deinit(allocator);
+
+// Set headers (replaces existing)
+try headers.set(allocator, "Content-Type", "application/json");
+try headers.set(allocator, "X-Request-Id", "req-123");
+
+// Add headers (allows multiple values for same key)
+try headers.add(allocator, "X-Tag", "important");
+try headers.add(allocator, "X-Tag", "urgent");
+
+// Get values
+if (headers.get("Content-Type")) |ct| {
+    std.debug.print("Content-Type: {s}\n", .{ct});
+}
+
+// Get all values for a key
+if (try headers.getAll(allocator, "X-Tag")) |tags| {
+    defer allocator.free(tags);
+    for (tags) |tag| {
+        std.debug.print("Tag: {s}\n", .{tag});
+    }
+}
+
+// Delete headers
+headers.delete(allocator, "X-Tag");
+
+// Publish with HeaderMap
+try client.publishWithHeaderMap(allocator, "subject", &headers, "payload");
+try client.flush(allocator);
+```
+
+---
+
+## Message Methods
+
+### Respond to Request
+
+Convenience method for request/reply pattern:
+
+```zig
+const msg = try sub.next(allocator, io);
+defer msg.deinit(allocator);
+
+// Respond using the message's reply_to
+msg.respond(client, "response data") catch |err| {
+    if (err == error.NoReplyTo) {
+        // Message had no reply_to address
+    }
+};
+try client.flush(allocator);
+```
+
+### Message Size
+
+```zig
+const msg = try sub.next(allocator, io);
+defer msg.deinit(allocator);
+
+const total_size = msg.size();  // subject + data + reply_to + headers
+```
+
+### Check No-Responders Status
+
+Detect when a request has no available responders (status 503):
+
+```zig
+const reply = try client.request(allocator, "service.endpoint", "data", 1000);
+if (reply) |msg| {
+    defer msg.deinit(allocator);
+
+    if (msg.isNoResponders()) {
+        // No service available to handle request
+        std.debug.print("No responders for request\n", .{});
+    } else {
+        // Normal response - check status code if needed
+        if (msg.getStatus()) |status| {
+            std.debug.print("Status: {d}\n", .{status});
+        }
+    }
+}
+```
+
+### Republish/Forward Messages
+
+Forward a received message to another subject:
+
+```zig
+const msg = try sub.next(allocator, io);
+defer msg.deinit(allocator);
+
+// Republish with same data and headers
+var forward_msg = msg.*;
+forward_msg.subject = "other.subject";
+try client.publishMsg(&forward_msg);
+```
+
+### Request with Message Object
+
+Send a request using a Message object:
+
+```zig
+const request = nats.Client.Message{
+    .subject = "service.endpoint",
+    .sid = 0,
+    .reply_to = null,
+    .data = "request payload",
+    .headers = null,
+    .owned = false,
+};
+
+const reply = try client.requestMsg(allocator, &request, 1000);
+if (reply) |msg| {
+    defer msg.deinit(allocator);
+    // Handle response
+}
+```
+
+---
+
+## Server Compatibility
+
+### Check Server Version
+
+Verify the server meets minimum version requirements:
+
+```zig
+// Check for NATS 2.10.0 or later (required for some features)
+if (client.checkCompatibility(2, 10, 0)) {
+    // Server supports NATS 2.10+ features
+} else {
+    std.debug.print("Server version too old\n", .{});
+}
+
+// Get the actual version string
+if (client.getConnectedServerVersion()) |version| {
+    std.debug.print("Connected to NATS {s}\n", .{version});
+}
 ```
 
 ---

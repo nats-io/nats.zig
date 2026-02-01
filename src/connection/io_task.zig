@@ -224,7 +224,8 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
     // So we must: 1) check TCP buffer first, 2) only poll if TCP buffer empty.
     if (client.use_tls) {
         while (true) {
-            if (client.state == .closed) return .canceled;
+            // Atomic read: race with deinit closing socket before fillMore()
+            if (State.atomicLoad(&client.state) == .closed) return .canceled;
 
             // Check if TCP reader has buffered encrypted data (poll can't see this)
             const tcp_buffered = client.reader.interface.buffered().len;
@@ -281,8 +282,8 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
         return .no_progress;
     }
 
-    // Re-check state before read (race with deinit closing socket)
-    if (client.state == .closed) return .canceled;
+    // Atomic read: race with deinit closing socket before fillMore()
+    if (State.atomicLoad(&client.state) == .closed) return .canceled;
 
     // Socket has data → fillMore() will return immediately
     reader.fillMore() catch |err| {
@@ -607,8 +608,9 @@ fn tryReconnectLoop(client: *Client, allocator: Allocator) bool {
 
         // Wait with backoff (except first attempt) - cancellation point
         if (attempt > 1) {
+            const delay_ms = calculateReconnectDelay(client, attempt);
             client.io.sleep(
-                .fromMilliseconds(client.options.reconnect_wait_ms),
+                .fromMilliseconds(delay_ms),
                 .awake,
             ) catch |err| {
                 if (err == error.Canceled) return false;
@@ -627,7 +629,42 @@ fn tryReconnectLoop(client: *Client, allocator: Allocator) bool {
     return false;
 }
 
+/// Calculate reconnect delay with exponential backoff and jitter.
+/// If custom_reconnect_delay callback is set, uses that instead.
+fn calculateReconnectDelay(client: *Client, attempt: u32) u32 {
+    assert(attempt > 0);
+
+    // Use custom callback if provided
+    if (client.options.custom_reconnect_delay) |cb| {
+        return cb(attempt);
+    }
+
+    // Exponential backoff: base * 2^(attempt-1), capped at max
+    const base_ms = client.options.reconnect_wait_ms;
+    const max_ms = client.options.reconnect_wait_max_ms;
+    const jitter_pct = client.options.reconnect_jitter_percent;
+
+    // Calculate exponential delay: base * 2^(attempt-2) for attempt > 1
+    // attempt 2 -> base, attempt 3 -> base*2, attempt 4 -> base*4, etc.
+    const shift: u5 = @intCast(@min(attempt -| 2, 30));
+    const exp_delay: u64 = @as(u64, base_ms) << shift;
+    const capped_delay: u32 = @intCast(@min(exp_delay, max_ms));
+
+    // Apply jitter: delay +/- jitter_pct%
+    if (jitter_pct == 0) return capped_delay;
+
+    // Simple jitter using attempt number as pseudo-random seed
+    // Real randomness would require io.random() but we keep it simple
+    const jitter_range = (capped_delay * jitter_pct) / 100;
+    const jitter_offset = (attempt * 7) % (jitter_range * 2 + 1);
+    const jitter: i64 = @as(i64, jitter_offset) - @as(i64, jitter_range);
+
+    const final_delay: i64 = @as(i64, capped_delay) + jitter;
+    return @intCast(@max(final_delay, 1));
+}
+
 /// Handle server -ERR message. Categorizes error and pushes event.
+/// Also stores as last_error for later retrieval via getLastError().
 /// Returns true if error is fatal (should disconnect), false otherwise.
 fn handleServerError(client: *Client, msg: []const u8) bool {
     const events = @import("../events.zig");
@@ -648,6 +685,18 @@ fn handleServerError(client: *Client, msg: []const u8) bool {
         }
         break :blk events.Error.ServerError;
     };
+
+    // Store as last_error for retrieval via getLastError()
+    client.last_error = err_type;
+    if (msg.len <= 256) {
+        const len: u8 = @intCast(msg.len);
+        @memcpy(client.last_error_msg[0..len], msg);
+        client.last_error_msg_len = len;
+    } else {
+        // Truncate if message too long
+        @memcpy(&client.last_error_msg, msg[0..256]);
+        client.last_error_msg_len = 255;
+    }
 
     client.pushEvent(.{ .err = .{ .err = err_type, .msg = msg } });
 

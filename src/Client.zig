@@ -39,6 +39,7 @@ pub const EventHandler = events_mod.EventHandler;
 
 const headers = @import("protocol/headers.zig");
 pub const HeaderEntry = headers.Entry;
+pub const HeaderMap = protocol.HeaderMap;
 
 const nkey_auth = @import("auth.zig");
 const creds_auth = nkey_auth.creds;
@@ -82,6 +83,38 @@ pub const Message = struct {
         allocator.free(self.data);
         if (self.reply_to) |rt| allocator.free(rt);
         if (self.headers) |h| allocator.free(h);
+    }
+
+    /// Sends a reply to this message using the reply_to subject.
+    /// Convenience method for request/reply pattern.
+    /// Returns error.NoReplyTo if message has no reply_to subject.
+    pub fn respond(self: *const Message, client: *Client, payload: []const u8) !void {
+        const reply_to = self.reply_to orelse return error.NoReplyTo;
+        assert(reply_to.len > 0);
+        try client.publish(reply_to, payload);
+    }
+
+    /// Returns the total size of the message in bytes.
+    /// Includes subject, data, reply_to, and headers.
+    pub fn size(self: *const Message) usize {
+        var total: usize = self.subject.len + self.data.len;
+        if (self.reply_to) |rt| total += rt.len;
+        if (self.headers) |h| total += h.len;
+        return total;
+    }
+
+    /// Extracts HTTP-like status code from headers (on-demand parsing).
+    /// Returns null if no headers or no status code present.
+    /// Common codes: 503 (no responders), 408 (timeout), 404 (not found).
+    pub fn getStatus(self: *const Message) ?u16 {
+        const hdrs = self.headers orelse return null;
+        return headers.extractStatus(hdrs);
+    }
+
+    /// Returns true if this is a no-responders message (status 503).
+    /// Used to detect when a request has no available responders.
+    pub fn isNoResponders(self: *const Message) bool {
+        return self.getStatus() == 503;
     }
 };
 
@@ -166,6 +199,10 @@ pub const Options = struct {
     reconnect_wait_max_ms: u32 = defaults.Reconnection.wait_max_ms,
     /// Jitter percentage for backoff (0-50).
     reconnect_jitter_percent: u8 = defaults.Reconnection.jitter_percent,
+    /// Custom reconnect delay callback. If set, overrides default exponential
+    /// backoff. Called with attempt number (1-based), returns delay in ms.
+    /// Example: `fn(attempt: u32) u32 { return attempt * 1000; }`
+    custom_reconnect_delay: ?*const fn (attempt: u32) u32 = null,
     /// Discover servers from INFO connect_urls.
     discover_servers: bool = defaults.Reconnection.discover_servers,
     /// Size of pending buffer for publishes during reconnect.
@@ -191,6 +228,28 @@ pub const Options = struct {
     /// Event handler for connection lifecycle callbacks (optional).
     /// Use EventHandler.init(T, &handler) to create from a handler struct.
     event_handler: ?EventHandler = null,
+
+    // INBOX/REQUEST OPTIONS
+
+    /// Custom prefix for inbox subjects. Default is "_INBOX".
+    /// Used for request/reply pattern inbox generation.
+    inbox_prefix: []const u8 = "_INBOX",
+
+    // CONNECTION BEHAVIOR
+
+    /// Retry connection on initial connect failure (before returning error).
+    /// When true, connect() will retry using reconnect settings.
+    retry_on_failed_connect: bool = false,
+    /// Don't randomize server order for connection attempts.
+    /// When true, servers are tried in the order provided.
+    no_randomize: bool = false,
+    /// Ignore servers discovered via cluster INFO.
+    /// Only use explicitly configured servers.
+    ignore_discovered_servers: bool = false,
+    /// Default timeout for drain operations (ms).
+    drain_timeout_ms: u32 = 30_000,
+    /// Default timeout for flush operations (ms).
+    flush_timeout_ms: u32 = 10_000,
 };
 
 /// Connection statistics
@@ -208,6 +267,8 @@ pub const Stats = struct {
     bytes_out: u64 = 0,
     /// Number of reconnects (written by io_task only).
     reconnects: u32 = 0,
+    /// Total successful connections (initial + reconnects).
+    connects: u32 = 0,
 };
 
 /// Debug counters for io_task buffer operations.
@@ -416,6 +477,14 @@ protocol_errors: u64 = 0,
 /// msgs_in value when protocol_error event was last pushed (rate-limit).
 last_parse_error_notified_at: u64 = 0,
 
+// Last async error tracking (written by io_task only)
+/// Last async error that occurred on the connection.
+last_error: ?anyerror = null,
+/// Message associated with last error (inline buffer, no allocation).
+last_error_msg: [256]u8 = undefined,
+/// Length of last_error_msg content.
+last_error_msg_len: u8 = 0,
+
 // Background I/O task infrastructure
 write_mutex: Io.Mutex = .init,
 /// Future for background I/O task (for proper cancellation in deinit).
@@ -501,6 +570,12 @@ pub fn connect(
     client.last_pong_received_ns.raw = 0;
     client.pings_outstanding.raw = 0;
     client.io_task_stats = .{};
+
+    // Initialize error tracking state
+    client.protocol_errors = 0;
+    client.last_parse_error_notified_at = 0;
+    client.last_error = null;
+    client.last_error_msg_len = 0;
 
     // Initialize background I/O task infrastructure
     client.write_mutex = .init;
@@ -649,11 +724,14 @@ pub fn connect(
 
     if (opts.discover_servers) {
         if (client.server_info) |info| {
-            client.server_pool.addFromConnectUrls(
+            const new_servers = client.server_pool.addFromConnectUrls(
                 &info.connect_urls,
                 &info.connect_urls_lens,
                 info.connect_urls_count,
             );
+            if (new_servers > 0) {
+                client.pushEvent(.{ .discovered_servers = .{ .count = new_servers } });
+            }
         }
     }
 
@@ -772,12 +850,49 @@ fn callbackTaskFn(client: *Client) void {
                 .protocol_error => {
                     handler.dispatchError(events_mod.Error.ProtocolParseError);
                 },
+                .discovered_servers => |e| {
+                    handler.dispatchDiscoveredServers(e.count);
+                },
+                .draining => handler.dispatchDraining(),
+                .subscription_complete => |e| {
+                    handler.dispatchSubscriptionComplete(e.sid);
+                },
             }
         }
         // Async-aware yield with cancellation support (replaces std.Thread.yield)
         client.io.sleep(.fromNanoseconds(0), .awake) catch |err| {
             if (err == error.Canceled) break;
         };
+    }
+
+    // Drain any remaining events queued during shutdown
+    if (client.event_queue) |queue| {
+        while (queue.pop()) |event| {
+            switch (event) {
+                .connected => handler.dispatchConnect(),
+                .disconnected => |e| handler.dispatchDisconnect(e.err),
+                .reconnected => handler.dispatchReconnect(),
+                .closed => {}, // Will dispatch below
+                .slow_consumer => {
+                    handler.dispatchError(events_mod.Error.SlowConsumer);
+                },
+                .err => |e| handler.dispatchError(e.err),
+                .lame_duck => handler.dispatchLameDuck(),
+                .alloc_failed => {
+                    handler.dispatchError(events_mod.Error.AllocationFailed);
+                },
+                .protocol_error => {
+                    handler.dispatchError(events_mod.Error.ProtocolParseError);
+                },
+                .discovered_servers => |e| {
+                    handler.dispatchDiscoveredServers(e.count);
+                },
+                .draining => handler.dispatchDraining(),
+                .subscription_complete => |e| {
+                    handler.dispatchSubscriptionComplete(e.sid);
+                },
+            }
+        }
     }
 
     // Dispatch final close event if not already done
@@ -911,6 +1026,7 @@ fn handshake(
                 self.server_info = parsed_info;
                 self.max_payload = parsed_info.max_payload;
                 self.state = .connected;
+                self.stats.connects += 1;
             },
             else => return error.UnexpectedCommand,
         }
@@ -1064,9 +1180,9 @@ fn checkAuthRejection(self: *Client) !void {
     self.io.sleep(.fromMilliseconds(100), .awake) catch {};
 
     // Check if any data is buffered (non-blocking peek)
-    const buffered = reader.buffered();
-    if (buffered.len > 0) {
-        if (std.mem.startsWith(u8, buffered, "-ERR")) {
+    const buffered_data = reader.buffered();
+    if (buffered_data.len > 0) {
+        if (std.mem.startsWith(u8, buffered_data, "-ERR")) {
             self.state = .closed;
             return error.AuthorizationViolation;
         }
@@ -1443,6 +1559,101 @@ pub fn publishRequestWithHeaders(
     self.stats.bytes_out += payload.len;
 }
 
+/// Publishes with a HeaderMap builder.
+///
+/// Arguments:
+///     allocator: Allocator for temporary header encoding
+///     subject: Destination subject (no wildcards allowed)
+///     header_map: HeaderMap containing headers to include
+///     payload: Message data
+///
+/// Messages are buffered. Call flush() to ensure delivery.
+/// Thread-safe: protected by write_mutex for concurrent publish.
+pub fn publishWithHeaderMap(
+    self: *Client,
+    allocator: Allocator,
+    subject: []const u8,
+    header_map: *const protocol.HeaderMap,
+    payload: []const u8,
+) !void {
+    assert(subject.len > 0);
+    if (header_map.isEmpty()) return error.EmptyHeaders;
+    if (!self.state.canSend()) return error.NotConnected;
+    try pubsub.validatePublish(subject);
+
+    // Encode headers to NATS format
+    const hdr_bytes = try header_map.encode(allocator);
+    defer allocator.free(hdr_bytes);
+
+    if (hdr_bytes.len + payload.len > self.max_payload) {
+        return error.PayloadTooLarge;
+    }
+
+    // Acquire write mutex for thread-safe buffer access
+    try self.write_mutex.lock(self.io);
+    defer self.write_mutex.unlock(self.io);
+
+    const writer = self.active_writer;
+    protocol.Encoder.encodeHPub(writer, .{
+        .subject = subject,
+        .reply_to = null,
+        .headers = hdr_bytes,
+        .payload = payload,
+    }) catch {
+        return error.EncodingFailed;
+    };
+
+    self.stats.msgs_out += 1;
+    self.stats.bytes_out += payload.len;
+}
+
+/// Publishes a Message object (convenience for republishing/forwarding).
+///
+/// Arguments:
+///     msg: Message to publish (uses subject, data, and headers if present)
+///
+/// Useful for forwarding received messages or republishing with same content.
+/// Messages are buffered. Call flush() to ensure delivery.
+/// Thread-safe: protected by write_mutex for concurrent publish.
+pub fn publishMsg(self: *Client, msg: *const Message) !void {
+    assert(msg.subject.len > 0);
+    if (!self.state.canSend()) return error.NotConnected;
+    try pubsub.validatePublish(msg.subject);
+
+    // Check payload size (including headers if present)
+    const total_size = if (msg.headers) |h|
+        h.len + msg.data.len
+    else
+        msg.data.len;
+    if (total_size > self.max_payload) return error.PayloadTooLarge;
+
+    // Acquire write mutex for thread-safe buffer access
+    try self.write_mutex.lock(self.io);
+    defer self.write_mutex.unlock(self.io);
+
+    const writer = self.active_writer;
+
+    if (msg.headers) |hdrs| {
+        // Publish with headers using raw header bytes
+        protocol.Encoder.encodeHPub(writer, .{
+            .subject = msg.subject,
+            .reply_to = null,
+            .headers = hdrs,
+            .payload = msg.data,
+        }) catch return error.EncodingFailed;
+    } else {
+        // Publish without headers
+        protocol.Encoder.encodePub(writer, .{
+            .subject = msg.subject,
+            .reply_to = null,
+            .payload = msg.data,
+        }) catch return error.EncodingFailed;
+    }
+
+    self.stats.msgs_out += 1;
+    self.stats.bytes_out += msg.data.len;
+}
+
 /// Sends a request with headers and waits for a reply with timeout.
 ///
 /// Arguments:
@@ -1470,8 +1681,8 @@ pub fn requestWithHeaders(
         return error.NotConnected;
     }
 
-    // Generate unique inbox for reply
-    const inbox = try pubsub.newInbox(allocator, self.io);
+    // Generate unique inbox for reply (uses configured inbox_prefix)
+    const inbox = try self.newInbox(allocator);
     defer allocator.free(inbox);
 
     // Subscribe to inbox (temporary subscription)
@@ -1556,6 +1767,120 @@ pub fn flush(self: *Client, allocator: Allocator) !void {
     }
 }
 
+/// Sends all buffered data with a timeout.
+/// Returns error.Timeout if the flush doesn't complete in time.
+pub fn flushTimeout(
+    self: *Client,
+    allocator: Allocator,
+    timeout_ns: u64,
+) !void {
+    assert(timeout_ns > 0);
+    if (!self.state.canSend()) {
+        return error.NotConnected;
+    }
+
+    var flush_future = self.io.async(flushHelper, .{ self, allocator });
+    var timeout_future = self.io.async(sleepNs, .{ self.io, timeout_ns });
+
+    var winner: enum { none, flush, timeout } = .none;
+
+    defer if (winner != .flush) {
+        _ = flush_future.cancel(self.io);
+    };
+    defer if (winner != .timeout) {
+        timeout_future.cancel(self.io);
+    };
+
+    const select_result = self.io.select(.{
+        .flush = &flush_future,
+        .timeout = &timeout_future,
+    }) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
+        return err;
+    };
+
+    switch (select_result) {
+        .flush => |result| {
+            winner = .flush;
+            return result;
+        },
+        .timeout => {
+            winner = .timeout;
+            return error.Timeout;
+        },
+    }
+}
+
+/// Helper for async flush.
+fn flushHelper(self: *Client, allocator: Allocator) !void {
+    return self.flush(allocator);
+}
+
+/// Forces an immediate reconnection attempt.
+/// Closes the current connection and triggers reconnection logic.
+/// Subscriptions will be restored automatically.
+pub fn forceReconnect(self: *Client) !void {
+    const state = State.atomicLoad(&self.state);
+    if (state == .closed) return error.ConnectionClosed;
+    if (state == .reconnecting) return; // Already reconnecting
+    if (state != .connected) return error.NotConnected;
+
+    assert(self.next_sid >= 1);
+
+    // Close the socket - io_task will detect and start reconnection
+    self.stream.close(self.io);
+    State.atomicStore(&self.state, .reconnecting);
+}
+
+/// Gracefully drains with a timeout.
+/// Returns error.Timeout if drain doesn't complete in time.
+pub fn drainTimeout(
+    self: *Client,
+    allocator: Allocator,
+    timeout_ns: u64,
+) !DrainResult {
+    assert(timeout_ns > 0);
+    if (self.state != .connected) {
+        return error.NotConnected;
+    }
+
+    var drain_future = self.io.async(drainHelper, .{ self, allocator });
+    var timeout_future = self.io.async(sleepNs, .{ self.io, timeout_ns });
+
+    var winner: enum { none, drain, timeout } = .none;
+
+    defer if (winner != .drain) {
+        _ = drain_future.cancel(self.io);
+    };
+    defer if (winner != .timeout) {
+        timeout_future.cancel(self.io);
+    };
+
+    const select_result = self.io.select(.{
+        .drain = &drain_future,
+        .timeout = &timeout_future,
+    }) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
+        return err;
+    };
+
+    switch (select_result) {
+        .drain => |result| {
+            winner = .drain;
+            return result;
+        },
+        .timeout => {
+            winner = .timeout;
+            return error.Timeout;
+        },
+    }
+}
+
+/// Helper for async drain.
+fn drainHelper(self: *Client, allocator: Allocator) !DrainResult {
+    return self.drain(allocator);
+}
+
 /// Sends a request and waits for a reply with timeout.
 ///
 /// Arguments:
@@ -1579,8 +1904,8 @@ pub fn request(
         return error.NotConnected;
     }
 
-    // Generate unique inbox for reply
-    const inbox = try pubsub.newInbox(allocator, self.io);
+    // Generate unique inbox for reply (uses configured inbox_prefix)
+    const inbox = try self.newInbox(allocator);
     defer allocator.free(inbox);
 
     // Subscribe to inbox (temporary subscription)
@@ -1634,6 +1959,110 @@ pub fn request(
                 if (err == error.Canceled or err == error.Closed) {
                     return null;
                 }
+                return err;
+            };
+        },
+        .timeout => {
+            winner = .timeout;
+            return null;
+        },
+    }
+}
+
+/// Sends a request using a Message object and waits for a reply.
+///
+/// Arguments:
+///     allocator: Allocator for response message
+///     msg: Message to send (uses subject, data, and headers if present)
+///     timeout_ms: Maximum time to wait for reply in milliseconds
+///
+/// Useful for forwarding request messages or republishing with same content.
+/// Creates a temporary inbox subscription, sends request with reply-to,
+/// and waits for response. Returns null on timeout.
+pub fn requestMsg(
+    self: *Client,
+    allocator: Allocator,
+    msg: *const Message,
+    timeout_ms: u32,
+) !?Message {
+    assert(msg.subject.len > 0);
+    assert(timeout_ms > 0);
+    if (!self.state.canSend()) return error.NotConnected;
+
+    // Generate unique inbox for reply
+    const inbox = try self.newInbox(allocator);
+    defer allocator.free(inbox);
+
+    // Subscribe to inbox (temporary subscription)
+    const sub = try self.subscribe(allocator, inbox);
+    defer sub.deinit(allocator);
+
+    // Flush subscription registration before publishing
+    try self.flush(allocator);
+
+    // Brief delay to ensure server has registered subscription
+    self.io.sleep(.fromMilliseconds(5), .awake) catch {};
+
+    // Publish request with reply-to (with or without headers)
+    try self.write_mutex.lock(self.io);
+    {
+        defer self.write_mutex.unlock(self.io);
+        const writer = self.active_writer;
+
+        if (msg.headers) |hdrs| {
+            protocol.Encoder.encodeHPub(writer, .{
+                .subject = msg.subject,
+                .reply_to = inbox,
+                .headers = hdrs,
+                .payload = msg.data,
+            }) catch return error.EncodingFailed;
+        } else {
+            protocol.Encoder.encodePub(writer, .{
+                .subject = msg.subject,
+                .reply_to = inbox,
+                .payload = msg.data,
+            }) catch return error.EncodingFailed;
+        }
+
+        self.stats.msgs_out += 1;
+        self.stats.bytes_out += msg.data.len;
+    }
+    try self.flush(allocator);
+
+    // Wait for reply using io.select()
+    var response_future = self.io.async(
+        Subscription.next,
+        .{ sub, allocator, self.io },
+    );
+    var timeout_future = self.io.async(
+        sleepMs,
+        .{ self.io, timeout_ms },
+    );
+
+    var winner: enum { none, response, timeout } = .none;
+
+    defer if (winner != .response) {
+        if (response_future.cancel(self.io)) |reply| {
+            reply.deinit(allocator);
+        } else |_| {}
+    };
+    defer if (winner != .timeout) {
+        timeout_future.cancel(self.io);
+    };
+
+    const select_result = self.io.select(.{
+        .response = &response_future,
+        .timeout = &timeout_future,
+    }) catch |err| {
+        if (err == error.Canceled) return null;
+        return err;
+    };
+
+    switch (select_result) {
+        .response => |msg_result| {
+            winner = .response;
+            return msg_result catch |err| {
+                if (err == error.Canceled or err == error.Closed) return null;
                 return err;
             };
         },
@@ -1742,6 +2171,7 @@ pub fn drain(self: *Client, alloc: Allocator) !DrainResult {
         result.flush_failed = true;
     };
     self.state = .draining;
+    self.pushEvent(.{ .draining = {} });
 
     self.stream.close(self.io);
     self.state = .closed;
@@ -1800,6 +2230,436 @@ pub fn isTcpNoDelaySet(self: *const Client) bool {
 /// Returns true if TCP receive buffer was successfully set.
 pub fn isTcpRcvBufSet(self: *const Client) bool {
     return self.tcp_rcvbuf_set;
+}
+
+// =========================================================================
+// Connection Info Getters
+// =========================================================================
+
+/// Returns the currently connected server URL.
+/// Returns the original URL used to connect, or null if not connected.
+pub fn getConnectedUrl(self: *const Client) ?[]const u8 {
+    assert(self.next_sid >= 1);
+    if (self.original_url_len == 0) return null;
+    return self.original_url[0..self.original_url_len];
+}
+
+/// Returns the connected server's unique ID.
+/// This is the `server_id` from the INFO response.
+pub fn getConnectedServerId(self: *const Client) ?[]const u8 {
+    assert(self.next_sid >= 1);
+    if (self.server_info) |info| {
+        if (info.server_id.len > 0) return info.server_id;
+    }
+    return null;
+}
+
+/// Returns the connected server's name.
+/// This is the `server_name` from the INFO response.
+pub fn getConnectedServerName(self: *const Client) ?[]const u8 {
+    assert(self.next_sid >= 1);
+    if (self.server_info) |info| {
+        if (info.server_name.len > 0) return info.server_name;
+    }
+    return null;
+}
+
+/// Returns the connected server's version string.
+/// This is the `version` from the INFO response (e.g., "2.10.0").
+pub fn getConnectedServerVersion(self: *const Client) ?[]const u8 {
+    assert(self.next_sid >= 1);
+    if (self.server_info) |info| {
+        if (info.version.len > 0) return info.version;
+    }
+    return null;
+}
+
+/// Checks if the server version meets minimum requirements.
+///
+/// Arguments:
+///     min_major: Minimum major version required
+///     min_minor: Minimum minor version required
+///     min_patch: Minimum patch version required
+///
+/// Returns true if server version >= min_major.min_minor.min_patch.
+/// Returns false if not connected or version cannot be parsed.
+///
+/// Example: `client.checkCompatibility(2, 10, 0)` checks for NATS 2.10.0+.
+pub fn checkCompatibility(
+    self: *const Client,
+    min_major: u16,
+    min_minor: u16,
+    min_patch: u16,
+) bool {
+    assert(self.next_sid >= 1);
+    const version = self.getConnectedServerVersion() orelse return false;
+
+    // Parse version string (e.g., "2.10.0" or "2.10.0-beta")
+    var parts = std.mem.splitScalar(u8, version, '.');
+    const major_str = parts.next() orelse return false;
+    const minor_str = parts.next() orelse return false;
+    const patch_str = parts.next() orelse "0";
+
+    // Parse major
+    const major = std.fmt.parseInt(u16, major_str, 10) catch return false;
+
+    // Parse minor
+    const minor = std.fmt.parseInt(u16, minor_str, 10) catch return false;
+
+    // Parse patch (strip suffix like "-beta" if present)
+    var patch_clean = patch_str;
+    if (std.mem.indexOfScalar(u8, patch_str, '-')) |idx| {
+        patch_clean = patch_str[0..idx];
+    }
+    const patch = std.fmt.parseInt(u16, patch_clean, 10) catch 0;
+
+    // Compare: major > min OR (major == min AND minor > min) OR ...
+    if (major > min_major) return true;
+    if (major < min_major) return false;
+    if (minor > min_minor) return true;
+    if (minor < min_minor) return false;
+    return patch >= min_patch;
+}
+
+/// Returns the maximum payload size allowed by the server.
+/// Defaults to 1MB if not yet connected.
+pub fn getMaxPayload(self: *const Client) usize {
+    assert(self.next_sid >= 1);
+    return self.max_payload;
+}
+
+/// Returns true if the server supports message headers (NATS 2.2+).
+pub fn headersSupported(self: *const Client) bool {
+    assert(self.next_sid >= 1);
+    if (self.server_info) |info| {
+        return info.headers;
+    }
+    return false;
+}
+
+/// Returns the number of known servers in the connection pool.
+/// This includes the original server and any discovered via cluster INFO.
+pub fn getServerCount(self: *const Client) u8 {
+    assert(self.next_sid >= 1);
+    if (self.server_pool_initialized) {
+        return self.server_pool.serverCount();
+    }
+    return 0;
+}
+
+/// Returns a server URL from the pool at the given index.
+/// Use with getServerCount() to iterate all known servers.
+pub fn getServerUrl(self: *const Client, index: u8) ?[]const u8 {
+    assert(self.next_sid >= 1);
+    if (!self.server_pool_initialized) return null;
+    if (index >= self.server_pool.count) return null;
+    return self.server_pool.servers[index].getUrl();
+}
+
+/// Returns the count of discovered servers from cluster INFO.
+/// These are additional servers beyond the original connection URL.
+pub fn getDiscoveredServerCount(self: *const Client) u8 {
+    assert(self.next_sid >= 1);
+    if (self.server_info) |info| {
+        return info.connect_urls_count;
+    }
+    return 0;
+}
+
+/// Returns a discovered server URL at the given index.
+/// Use with getDiscoveredServerCount() to iterate discovered servers.
+pub fn getDiscoveredServerUrl(self: *const Client, index: u8) ?[]const u8 {
+    assert(self.next_sid >= 1);
+    if (self.server_info) |info| {
+        return info.getConnectUrl(index);
+    }
+    return null;
+}
+
+/// Returns the connected server's cluster name.
+/// This is the `cluster` from the INFO response.
+pub fn getConnectedClusterName(self: *const Client) ?[]const u8 {
+    assert(self.next_sid >= 1);
+    if (self.server_info) |info| {
+        return info.cluster;
+    }
+    return null;
+}
+
+/// Returns true if the server requires authentication.
+/// Derived from `auth_required` in the INFO response.
+pub fn authRequired(self: *const Client) bool {
+    assert(self.next_sid >= 1);
+    if (self.server_info) |info| {
+        return info.auth_required;
+    }
+    return false;
+}
+
+/// Returns true if the server requires TLS.
+/// Derived from `tls_required` in the INFO response.
+pub fn tlsRequired(self: *const Client) bool {
+    assert(self.next_sid >= 1);
+    if (self.server_info) |info| {
+        return info.tls_required;
+    }
+    return false;
+}
+
+/// Returns the client name from options.
+/// This is the name used in the CONNECT command.
+pub fn getName(self: *const Client) ?[]const u8 {
+    assert(self.next_sid >= 1);
+    return self.options.name;
+}
+
+/// Returns the client ID assigned by the server.
+/// This is the `client_id` from the INFO response.
+pub fn getClientID(self: *const Client) ?u64 {
+    assert(self.next_sid >= 1);
+    if (self.server_info) |info| {
+        return info.client_id;
+    }
+    return null;
+}
+
+/// Returns the client IP as seen by the server.
+/// This is the `client_ip` from the INFO response.
+pub fn getClientIP(self: *const Client) ?[]const u8 {
+    assert(self.next_sid >= 1);
+    if (self.server_info) |info| {
+        return info.client_ip;
+    }
+    return null;
+}
+
+/// Returns the connected server address as "host:port" string.
+/// Writes to the provided buffer and returns the slice.
+/// Returns null if not connected or buffer too small.
+pub fn getConnectedAddr(
+    self: *const Client,
+    buf: []u8,
+) ?[]const u8 {
+    assert(self.next_sid >= 1);
+    if (self.server_info) |info| {
+        if (info.host.len == 0) return null;
+        assert(info.port > 0);
+
+        // Format "host:port" into buffer
+        const result = std.fmt.bufPrint(buf, "{s}:{d}", .{
+            info.host,
+            info.port,
+        }) catch return null;
+        return result;
+    }
+    return null;
+}
+
+/// Returns the connected URL with password redacted.
+/// Replaces password with "***" for safe logging.
+/// Writes to the provided buffer and returns the slice.
+pub fn getConnectedUrlRedacted(
+    self: *const Client,
+    buf: []u8,
+) ?[]const u8 {
+    assert(self.next_sid >= 1);
+    if (self.original_url_len == 0) return null;
+
+    const url = self.original_url[0..self.original_url_len];
+
+    // Check if URL has credentials (look for @ in URL)
+    const at_pos = std.mem.indexOf(u8, url, "@") orelse {
+        // No credentials, return as-is
+        if (buf.len < url.len) return null;
+        @memcpy(buf[0..url.len], url);
+        return buf[0..url.len];
+    };
+
+    // Find protocol prefix (nats:// or tls://)
+    var prefix_len: usize = 0;
+    if (std.mem.startsWith(u8, url, "nats://")) {
+        prefix_len = 7;
+    } else if (std.mem.startsWith(u8, url, "tls://")) {
+        prefix_len = 6;
+    }
+
+    const auth_part = url[prefix_len..at_pos];
+    const colon_pos = std.mem.indexOf(u8, auth_part, ":") orelse {
+        // No password (just token or user), return as-is
+        if (buf.len < url.len) return null;
+        @memcpy(buf[0..url.len], url);
+        return buf[0..url.len];
+    };
+
+    // Redact password: "user:pass@host" -> "user:***@host"
+    const user = auth_part[0..colon_pos];
+    const host_part = url[at_pos..];
+    const redacted_pass = "***";
+
+    const new_len = prefix_len + user.len + 1 + redacted_pass.len + host_part.len;
+    if (buf.len < new_len) return null;
+
+    var pos: usize = 0;
+    @memcpy(buf[pos..][0..prefix_len], url[0..prefix_len]);
+    pos += prefix_len;
+    @memcpy(buf[pos..][0..user.len], user);
+    pos += user.len;
+    buf[pos] = ':';
+    pos += 1;
+    @memcpy(buf[pos..][0..redacted_pass.len], redacted_pass);
+    pos += redacted_pass.len;
+    @memcpy(buf[pos..][0..host_part.len], host_part);
+    pos += host_part.len;
+
+    assert(pos == new_len);
+    return buf[0..new_len];
+}
+
+/// Last error info returned by getLastError().
+pub const LastErrorInfo = struct {
+    err: anyerror,
+    msg: ?[]const u8,
+};
+
+/// Returns the last async error that occurred on the connection.
+/// This includes server -ERR messages and other async errors.
+/// The error message is from the server (e.g., permission violation).
+/// Returns null if no error has occurred since last clear.
+pub fn getLastError(self: *const Client) ?LastErrorInfo {
+    assert(self.next_sid >= 1);
+    if (self.last_error) |err| {
+        const msg: ?[]const u8 = if (self.last_error_msg_len > 0)
+            self.last_error_msg[0..self.last_error_msg_len]
+        else
+            null;
+        return .{ .err = err, .msg = msg };
+    }
+    return null;
+}
+
+/// Clears the last error.
+/// Call after handling the error to reset state.
+pub fn clearLastError(self: *Client) void {
+    assert(self.next_sid >= 1);
+    self.last_error = null;
+    self.last_error_msg_len = 0;
+}
+
+// =========================================================================
+// Connection State Methods
+// =========================================================================
+
+/// Returns the current connection state.
+/// Thread-safe: uses atomic load for cross-thread visibility.
+pub fn getStatus(self: *const Client) State {
+    assert(self.next_sid >= 1);
+    return State.atomicLoad(&self.state);
+}
+
+/// Returns true if the connection is permanently closed.
+/// Once closed, the client cannot be reconnected.
+pub fn isClosed(self: *const Client) bool {
+    assert(self.next_sid >= 1);
+    return State.atomicLoad(&self.state) == .closed;
+}
+
+/// Returns true if the connection is draining.
+/// During drain, no new subscriptions allowed but existing messages are delivered.
+pub fn isDraining(self: *const Client) bool {
+    assert(self.next_sid >= 1);
+    return State.atomicLoad(&self.state) == .draining;
+}
+
+/// Returns true if the connection is attempting to reconnect.
+pub fn isReconnecting(self: *const Client) bool {
+    assert(self.next_sid >= 1);
+    return State.atomicLoad(&self.state) == .reconnecting;
+}
+
+/// Returns the number of active subscriptions.
+pub fn numSubscriptions(self: *const Client) usize {
+    assert(self.next_sid >= 1);
+    // free_count tracks available slots; total - free = active
+    return MAX_SUBSCRIPTIONS - self.free_count;
+}
+
+/// Measures round-trip time to the server by sending PING and waiting for PONG.
+/// Returns RTT in nanoseconds.
+/// This is a blocking operation that waits for the server to respond.
+pub fn getRtt(self: *Client) !u64 {
+    if (!self.state.canSend()) return error.NotConnected;
+    assert(self.next_sid >= 1);
+
+    // Record start time
+    const start_ns = getNowNs() catch return error.TimerUnavailable;
+
+    // Send PING
+    try self.write_mutex.lock(self.io);
+    self.active_writer.writeAll("PING\r\n") catch {
+        self.write_mutex.unlock(self.io);
+        return error.WriteFailed;
+    };
+    self.active_writer.flush() catch {
+        self.write_mutex.unlock(self.io);
+        return error.WriteFailed;
+    };
+    if (self.use_tls) {
+        self.writer.interface.flush() catch {
+            self.write_mutex.unlock(self.io);
+            return error.WriteFailed;
+        };
+    }
+    self.write_mutex.unlock(self.io);
+
+    // Wait for PONG - poll last_pong_received_ns
+    // io_task handles PONG and updates the timestamp
+    const old_pong_ns = self.last_pong_received_ns.load(.acquire);
+    const timeout_ns: u64 = 5_000_000_000; // 5 second timeout
+    var check_counter: u32 = 0;
+
+    while (true) {
+        const current_pong_ns = self.last_pong_received_ns.load(.acquire);
+        if (current_pong_ns > old_pong_ns) {
+            // PONG received - calculate RTT
+            const end_ns = getNowNs() catch return error.TimerUnavailable;
+            return end_ns - start_ns;
+        }
+
+        // Check for timeout periodically
+        check_counter +%= 1;
+        if (check_counter >= defaults.Spin.timeout_check_iterations) {
+            check_counter = 0;
+            const now_ns = getNowNs() catch return error.TimerUnavailable;
+            if (now_ns - start_ns >= timeout_ns) {
+                return error.Timeout;
+            }
+        }
+
+        std.atomic.spinLoopHint();
+    }
+}
+
+/// Generates a new unique inbox subject using the configured prefix.
+/// Caller owns returned memory.
+pub fn newInbox(self: *Client, allocator: Allocator) ![]u8 {
+    assert(self.next_sid >= 1);
+    const prefix = self.options.inbox_prefix;
+    const random_len = 22;
+    const total_len = prefix.len + 1 + random_len; // prefix.random
+
+    const result = try allocator.alloc(u8, total_len);
+    @memcpy(result[0..prefix.len], prefix);
+    result[prefix.len] = '.';
+
+    // Fill random portion with base62 characters
+    const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" ++
+        "abcdefghijklmnopqrstuvwxyz";
+    self.io.random(result[prefix.len + 1 ..]);
+    for (result[prefix.len + 1 ..]) |*b| {
+        b.* = alphabet[@mod(b.*, alphabet.len)];
+    }
+
+    return result;
 }
 
 /// Reset rate-limit counters, allowing errors to re-trigger events.
@@ -2447,6 +3307,28 @@ pub const Subscription = struct {
     /// msgs_in value when alloc_failed event was last pushed (rate-limit).
     last_alloc_notified_at: u64 = 0,
 
+    // Auto-unsubscribe support
+    /// Maximum messages before auto-unsubscribe. Null = no limit.
+    /// When set, subscription auto-unsubscribes after this many messages.
+    max_msgs: ?u64 = null,
+    /// Count of delivered messages for auto-unsubscribe tracking.
+    /// Only tracked when max_msgs is set (opt-in for performance).
+    delivered_count: u64 = 0,
+    /// Flag set when auto-unsubscribe triggered (for io_task to send UNSUB).
+    auto_unsub_triggered: bool = false,
+
+    // Pending limits (flow control)
+    /// Maximum pending messages allowed in queue. 0 = no limit.
+    pending_limit: usize = 0,
+
+    // Pending bytes tracking (for statistics)
+    /// Current bytes pending in queue. Updated by io_task on push.
+    pending_bytes: u64 = 0,
+    /// High watermark for pending message count.
+    max_pending_msgs: u64 = 0,
+    /// High watermark for pending bytes.
+    max_pending_bytes: u64 = 0,
+
     /// Blocks until a message is available or connection is closed.
     ///
     /// Arguments:
@@ -2467,7 +3349,12 @@ pub const Subscription = struct {
         var spin_count: u32 = 0;
 
         while (true) {
-            if (self.queue.pop()) |msg| return msg;
+            if (self.queue.pop()) |msg| {
+                // Use backing_buf.len for speed (avoids 4 field accesses)
+                const msg_size = if (msg.backing_buf) |buf| buf.len else msg.size();
+                self.pending_bytes -|= msg_size;
+                return msg;
+            }
             if (self.state != .active and self.state != .draining) {
                 return error.Closed;
             }
@@ -2487,7 +3374,12 @@ pub const Subscription = struct {
 
     /// Try receive without blocking. Returns null if no message available.
     pub fn tryNext(self: *Subscription) ?Message {
-        return self.queue.pop();
+        if (self.queue.pop()) |msg| {
+            const msg_size = if (msg.backing_buf) |buf| buf.len else msg.size();
+            self.pending_bytes -|= msg_size;
+            return msg;
+        }
+        return null;
     }
 
     /// Batch receive - waits for at least 1, returns up to buf.len.
@@ -2500,7 +3392,14 @@ pub const Subscription = struct {
 
         while (true) {
             const count = self.queue.popBatch(buf);
-            if (count > 0) return count;
+            if (count > 0) {
+                // Decrement pending bytes for all popped messages
+                for (buf[0..count]) |msg| {
+                    const msg_size = if (msg.backing_buf) |buf_| buf_.len else msg.size();
+                    self.pending_bytes -|= msg_size;
+                }
+                return count;
+            }
             if (self.state != .active and self.state != .draining) {
                 return error.Closed;
             }
@@ -2520,7 +3419,12 @@ pub const Subscription = struct {
 
     /// Non-blocking batch receive.
     pub fn tryNextBatch(self: *Subscription, buf: []Message) usize {
-        return self.queue.popBatch(buf);
+        const count = self.queue.popBatch(buf);
+        for (buf[0..count]) |msg| {
+            const msg_size = if (msg.backing_buf) |buf_| buf_.len else msg.size();
+            self.pending_bytes -|= msg_size;
+        }
+        return count;
     }
 
     /// Receive with timeout using timer-based polling.
@@ -2543,13 +3447,22 @@ pub const Subscription = struct {
         // to avoid syscall overhead
         const start = std.time.Instant.now() catch {
             // Fallback to spin-only if timer unavailable
-            return self.queue.pop();
+            if (self.queue.pop()) |msg| {
+                const msg_size = if (msg.backing_buf) |buf| buf.len else msg.size();
+                self.pending_bytes -|= msg_size;
+                return msg;
+            }
+            return null;
         };
         const timeout_ns: u64 = @as(u64, timeout_ms) * std.time.ns_per_ms;
         var check_counter: u32 = 0;
 
         while (true) {
-            if (self.queue.pop()) |msg| return msg;
+            if (self.queue.pop()) |msg| {
+                const msg_size = if (msg.backing_buf) |buf| buf.len else msg.size();
+                self.pending_bytes -|= msg_size;
+                return msg;
+            }
             if (self.state != .active and self.state != .draining) {
                 return error.Closed;
             }
@@ -2583,10 +3496,264 @@ pub const Subscription = struct {
         return self.alloc_failed_msgs;
     }
 
+    // =========================================================================
+    // Subscription Control Methods
+    // =========================================================================
+
+    /// Auto-unsubscribe after receiving max messages.
+    /// Sends UNSUB with max_msgs to server for server-side enforcement.
+    /// Client also tracks and triggers local cleanup.
+    pub fn autoUnsubscribe(self: *Subscription, max: u64) !void {
+        assert(max > 0);
+        if (self.state != .active) return error.InvalidState;
+        if (self.client_destroyed) return error.InvalidState;
+
+        self.max_msgs = max;
+        self.delivered_count = 0;
+
+        // Send UNSUB with max_msgs to server (server tracks count too)
+        const client = self.client;
+        if (client.state.canSend()) {
+            try client.write_mutex.lock(client.io);
+            defer client.write_mutex.unlock(client.io);
+
+            const writer = client.active_writer;
+            protocol.Encoder.encodeUnsub(writer, .{
+                .sid = self.sid,
+                .max_msgs = max,
+            }) catch return error.EncodingFailed;
+        }
+    }
+
+    /// Gracefully drain this subscription.
+    /// Stops receiving new messages but delivers already-queued messages.
+    pub fn drain(self: *Subscription) !void {
+        if (self.state != .active) return;
+        if (self.client_destroyed) return error.InvalidState;
+
+        self.state = .draining;
+
+        // Send UNSUB to stop new messages (no max_msgs = immediate unsub)
+        const client = self.client;
+        if (client.state.canSend()) {
+            try client.write_mutex.lock(client.io);
+            defer client.write_mutex.unlock(client.io);
+
+            const writer = client.active_writer;
+            protocol.Encoder.encodeUnsub(writer, .{
+                .sid = self.sid,
+                .max_msgs = null,
+            }) catch return error.EncodingFailed;
+        }
+    }
+
+    /// Blocks until the subscription queue is empty (drained) or timeout.
+    ///
+    /// Call after drain() to wait for all queued messages to be consumed.
+    /// Returns error.Timeout if the queue is not empty after timeout_ms.
+    /// Returns error.NotDraining if subscription is not in draining state.
+    ///
+    /// Note: This only waits for the queue to empty. Call unsubscribe() or
+    /// deinit() afterward to fully clean up the subscription.
+    ///
+    /// Example:
+    /// ```
+    /// try sub.drain();
+    /// // ... consume messages with next() ...
+    /// try sub.waitDrained(5000); // Wait up to 5 seconds
+    /// sub.deinit(allocator);     // Clean up
+    /// ```
+    pub fn waitDrained(self: *Subscription, timeout_ms: u32) !void {
+        assert(timeout_ms > 0);
+
+        if (self.state != .draining) {
+            return error.NotDraining;
+        }
+
+        // Already drained
+        if (self.queue.len() == 0) {
+            return;
+        }
+
+        const start = std.time.Instant.now() catch {
+            // Timer unavailable - single check only
+            if (self.queue.len() == 0) {
+                return;
+            }
+            return error.Timeout;
+        };
+        const timeout_ns: u64 = @as(u64, timeout_ms) * std.time.ns_per_ms;
+        var check_counter: u32 = 0;
+
+        while (true) {
+            if (self.queue.len() == 0) {
+                return;
+            }
+
+            // Check timeout periodically to reduce syscalls
+            check_counter +%= 1;
+            if (check_counter >= defaults.Spin.timeout_check_iterations) {
+                check_counter = 0;
+                const now = std.time.Instant.now() catch return error.Timeout;
+                if (now.since(start) >= timeout_ns) return error.Timeout;
+            }
+
+            std.atomic.spinLoopHint();
+        }
+    }
+
+    /// Returns the number of messages pending in the queue.
+    pub fn pending(self: *const Subscription) usize {
+        return self.queue.len();
+    }
+
+    /// Returns the count of delivered messages.
+    /// Only tracked when autoUnsubscribe is set.
+    pub fn delivered(self: *const Subscription) u64 {
+        return self.delivered_count;
+    }
+
+    /// Sets the maximum pending message limit.
+    /// When exceeded, new messages are dropped (slow consumer).
+    /// Set to 0 for no limit (default).
+    pub fn setPendingLimits(self: *Subscription, msg_limit: usize) void {
+        self.pending_limit = msg_limit;
+    }
+
+    /// Returns the current pending message limit. 0 means no limit.
+    pub fn getPendingLimits(self: *const Subscription) usize {
+        return self.pending_limit;
+    }
+
+    /// Returns true if the subscription is valid and can receive messages.
+    pub fn isValid(self: *const Subscription) bool {
+        if (self.client_destroyed) return false;
+        return self.state == .active or self.state == .draining;
+    }
+
+    // =========================================================================
+    // Subscription Info Getters
+    // =========================================================================
+
+    /// Returns the subscription ID (SID).
+    /// Unique within the connection, assigned during subscribe.
+    pub fn getSid(self: *const Subscription) u64 {
+        assert(self.sid > 0);
+        return self.sid;
+    }
+
+    /// Returns the subscription subject pattern.
+    /// May contain wildcards (* and >).
+    pub fn getSubject(self: *const Subscription) []const u8 {
+        assert(self.subject.len > 0);
+        return self.subject;
+    }
+
+    /// Returns the queue group name if subscribed as a queue subscriber.
+    /// Returns null for regular subscriptions.
+    pub fn getQueueGroup(self: *const Subscription) ?[]const u8 {
+        return self.queue_group;
+    }
+
+    /// Returns true if this subscription is currently draining.
+    /// A draining subscription will deliver queued messages but not receive new ones.
+    pub fn isDraining(self: *const Subscription) bool {
+        return self.state == .draining;
+    }
+
+    // =========================================================================
+    // Subscription Statistics
+    // =========================================================================
+
+    /// Subscription statistics snapshot.
+    pub const SubStats = struct {
+        /// Current messages pending in queue.
+        pending_msgs: usize,
+        /// Current bytes pending in queue.
+        pending_bytes: u64,
+        /// High watermark for pending message count.
+        max_pending_msgs: u64,
+        /// High watermark for pending bytes.
+        max_pending_bytes: u64,
+        /// Total messages delivered to this subscription.
+        delivered: u64,
+        /// Messages dropped due to slow consumer (queue overflow).
+        dropped: u64,
+        /// Messages lost due to allocation failure.
+        alloc_failed: u64,
+    };
+
+    /// Returns current pending bytes in queue.
+    pub fn pendingBytes(self: *const Subscription) u64 {
+        return self.pending_bytes;
+    }
+
+    /// Returns high watermarks for pending messages and bytes.
+    pub fn maxPending(self: *const Subscription) struct { msgs: u64, bytes: u64 } {
+        return .{
+            .msgs = self.max_pending_msgs,
+            .bytes = self.max_pending_bytes,
+        };
+    }
+
+    /// Resets high watermark counters to current values.
+    pub fn clearMaxPending(self: *Subscription) void {
+        self.max_pending_msgs = self.queue.len();
+        self.max_pending_bytes = self.pending_bytes;
+    }
+
+    /// Returns a snapshot of subscription statistics.
+    pub fn getSubStats(self: *const Subscription) SubStats {
+        return .{
+            .pending_msgs = self.queue.len(),
+            .pending_bytes = self.pending_bytes,
+            .max_pending_msgs = self.max_pending_msgs,
+            .max_pending_bytes = self.max_pending_bytes,
+            .delivered = self.delivered_count,
+            .dropped = self.dropped_msgs,
+            .alloc_failed = self.alloc_failed_msgs,
+        };
+    }
+
     /// Push message to queue (called by io_task).
     /// Lock-free, never blocks.
+    /// ⚠️ HOT PATH: called for every message. Keep minimal.
     pub fn pushMessage(self: *Subscription, msg: Message) !void {
+        const queue_len = self.queue.len();
+
+        // Check pending limit if set (flow control)
+        if (self.pending_limit > 0 and queue_len >= self.pending_limit) {
+            return error.QueueFull;
+        }
+
         if (!self.queue.push(msg)) return error.QueueFull;
+
+        // Use backing_buf.len (always set for io_task messages) - avoids
+        // 4 field accesses in msg.size()
+        const msg_size = if (msg.backing_buf) |buf| buf.len else msg.size();
+        self.pending_bytes += msg_size;
+
+        // High watermarks (queue_len + 1 = new length after push)
+        const new_len = queue_len + 1;
+        if (new_len > self.max_pending_msgs) {
+            self.max_pending_msgs = new_len;
+        }
+        if (self.pending_bytes > self.max_pending_bytes) {
+            self.max_pending_bytes = self.pending_bytes;
+        }
+
+        // Track delivered count for auto-unsubscribe (opt-in, only if max set)
+        if (self.max_msgs != null) {
+            self.delivered_count += 1;
+            // Check if limit reached - fire subscription_complete event
+            if (self.delivered_count >= self.max_msgs.? and !self.auto_unsub_triggered) {
+                self.auto_unsub_triggered = true;
+                // Notify via event callback that subscription reached its limit
+                self.client.pushEvent(.{
+                    .subscription_complete = .{ .sid = self.sid },
+                });
+            }
+        }
     }
 
     /// Unsubscribes from the subject.

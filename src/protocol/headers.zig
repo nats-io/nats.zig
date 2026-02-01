@@ -44,6 +44,39 @@ pub const Status = struct {
     pub const control_message = "100";
 };
 
+/// Extracts status code from raw header bytes without allocation.
+/// Returns null if no status code present or invalid format.
+/// Format expected: "NATS/1.0 503 Description\r\n..." or "NATS/1.0\r\n..."
+pub fn extractStatus(header_data: []const u8) ?u16 {
+    // Minimum: "NATS/1.0\r\n" = 10 chars
+    if (header_data.len < 10) return null;
+
+    // Verify NATS/1.0 prefix
+    if (!std.mem.startsWith(u8, header_data, "NATS/1.0")) return null;
+
+    // Skip "NATS/1.0"
+    const after_version = header_data[8..];
+
+    // If next char is \r, no status code
+    if (after_version.len == 0 or after_version[0] == '\r') return null;
+
+    // Expect space before status code
+    if (after_version[0] != ' ') return null;
+
+    // Find end of status code (space or \r)
+    const status_start = 1; // skip space
+    var status_end: usize = status_start;
+    while (status_end < after_version.len) : (status_end += 1) {
+        const c = after_version[status_end];
+        if (c == ' ' or c == '\r') break;
+    }
+
+    if (status_end == status_start) return null;
+
+    const status_str = after_version[status_start..status_end];
+    return std.fmt.parseInt(u16, status_str, 10) catch null;
+}
+
 /// Header entry (key-value pair).
 pub const Entry = struct {
     key: []const u8,
@@ -521,4 +554,39 @@ test "header_end is set correctly" {
     try std.testing.expectEqual(@as(?ParseResult.ParseError, null), result.err);
     try std.testing.expectEqual(@as(usize, 22), result.header_end);
     try std.testing.expectEqualSlices(u8, "payload here", data[result.header_end..]);
+}
+
+test "extractStatus returns 503" {
+    const data = "NATS/1.0 503 No Responders\r\n\r\n";
+    try std.testing.expectEqual(@as(?u16, 503), extractStatus(data));
+}
+
+test "extractStatus returns 408" {
+    const data = "NATS/1.0 408 Request Timeout\r\n\r\n";
+    try std.testing.expectEqual(@as(?u16, 408), extractStatus(data));
+}
+
+test "extractStatus returns 100" {
+    const data = "NATS/1.0 100 Idle Heartbeat\r\nHeader: value\r\n\r\n";
+    try std.testing.expectEqual(@as(?u16, 100), extractStatus(data));
+}
+
+test "extractStatus returns null for no status" {
+    const data = "NATS/1.0\r\nFoo: bar\r\n\r\n";
+    try std.testing.expectEqual(@as(?u16, null), extractStatus(data));
+}
+
+test "extractStatus returns null for invalid prefix" {
+    const data = "HTTP/1.0 200 OK\r\n\r\n";
+    try std.testing.expectEqual(@as(?u16, null), extractStatus(data));
+}
+
+test "extractStatus returns null for short data" {
+    const data = "NATS";
+    try std.testing.expectEqual(@as(?u16, null), extractStatus(data));
+}
+
+test "extractStatus handles status without description" {
+    const data = "NATS/1.0 503\r\n\r\n";
+    try std.testing.expectEqual(@as(?u16, 503), extractStatus(data));
 }

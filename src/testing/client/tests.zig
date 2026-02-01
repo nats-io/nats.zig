@@ -11,6 +11,7 @@ pub const publish = @import("publish.zig");
 pub const subscribe = @import("subscribe.zig");
 pub const multi_client = @import("multi_client.zig");
 pub const stats = @import("stats.zig");
+pub const getters = @import("getters.zig");
 pub const stress = @import("stress.zig");
 pub const auth = @import("auth.zig");
 pub const connection = @import("connection.zig");
@@ -28,6 +29,8 @@ pub const headers = @import("headers.zig");
 pub const nkey = @import("nkey.zig");
 pub const jwt = @import("jwt.zig");
 pub const tls = @import("tls.zig");
+pub const state_notifications = @import("state_notifications.zig");
+pub const advanced = @import("advanced.zig");
 
 /// Runs all async client tests.
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -36,6 +39,7 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     subscribe.runAll(allocator);
     multi_client.runAll(allocator);
     stats.runAll(allocator);
+    getters.runAll(allocator);
     stress.runAll(allocator);
     auth.runAll(allocator);
     connection.runAll(allocator, manager);
@@ -53,4 +57,6 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     reconnect.runAll(allocator, manager);
     error_handling.runAll(allocator);
     headers.runAll(allocator);
+    state_notifications.runAll(allocator);
+    advanced.runAll(allocator);
 }
