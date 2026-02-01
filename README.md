@@ -8,23 +8,10 @@ A [Zig](https://ziglang.org/) client for the [NATS messaging system](https://nat
 
 Native Zig. Zero dependencies. Built on `std.Io`.
 
-## Design Choices
-
-**Memory architecture:**
-- TieredSlab allocator for O(1) message buffers - 5 size tiers, embedded free lists, pre-allocated via mmap
-- SidMap for O(1) subscription routing - zero-allocation hash map with caller-provided backing arrays
-- Lock-free SpscQueue for cross-thread message passing - documented memory ordering, no mutexes in hot path
-- Return queue for contention-free buffer recycling between threads
-
-**API:**
-- One subscription model, three retrieval methods: `next()` (blocking), `tryNext()` (polling), `nextWithTimeout()` (bounded)
-- Batch operations: `nextBatch()` drains multiple messages at once
-- Comptime event handlers via `@hasDecl()` - only implemented callbacks are dispatched
-
 ## Requirements
 
 - Zig 0.16.0 or later
-- NATS server (for integration tests and benchmarks)
+- NATS server (for running examples and tests)
 
 ## Installation
 
@@ -84,6 +71,32 @@ pub fn main() !void {
 }
 ```
 
+## Memory Ownership
+
+Messages returned by `next()`, `tryNext()`, and `nextWithTimeout()` are **owned**.
+You **must** call `deinit()` to free memory:
+
+```zig
+const msg = try sub.next(allocator, io);
+defer msg.deinit(allocator);  // ALWAYS do this
+
+// Access message fields (valid until deinit)
+std.debug.print("Subject: {s}\n", .{msg.subject});
+std.debug.print("Data: {s}\n", .{msg.data});
+```
+
+### Message Structure
+
+```zig
+pub const Message = struct {
+    subject: []const u8,       // Message subject
+    sid: u64,                  // Subscription ID
+    reply_to: ?[]const u8,     // Reply-to address (for request/reply)
+    data: []const u8,          // Message payload
+    headers: ?[]const u8,      // Raw NATS headers (use headers.parse())
+};
+```
+
 ## Examples
 
 Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
@@ -101,39 +114,6 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 | graceful_shutdown | `run-graceful-shutdown` | `drain()` lifecycle, pre-shutdown health checks |
 
 Source: `src/examples/`
-
-## API Quick Reference
-
-| Want to... | Method | Returns |
-|------------|--------|---------|
-| Publish message | `client.publish(subject, data)` | `!void` |
-| Publish with reply-to | `client.publishRequest(subject, reply_to, data)` | `!void` |
-| Flush to network | `client.flush(allocator)` | `!void` |
-| Subscribe | `client.subscribe(allocator, subject)` | `!*Sub` |
-| Queue subscribe | `client.subscribeQueue(allocator, subject, group)` | `!*Sub` |
-| Unsubscribe | `sub.unsubscribe()` | `!void` |
-| Free subscription | `sub.deinit(allocator)` | `void` |
-| Request/reply | `client.request(allocator, subject, data, timeout_ms)` | `!?Message` |
-| Publish with headers | `client.publishWithHeaders(subject, hdrs, data)` | `!void` |
-| Publish+reply+headers | `client.publishRequestWithHeaders(subject, reply, hdrs, data)` | `!void` |
-| Request with headers | `client.requestWithHeaders(allocator, subject, hdrs, data, timeout_ms)` | `!?Message` |
-| Receive (blocking) | `sub.next(allocator, io)` | `!Message` |
-| Receive (non-blocking) | `sub.tryNext()` | `?Message` |
-| Receive (with timeout) | `sub.nextWithTimeout(allocator, timeout_ms)` | `!?Message` |
-| Batch receive | `sub.nextBatch(io, buf)` | `!usize` |
-| Check drops | `sub.getDroppedCount()` | `u64` |
-| Auto-unsubscribe | `sub.autoUnsubscribe(max_msgs)` | `!void` |
-| Check pending | `sub.pending()` | `usize` |
-| Check delivered | `sub.delivered()` | `u64` |
-| Check valid | `sub.isValid()` | `bool` |
-| Respond to message | `msg.respond(client, data)` | `!void` |
-| Message size | `msg.size()` | `usize` |
-| Connection status | `client.getStatus()` | `State` |
-| Server RTT | `client.getRtt()` | `!u64` |
-| Server URL | `client.getConnectedUrl()` | `?[]const u8` |
-| Server ID | `client.getConnectedServerId()` | `?[]const u8` |
-| Flush with timeout | `client.flushTimeout(alloc, timeout_ns)` | `!void` |
-| Force reconnect | `client.forceReconnect()` | `!void` |
 
 ---
 
@@ -250,13 +230,9 @@ sub.deinit(allocator);  // Still needed to free memory
 `deinit()` always succeeds (errors are logged, not returned) making it safe for
 `defer`.
 
----
+### Receiving Messages
 
-## Receiving Messages
-
-### Blocking Receive: `next()`
-
-Blocks until a message arrives. Use in dedicated receiver loops:
+**Blocking:** `next()` blocks until a message arrives. Use in dedicated receiver loops:
 
 ```zig
 while (true) {
@@ -271,9 +247,7 @@ while (true) {
 }
 ```
 
-### Non-Blocking Poll: `tryNext()`
-
-Returns immediately. Use for event loops or polling:
+**Non-Blocking:** `tryNext()` returns immediately. Use for event loops or polling:
 
 ```zig
 // Process all available messages without waiting
@@ -284,9 +258,7 @@ while (sub.tryNext()) |msg| {
 // No more messages - continue with other work
 ```
 
-### Receive with Timeout: `nextWithTimeout()`
-
-Returns `null` on timeout. Uses `io.select()` internally:
+**With Timeout:** `nextWithTimeout()` returns `null` on timeout:
 
 ```zig
 if (try sub.nextWithTimeout(allocator, 5000)) |msg| {
@@ -297,9 +269,7 @@ if (try sub.nextWithTimeout(allocator, 5000)) |msg| {
 }
 ```
 
-### Batch Receive: `nextBatch()` / `tryNextBatch()`
-
-Receive multiple messages at once for efficiency:
+**Batch:** `nextBatch()` / `tryNextBatch()` receive multiple messages at once:
 
 ```zig
 var buf: [64]Message = undefined;
@@ -328,6 +298,48 @@ for (buf[0..available]) |*msg| {
 | `nextWithTimeout()` | Yes (bounded) | `!?Message` | Request/reply, timed waits |
 | `nextBatch()` | Yes | `!usize` | High-throughput batching |
 | `tryNextBatch()` | No | `usize` | Drain queue without blocking |
+
+### Subscription Control
+
+**Auto-Unsubscribe:** Automatically unsubscribe after receiving a specific number of messages:
+
+```zig
+const sub = try client.subscribe(allocator, "events.>");
+
+// Auto-unsubscribe after 10 messages
+try sub.autoUnsubscribe(10);
+
+// Process messages (subscription closes after 10th)
+while (sub.isValid()) {
+    if (sub.tryNext()) |msg| {
+        defer msg.deinit(allocator);
+        processMessage(msg);
+    }
+}
+```
+
+**Statistics:**
+
+```zig
+// Messages waiting in queue
+const pending = sub.pending();
+
+// Messages delivered (only tracked if autoUnsubscribe was called)
+const delivered = sub.delivered();
+
+// Check if subscription is still valid
+if (sub.isValid()) {
+    // Can still receive messages
+}
+```
+
+**Per-Subscription Drain:** Drain a single subscription while keeping others active:
+
+```zig
+try sub.drain();
+// Subscription stops receiving new messages
+// Already-queued messages can still be consumed
+```
 
 ---
 
@@ -374,6 +386,23 @@ while (true) {
 }
 ```
 
+### Responding with `msg.respond()`
+
+Convenience method for the request/reply pattern:
+
+```zig
+const msg = try sub.next(allocator, io);
+defer msg.deinit(allocator);
+
+// Respond using the message's reply_to
+msg.respond(client, "response data") catch |err| {
+    if (err == error.NoReplyTo) {
+        // Message had no reply_to address
+    }
+};
+try client.flush(allocator);
+```
+
 ### Manual Request/Reply Pattern
 
 For more control, manage the inbox yourself:
@@ -397,6 +426,27 @@ if (try reply_sub.nextWithTimeout(allocator, 5000)) |reply| {
     // Process reply
 } else {
     // Timeout
+}
+```
+
+### Check No-Responders Status
+
+Detect when a request has no available responders (status 503):
+
+```zig
+const reply = try client.request(allocator, "service.endpoint", "data", 1000);
+if (reply) |msg| {
+    defer msg.deinit(allocator);
+
+    if (msg.isNoResponders()) {
+        // No service available to handle request
+        std.debug.print("No responders for request\n", .{});
+    } else {
+        // Normal response - check status code if needed
+        if (msg.getStatus()) |status| {
+            std.debug.print("Status: {d}\n", .{status});
+        }
+    }
 }
 ```
 
@@ -507,6 +557,45 @@ const hdrs = [_]headers.Entry{
 | `expected_last_msg_id` | `Nats-Expected-Last-Msg-Id` | Optimistic concurrency |
 | `expected_last_seq` | `Nats-Expected-Last-Sequence` | Sequence verification |
 
+### HeaderMap Builder
+
+For programmatic header construction:
+
+```zig
+const nats = @import("nats");
+
+var headers: nats.HeaderMap = .{};
+defer headers.deinit(allocator);
+
+// Set headers (replaces existing)
+try headers.set(allocator, "Content-Type", "application/json");
+try headers.set(allocator, "X-Request-Id", "req-123");
+
+// Add headers (allows multiple values for same key)
+try headers.add(allocator, "X-Tag", "important");
+try headers.add(allocator, "X-Tag", "urgent");
+
+// Get values
+if (headers.get("Content-Type")) |ct| {
+    std.debug.print("Content-Type: {s}\n", .{ct});
+}
+
+// Get all values for a key
+if (try headers.getAll(allocator, "X-Tag")) |tags| {
+    defer allocator.free(tags);
+    for (tags) |tag| {
+        std.debug.print("Tag: {s}\n", .{tag});
+    }
+}
+
+// Delete headers
+headers.delete(allocator, "X-Tag");
+
+// Publish with HeaderMap
+try client.publishWithHeaderMap(allocator, "subject", &headers, "payload");
+try client.flush(allocator);
+```
+
 ### Header Notes
 
 - Header values can contain colons (URLs, timestamps work fine)
@@ -589,17 +678,14 @@ switch (result) {
 
 ---
 
-## Connection Options
+## Connections
+
+### Connection Options
 
 ```zig
 const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
     // Identity
     .name = "my-app",              // Client name (visible in server logs)
-
-    // Authentication
-    .user = "user",                // Username
-    .pass = "pass",                // Password
-    .auth_token = "token",         // Token auth (alternative to user/pass)
 
     // Buffers
     .buffer_size = 256 * 1024,     // Read/write buffer (default 256KB)
@@ -630,189 +716,10 @@ const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .
 });
 ```
 
----
-
-## NKey Authentication
-
-NKey authentication uses Ed25519 signatures for secure, password-less
-authentication. NKeys are the recommended authentication method for production
-NATS deployments.
-
-### Using NKey Seed (Direct)
-
-Pass the seed directly in connection options:
-
-```zig
-const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
-    .nkey_seed = "SUAMK2FG4MI6UE3ACF3FK3OIQBCEIEZV7NSWFFEW63UXMRLFM2XLAXK4GY",
-});
-```
-
-### Using NKey Seed File
-
-Load the seed from a file (useful for deployment):
-
-```zig
-const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
-    .nkey_seed_file = "/path/to/user.nk",
-});
-```
-
-### Using Signing Callback (HSM/Hardware Keys)
-
-For hardware security modules or custom signing:
-
-```zig
-fn mySignCallback(nonce: []const u8, sig: *[64]u8) bool {
-    // Sign nonce using HSM, hardware token, etc.
-    // Return true on success, false on failure
-    return hsm.sign(nonce, sig);
-}
-
-const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
-    .nkey_pubkey = "UDXU4RCSJNZOIQHZNWXHXORDPRTGNJAHAHFRGZNEEJCPQTT2M7NLCNF4",
-    .nkey_sign_fn = &mySignCallback,
-});
-```
-
-### Priority Order
-
-When multiple NKey options are set, they are used in this priority:
-
-1. `nkey_seed` - Direct seed string
-2. `nkey_seed_file` - Load seed from file
-3. `nkey_sign_fn` + `nkey_pubkey` - Custom signing callback
-
-### Security Notes
-
-- The library securely wipes seed data from memory after use
-
----
-
-## JWT/Credentials Authentication
-
-For NATS deployments using the account/user JWT model (operators, accounts, users).
-
-### Using Credentials File
-
-Standard `.creds` file generated by `nsc`:
-
-```zig
-const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
-    .creds_file = "/path/to/user.creds",
-});
-```
-
-### Using Credentials Content
-
-Load credentials from environment or embed at compile time:
-
-```zig
-// From environment variable
-const creds = std.posix.getenv("NATS_CREDS") orelse return error.MissingCreds;
-const client = try nats.Client.connect(allocator, io, url, .{
-    .creds = creds,
-});
-
-// Or embed at compile time
-const client = try nats.Client.connect(allocator, io, url, .{
-    .creds = @embedFile("user.creds"),
-});
-```
-
-### Priority Order
-
-When multiple auth options are set:
-
-1. `creds_file` / `creds` - JWT + NKey from credentials
-2. `nkey_seed` / `nkey_seed_file` - NKey only
-3. `nkey_sign_fn` + `nkey_pubkey` - Custom signing
-4. `user` / `pass` or `auth_token` - Basic auth
-
----
-
-## TLS/SSL
-
-Secure connections using native Zig TLS
-
-### Enabling TLS
-
-Three ways to enable TLS:
-
-```zig
-// 1. URL scheme (recommended)
-const client = try nats.Client.connect(allocator, io, "tls://localhost:4443", .{});
-
-// 2. Explicit option
-const client = try nats.Client.connect(allocator, io, "nats://localhost:4443", .{
-    .tls_required = true,
-});
-
-// 3. Automatic - if server requires TLS, client upgrades automatically
-```
-
-### TLS Options
-
-```zig
-const client = try nats.Client.connect(allocator, io, "tls://localhost:4443", .{
-    // Server certificate verification (production)
-    .tls_ca_file = "/path/to/ca.pem",         // CA certificate file
-
-    // Skip verification (development only!)
-    .tls_insecure_skip_verify = true,         // Trust any server cert
-
-    // TLS-first handshake (for TLS-terminating proxies)
-    .tls_handshake_first = true,              // TLS before NATS protocol
-});
-```
-
-### Mutual TLS (mTLS)
-
-For client certificate authentication:
-
-```zig
-const client = try nats.Client.connect(allocator, io, "tls://localhost:4443", .{
-    .tls_ca_file = "/path/to/ca.pem",         // Server CA
-    .tls_cert_file = "/path/to/client.pem",   // Client certificate
-    .tls_key_file = "/path/to/client-key.pem", // Client private key
-});
-```
-
-### Checking TLS Status
-
-```zig
-const client = try nats.Client.connect(allocator, io, url, .{});
-
-if (client.isTls()) {
-    std.debug.print("Connection is encrypted\n", .{});
-}
-
-// Server TLS info (from INFO message)
-if (client.getServerInfo()) |info| {
-    std.debug.print("Server requires TLS: {}\n", .{info.tls_required});
-    std.debug.print("Server supports TLS: {}\n", .{info.tls_available});
-}
-```
-
-### TLS Options Reference
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `tls_required` | `bool` | Force TLS connection |
-| `tls_ca_file` | `?[]const u8` | CA certificate file path (PEM) |
-| `tls_cert_file` | `?[]const u8` | Client certificate for mTLS (PEM) |
-| `tls_key_file` | `?[]const u8` | Client private key for mTLS (PEM) |
-| `tls_insecure_skip_verify` | `bool` | Skip server certificate verification |
-| `tls_handshake_first` | `bool` | TLS handshake before NATS protocol |
-
----
-
-## Event Callbacks
+### Event Callbacks
 
 Handle connection lifecycle events using the `EventHandler` pattern - a type-safe,
 Zig-idiomatic approach similar to `std.mem.Allocator`.
-
-### Basic Usage
 
 ```zig
 const MyHandler = struct {
@@ -838,21 +745,17 @@ const client = try nats.Client.connect(allocator, io, url, .{
 });
 ```
 
-### Accessing External State
-
-Handlers can reference external application state - no closures needed:
+**Accessing External State:** Handlers can reference external application state:
 
 ```zig
-// Your application state
 const AppState = struct {
     is_online: bool = false,
     reconnect_count: u32 = 0,
     last_error: ?anyerror = null,
 };
 
-// Handler with reference to external state
 const MyHandler = struct {
-    app: *AppState,  // Reference to your app state!
+    app: *AppState,
 
     pub fn onConnect(self: *@This()) void {
         self.app.is_online = true;
@@ -869,21 +772,16 @@ const MyHandler = struct {
     }
 };
 
-// Wire it up
 var app_state = AppState{};
 var handler = MyHandler{ .app = &app_state };
 
 const client = try nats.Client.connect(allocator, io, url, .{
     .event_handler = nats.EventHandler.init(MyHandler, &handler),
 });
-
-// Now your main loop can check app_state.is_online, etc.
 ```
 
-### Available Callbacks
-
-| Method | When Fired |
-|--------|------------|
+| Callback | When Fired |
+|----------|------------|
 | `onConnect()` | Initial connection established |
 | `onDisconnect(?anyerror)` | Connection lost (error or clean close) |
 | `onReconnect()` | Reconnection successful |
@@ -891,23 +789,32 @@ const client = try nats.Client.connect(allocator, io, url, .{
 | `onError(anyerror)` | Async error (slow consumer, etc.) |
 | `onLameDuck()` | Server entering shutdown mode |
 
-All callbacks are **optional** - only implement the ones you need. Unimplemented
-callbacks are simply not called.
+All callbacks are **optional** - only implement the ones you need.
 
-### Disabling Auto-Reconnect
+### Connection State
 
 ```zig
-const client = try nats.Client.connect(allocator, io, url, .{
-    .reconnect = false,  // Disable auto-reconnect
-});
-// On disconnect: onDisconnect() called, then onClose(), no reconnect attempts
+const State = @import("nats").connection.State;
+
+const status = client.getStatus();
+switch (status) {
+    .connected => std.debug.print("Connected\n", .{}),
+    .reconnecting => std.debug.print("Reconnecting...\n", .{}),
+    .draining => std.debug.print("Draining\n", .{}),
+    .closed => std.debug.print("Closed\n", .{}),
+    else => {},
+}
+
+// Convenience checks
+if (client.isClosed()) { /* permanently closed */ }
+if (client.isDraining()) { /* draining subscriptions */ }
+if (client.isReconnecting()) { /* attempting reconnect */ }
+
+// Subscription count
+const num_subs = client.numSubscriptions();
 ```
 
----
-
-## Connection Information
-
-Access server details and connection state:
+### Connection Information
 
 ```zig
 // Server details (from INFO response)
@@ -935,50 +842,18 @@ for (0..server_count) |i| {
         std.debug.print("Known server: {s}\n", .{url});
     }
 }
-```
 
-### Connection State
-
-```zig
-const State = @import("nats").connection.State;
-
-// Get current state
-const status = client.getStatus();
-switch (status) {
-    .connected => std.debug.print("Connected\n", .{}),
-    .reconnecting => std.debug.print("Reconnecting...\n", .{}),
-    .draining => std.debug.print("Draining\n", .{}),
-    .closed => std.debug.print("Closed\n", .{}),
-    else => {},
-}
-
-// Convenience checks
-if (client.isClosed()) { /* permanently closed */ }
-if (client.isDraining()) { /* draining subscriptions */ }
-if (client.isReconnecting()) { /* attempting reconnect */ }
-
-// Subscription count
-const num_subs = client.numSubscriptions();
-```
-
-### RTT Measurement
-
-Measure round-trip time to the server:
-
-```zig
+// RTT measurement
 const rtt_ns = try client.getRtt();
 const rtt_ms = @as(f64, @floatFromInt(rtt_ns)) / 1_000_000.0;
 std.debug.print("RTT: {d:.2}ms\n", .{rtt_ms});
 ```
 
----
+### Connection Control
 
-## Connection Control
-
-### Flush with Timeout
+**Flush with Timeout:**
 
 ```zig
-// Flush with 5 second timeout
 client.flushTimeout(allocator, 5_000_000_000) catch |err| {
     if (err == error.Timeout) {
         std.debug.print("Flush timed out\n", .{});
@@ -986,16 +861,14 @@ client.flushTimeout(allocator, 5_000_000_000) catch |err| {
 };
 ```
 
-### Force Reconnect
-
-Manually trigger a reconnection:
+**Force Reconnect:**
 
 ```zig
 try client.forceReconnect();
 // Connection closes, io_task starts reconnection process
 ```
 
-### Drain with Timeout
+**Drain with Timeout:**
 
 ```zig
 const result = client.drainTimeout(allocator, 30_000_000_000) catch |err| {
@@ -1009,238 +882,7 @@ if (!result.isClean()) {
 }
 ```
 
----
-
-## Subscription Control
-
-### Auto-Unsubscribe
-
-Automatically unsubscribe after receiving a specific number of messages:
-
-```zig
-const sub = try client.subscribe(allocator, "events.>");
-
-// Auto-unsubscribe after 10 messages
-try sub.autoUnsubscribe(10);
-
-// Process messages (subscription closes after 10th)
-while (sub.isValid()) {
-    if (sub.tryNext()) |msg| {
-        defer msg.deinit(allocator);
-        processMessage(msg);
-    }
-}
-```
-
-### Subscription Statistics
-
-```zig
-// Messages waiting in queue
-const pending = sub.pending();
-
-// Messages delivered (only tracked if autoUnsubscribe was called)
-const delivered = sub.delivered();
-
-// Check if subscription is still valid
-if (sub.isValid()) {
-    // Can still receive messages
-}
-```
-
-### Per-Subscription Drain
-
-Drain a single subscription while keeping others active:
-
-```zig
-try sub.drain();
-// Subscription stops receiving new messages
-// Already-queued messages can still be consumed
-```
-
----
-
-## HeaderMap Builder
-
-For programmatic header construction:
-
-```zig
-const nats = @import("nats");
-
-var headers: nats.HeaderMap = .{};
-defer headers.deinit(allocator);
-
-// Set headers (replaces existing)
-try headers.set(allocator, "Content-Type", "application/json");
-try headers.set(allocator, "X-Request-Id", "req-123");
-
-// Add headers (allows multiple values for same key)
-try headers.add(allocator, "X-Tag", "important");
-try headers.add(allocator, "X-Tag", "urgent");
-
-// Get values
-if (headers.get("Content-Type")) |ct| {
-    std.debug.print("Content-Type: {s}\n", .{ct});
-}
-
-// Get all values for a key
-if (try headers.getAll(allocator, "X-Tag")) |tags| {
-    defer allocator.free(tags);
-    for (tags) |tag| {
-        std.debug.print("Tag: {s}\n", .{tag});
-    }
-}
-
-// Delete headers
-headers.delete(allocator, "X-Tag");
-
-// Publish with HeaderMap
-try client.publishWithHeaderMap(allocator, "subject", &headers, "payload");
-try client.flush(allocator);
-```
-
----
-
-## Message Methods
-
-### Respond to Request
-
-Convenience method for request/reply pattern:
-
-```zig
-const msg = try sub.next(allocator, io);
-defer msg.deinit(allocator);
-
-// Respond using the message's reply_to
-msg.respond(client, "response data") catch |err| {
-    if (err == error.NoReplyTo) {
-        // Message had no reply_to address
-    }
-};
-try client.flush(allocator);
-```
-
-### Message Size
-
-```zig
-const msg = try sub.next(allocator, io);
-defer msg.deinit(allocator);
-
-const total_size = msg.size();  // subject + data + reply_to + headers
-```
-
-### Check No-Responders Status
-
-Detect when a request has no available responders (status 503):
-
-```zig
-const reply = try client.request(allocator, "service.endpoint", "data", 1000);
-if (reply) |msg| {
-    defer msg.deinit(allocator);
-
-    if (msg.isNoResponders()) {
-        // No service available to handle request
-        std.debug.print("No responders for request\n", .{});
-    } else {
-        // Normal response - check status code if needed
-        if (msg.getStatus()) |status| {
-            std.debug.print("Status: {d}\n", .{status});
-        }
-    }
-}
-```
-
-### Republish/Forward Messages
-
-Forward a received message to another subject:
-
-```zig
-const msg = try sub.next(allocator, io);
-defer msg.deinit(allocator);
-
-// Republish with same data and headers
-var forward_msg = msg.*;
-forward_msg.subject = "other.subject";
-try client.publishMsg(&forward_msg);
-```
-
-### Request with Message Object
-
-Send a request using a Message object:
-
-```zig
-const request = nats.Client.Message{
-    .subject = "service.endpoint",
-    .sid = 0,
-    .reply_to = null,
-    .data = "request payload",
-    .headers = null,
-    .owned = false,
-};
-
-const reply = try client.requestMsg(allocator, &request, 1000);
-if (reply) |msg| {
-    defer msg.deinit(allocator);
-    // Handle response
-}
-```
-
----
-
-## Server Compatibility
-
-### Check Server Version
-
-Verify the server meets minimum version requirements:
-
-```zig
-// Check for NATS 2.10.0 or later (required for some features)
-if (client.checkCompatibility(2, 10, 0)) {
-    // Server supports NATS 2.10+ features
-} else {
-    std.debug.print("Server version too old\n", .{});
-}
-
-// Get the actual version string
-if (client.getConnectedServerVersion()) |version| {
-    std.debug.print("Connected to NATS {s}\n", .{version});
-}
-```
-
----
-
-## Message Lifecycle
-
-### Memory Ownership
-
-Messages returned by `next()`, `tryNext()`, and `nextWithTimeout()` are **owned**.
-You **must** call `deinit()` to free memory:
-
-```zig
-const msg = try sub.next(allocator, io);
-defer msg.deinit(allocator);  // ALWAYS do this
-
-// Access message fields (valid until deinit)
-std.debug.print("Subject: {s}\n", .{msg.subject});
-std.debug.print("Data: {s}\n", .{msg.data});
-```
-
-### Message Structure
-
-```zig
-pub const Message = struct {
-    subject: []const u8,       // Message subject
-    sid: u64,                  // Subscription ID
-    reply_to: ?[]const u8,     // Reply-to address (for request/reply)
-    data: []const u8,          // Message payload
-    headers: ?[]const u8,      // Raw NATS headers (use headers.parse())
-};
-```
-
----
-
-## Handling Slow Consumers
-
-### Queue Overflow Detection
+### Handling Slow Consumers
 
 When messages arrive faster than you process them, the queue fills up and messages are dropped:
 
@@ -1259,7 +901,7 @@ while (true) {
 }
 ```
 
-### Tuning for High Throughput
+**Tuning for High Throughput:**
 
 ```zig
 const client = try nats.Client.connect(allocator, io, url, .{
@@ -1268,6 +910,161 @@ const client = try nats.Client.connect(allocator, io, url, .{
     .buffer_size = 1024 * 1024,    // 1MB read/write buffer
 });
 ```
+
+---
+
+## Authentication
+
+### Username/Password
+
+```zig
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    .user = "user",
+    .pass = "pass",
+});
+```
+
+### Token Authentication
+
+```zig
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    .auth_token = "my-secret-token",
+});
+```
+
+### NKey Authentication
+
+NKey authentication uses Ed25519 signatures for secure, password-less
+authentication. NKeys are the recommended authentication method for production
+NATS deployments.
+
+**Using NKey Seed (Direct):**
+
+```zig
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    .nkey_seed = "SUAMK2FG4MI6UE3ACF3FK3OIQBCEIEZV7NSWFFEW63UXMRLFM2XLAXK4GY",
+});
+```
+
+**Using NKey Seed File:**
+
+```zig
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    .nkey_seed_file = "/path/to/user.nk",
+});
+```
+
+**Using Signing Callback (HSM/Hardware Keys):**
+
+```zig
+fn mySignCallback(nonce: []const u8, sig: *[64]u8) bool {
+    // Sign nonce using HSM, hardware token, etc.
+    return hsm.sign(nonce, sig);
+}
+
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    .nkey_pubkey = "UDXU4RCSJNZOIQHZNWXHXORDPRTGNJAHAHFRGZNEEJCPQTT2M7NLCNF4",
+    .nkey_sign_fn = &mySignCallback,
+});
+```
+
+### JWT/Credentials Authentication
+
+For NATS deployments using the account/user JWT model.
+
+**Using Credentials File:**
+
+```zig
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{
+    .creds_file = "/path/to/user.creds",
+});
+```
+
+**Using Credentials Content:**
+
+```zig
+// From environment variable
+const creds = std.posix.getenv("NATS_CREDS") orelse return error.MissingCreds;
+const client = try nats.Client.connect(allocator, io, url, .{
+    .creds = creds,
+});
+
+// Or embed at compile time
+const client = try nats.Client.connect(allocator, io, url, .{
+    .creds = @embedFile("user.creds"),
+});
+```
+
+### TLS
+
+**Enabling TLS:**
+
+```zig
+// 1. URL scheme (recommended)
+const client = try nats.Client.connect(allocator, io, "tls://localhost:4443", .{});
+
+// 2. Explicit option
+const client = try nats.Client.connect(allocator, io, "nats://localhost:4443", .{
+    .tls_required = true,
+});
+
+// 3. Automatic - if server requires TLS, client upgrades automatically
+```
+
+**TLS Options:**
+
+```zig
+const client = try nats.Client.connect(allocator, io, "tls://localhost:4443", .{
+    // Server certificate verification (production)
+    .tls_ca_file = "/path/to/ca.pem",
+
+    // Skip verification (development only!)
+    .tls_insecure_skip_verify = true,
+
+    // TLS-first handshake (for TLS-terminating proxies)
+    .tls_handshake_first = true,
+});
+```
+
+**Mutual TLS (mTLS):**
+
+```zig
+const client = try nats.Client.connect(allocator, io, "tls://localhost:4443", .{
+    .tls_ca_file = "/path/to/ca.pem",
+    .tls_cert_file = "/path/to/client.pem",
+    .tls_key_file = "/path/to/client-key.pem",
+});
+```
+
+**Checking TLS Status:**
+
+```zig
+if (client.isTls()) {
+    std.debug.print("Connection is encrypted\n", .{});
+}
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `tls_required` | `bool` | Force TLS connection |
+| `tls_ca_file` | `?[]const u8` | CA certificate file path (PEM) |
+| `tls_cert_file` | `?[]const u8` | Client certificate for mTLS (PEM) |
+| `tls_key_file` | `?[]const u8` | Client private key for mTLS (PEM) |
+| `tls_insecure_skip_verify` | `bool` | Skip server certificate verification |
+| `tls_handshake_first` | `bool` | TLS handshake before NATS protocol |
+
+### Authentication Priority
+
+When multiple auth options are set:
+
+1. `creds_file` / `creds` - JWT + NKey from credentials
+2. `nkey_seed` / `nkey_seed_file` - NKey only
+3. `nkey_sign_fn` + `nkey_pubkey` - Custom signing
+4. `user` / `pass` or `auth_token` - Basic auth
+
+### Security Notes
+
+- The library securely wipes seed data from memory after use
 
 ---
 
@@ -1303,6 +1100,61 @@ client.publish(subject, data) catch |err| switch (err) {
 
 ---
 
+## Server Compatibility
+
+Verify the server meets minimum version requirements:
+
+```zig
+// Check for NATS 2.10.0 or later (required for some features)
+if (client.checkCompatibility(2, 10, 0)) {
+    // Server supports NATS 2.10+ features
+} else {
+    std.debug.print("Server version too old\n", .{});
+}
+
+// Get the actual version string
+if (client.getConnectedServerVersion()) |version| {
+    std.debug.print("Connected to NATS {s}\n", .{version});
+}
+```
+
+---
+
+## API Quick Reference
+
+| Want to... | Method | Returns |
+|------------|--------|---------|
+| Publish message | `client.publish(subject, data)` | `!void` |
+| Publish with reply-to | `client.publishRequest(subject, reply_to, data)` | `!void` |
+| Flush to network | `client.flush(allocator)` | `!void` |
+| Subscribe | `client.subscribe(allocator, subject)` | `!*Sub` |
+| Queue subscribe | `client.subscribeQueue(allocator, subject, group)` | `!*Sub` |
+| Unsubscribe | `sub.unsubscribe()` | `!void` |
+| Free subscription | `sub.deinit(allocator)` | `void` |
+| Request/reply | `client.request(allocator, subject, data, timeout_ms)` | `!?Message` |
+| Publish with headers | `client.publishWithHeaders(subject, hdrs, data)` | `!void` |
+| Publish+reply+headers | `client.publishRequestWithHeaders(subject, reply, hdrs, data)` | `!void` |
+| Request with headers | `client.requestWithHeaders(allocator, subject, hdrs, data, timeout_ms)` | `!?Message` |
+| Receive (blocking) | `sub.next(allocator, io)` | `!Message` |
+| Receive (non-blocking) | `sub.tryNext()` | `?Message` |
+| Receive (with timeout) | `sub.nextWithTimeout(allocator, timeout_ms)` | `!?Message` |
+| Batch receive | `sub.nextBatch(io, buf)` | `!usize` |
+| Check drops | `sub.getDroppedCount()` | `u64` |
+| Auto-unsubscribe | `sub.autoUnsubscribe(max_msgs)` | `!void` |
+| Check pending | `sub.pending()` | `usize` |
+| Check delivered | `sub.delivered()` | `u64` |
+| Check valid | `sub.isValid()` | `bool` |
+| Respond to message | `msg.respond(client, data)` | `!void` |
+| Message size | `msg.size()` | `usize` |
+| Connection status | `client.getStatus()` | `State` |
+| Server RTT | `client.getRtt()` | `!u64` |
+| Server URL | `client.getConnectedUrl()` | `?[]const u8` |
+| Server ID | `client.getConnectedServerId()` | `?[]const u8` |
+| Flush with timeout | `client.flushTimeout(alloc, timeout_ns)` | `!void` |
+| Force reconnect | `client.forceReconnect()` | `!void` |
+
+---
+
 ## Building
 
 ```bash
@@ -1314,9 +1166,6 @@ zig build test
 
 # Run integration tests (requires nats-server)
 zig build test-integration
-
-# Run performance benchmarks
-zig build perf-test -- --msgs=100000 --size=16B
 
 # Format code
 zig build fmt
@@ -1344,45 +1193,6 @@ zig build test-integration
 
 Source: `src/testing/client/`
 
-## Benchmarks
-
-**Via NATS Server** (1M messages, 128B payload, Zig publisher):
-
-| Subscriber | Rate | Bandwidth | Latency |
-|------------|------|-----------|---------|
-| **Zig** | **2,614,273 msg/s** | **319 MB/s** | **0.38μs** |
-| Zig io_uring | 2,616,561 msg/s | 319 MB/s | - |
-| Go | 2,478,678 msg/s | 303 MB/s | 0.40μs |
-| C | 2,277,904 msg/s | 292 MB/s | - |
-| Rust | 2,233,444 msg/s | 286 MB/s | - |
-
-**Direct Connection** (no NATS server, raw throughput):
-
-| Subscriber | Publisher Rate | Subscriber Rate | Bandwidth |
-|------------|----------------|-----------------|-----------|
-| Zig io_uring | 22,232,024 msg/s | 22,413,431 msg/s | 2736 MB/s |
-| **Zig** | **8,328,443 msg/s** | **8,328,443 msg/s** | **1017 MB/s** |
-| Go | 3,307,826 msg/s | 3,180,441 msg/s | 388 MB/s |
-| C | 2,680,022 msg/s | 2,590,673 msg/s | 332 MB/s |
-| Rust | 2,092,537 msg/s | 1,995,394 msg/s | 255 MB/s |
-
-### Benchmark Tools
-
-```bash
-# Publisher benchmark
-zig-out/bin/bench-pub test.subject --msgs=100000 --size=128B
-
-# Subscriber benchmark
-zig-out/bin/bench-sub test.subject --msgs=100000
-```
-
-Compare with official NATS CLI:
-
-```bash
-nats bench pub test.subject --msgs=100000 --size=128
-nats bench sub test.subject --msgs=100000
-```
-
 ---
 
 ## Status
@@ -1397,10 +1207,10 @@ nats bench sub test.subject --msgs=100000
 | Event Callbacks | Complete |
 | NKey Authentication | Complete |
 | JWT/Credentials | Complete |
+| TLS | Complete |
 | JetStream | Planned |
 | Key-Value | Planned |
 | Object Store | Planned |
-| TLS | Complete |
 
 ## License
 
