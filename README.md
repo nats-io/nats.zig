@@ -15,15 +15,8 @@ Native Zig. Zero dependencies. Built on `std.Io`.
 
 ## Installation
 
-Add to your `build.zig.zon`:
-
-```zig
-.dependencies = .{
-    .nats = .{
-        .url = "https://github.com/nats-io/nats.zig/archive/refs/heads/master.tar.gz",
-        // Add hash after first build attempt
-    },
-},
+```bash
+zig fetch --save https://github.com/M64GitHub/nats.zig/archive/refs/tags/v0.1.0.tar.gz
 ```
 
 Then in `build.zig`:
