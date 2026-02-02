@@ -1830,6 +1830,107 @@ fn flushHelper(self: *Client, allocator: Allocator) !void {
     return self.flush(allocator);
 }
 
+/// Flushes with server confirmation via PING/PONG.
+///
+/// Sends all buffered data, then sends PING and waits for PONG response.
+/// This confirms the server received all messages up to this point.
+/// Safe in both sync and async contexts (uses io.select pattern).
+///
+/// Note: Concurrent calls may have PONG mismatch issues. Use single-caller
+/// semantics or serialize calls externally.
+pub fn flushConfirmed(
+    self: *Client,
+    allocator: Allocator,
+    timeout_ns: u64,
+) !void {
+    _ = allocator;
+    assert(timeout_ns > 0);
+    if (!self.state.canSend()) return error.NotConnected;
+
+    // Step 1: Flush buffered data and send PING (holding mutex)
+    try self.write_mutex.lock(self.io);
+
+    self.active_writer.flush() catch {
+        self.write_mutex.unlock(self.io);
+        return error.WriteFailed;
+    };
+    if (self.use_tls) {
+        self.writer.interface.flush() catch {
+            self.write_mutex.unlock(self.io);
+            return error.WriteFailed;
+        };
+    }
+
+    // Send PING while still holding mutex (ensures ordering)
+    self.active_writer.writeAll("PING\r\n") catch {
+        self.write_mutex.unlock(self.io);
+        return error.WriteFailed;
+    };
+    self.active_writer.flush() catch {
+        self.write_mutex.unlock(self.io);
+        return error.WriteFailed;
+    };
+    if (self.use_tls) {
+        self.writer.interface.flush() catch {
+            self.write_mutex.unlock(self.io);
+            return error.WriteFailed;
+        };
+    }
+    self.write_mutex.unlock(self.io);
+
+    // Step 2: Wait for PONG with io.select() (async-safe)
+    const old_pong_ns = self.last_pong_received_ns.load(.acquire);
+
+    var pong_future = self.io.async(waitForPongHelper, .{ self, old_pong_ns });
+    var timeout_future = self.io.async(sleepNs, .{ self.io, timeout_ns });
+
+    var winner: enum { none, pong, timeout } = .none;
+
+    defer if (winner != .pong) {
+        _ = pong_future.cancel(self.io) catch {};
+    };
+    defer if (winner != .timeout) {
+        timeout_future.cancel(self.io);
+    };
+
+    const result = self.io.select(.{
+        .pong = &pong_future,
+        .timeout = &timeout_future,
+    }) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
+        return err;
+    };
+
+    switch (result) {
+        .pong => |pong_result| {
+            winner = .pong;
+            return pong_result;
+        },
+        .timeout => {
+            winner = .timeout;
+            return error.Timeout;
+        },
+    }
+}
+
+/// Helper: Wait for PONG by polling atomic, yielding to event loop.
+fn waitForPongHelper(self: *Client, old_pong_ns: u64) !void {
+    var iteration: u32 = 0;
+    while (true) {
+        const current = self.last_pong_received_ns.load(.acquire);
+        if (current > old_pong_ns) return; // PONG received!
+
+        iteration += 1;
+        if (iteration >= 100) {
+            iteration = 0;
+            // Yield to event loop - CRITICAL for io_task to run
+            self.io.sleep(.fromNanoseconds(0), .awake) catch
+                return error.Canceled;
+        }
+        std.atomic.spinLoopHint();
+    }
+}
+
 /// Forces an immediate reconnection attempt.
 /// Closes the current connection and triggers reconnection logic.
 /// Subscriptions will be restored automatically.

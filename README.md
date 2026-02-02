@@ -142,7 +142,7 @@ try client.flush(allocator);
 - Default size: 1MB (configurable via `buffer_size` option)
 - No allocator needed - `publish()` writes to a pre-allocated buffer
 - Auto-flushes when buffer fills (no manual flush required for throughput)
-- `flush()` guarantees delivery before returning
+- `flush()` writes data to the socket
 
 ### High Throughput Publish Pattern
 
@@ -164,6 +164,24 @@ try client.publishRequest("service.echo", "my.inbox", "ping");
 try client.flush(allocator);
 ```
 
+### Confirmed Flush
+
+For scenarios where you need confirmation that the server received your messages,
+use `flushConfirmed()`. It sends PING and waits for PONG:
+
+```zig
+try client.publish("events.important", data);
+try client.flushConfirmed(allocator, 5_000_000_000); // 5 second timeout
+// Server has confirmed receipt of all buffered messages
+```
+
+**When to use:**
+- Critical messages where delivery confirmation matters
+- Before shutting down to ensure all messages were sent
+- Synchronization points in your application
+
+**Note:** For high-throughput fire-and-forget scenarios, use `flush()` instead.
+
 ### When Does Data Hit the Network?
 
 | Method | Network I/O |
@@ -172,7 +190,8 @@ try client.flush(allocator);
 | `publishRequest()` | No - writes to buffer |
 | `publishWithHeaders()` | No - writes to buffer |
 | `publishRequestWithHeaders()` | No - writes to buffer |
-| `flush()` | Yes - sends buffer + PING, waits for PONG |
+| `flush()` | Yes - sends buffer to socket |
+| `flushConfirmed()` | Yes - sends buffer + PING, waits for PONG |
 | `request()` | Yes - flushes, waits for response |
 | `requestWithHeaders()` | Yes - flushes, waits for response |
 
@@ -1182,6 +1201,7 @@ if (client.getConnectedServerVersion()) |version| {
 | Server URL | `client.getConnectedUrl()` | `?[]const u8` |
 | Server ID | `client.getConnectedServerId()` | `?[]const u8` |
 | Flush with timeout | `client.flushTimeout(alloc, timeout_ns)` | `!void` |
+| Flush confirmed | `client.flushConfirmed(alloc, timeout_ns)` | `!void` |
 | Force reconnect | `client.forceReconnect()` | `!void` |
 
 ---
