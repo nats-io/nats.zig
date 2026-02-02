@@ -135,8 +135,14 @@ try client.publish("events.click", "button2");
 try client.publish("events.click", "button3");
 
 // Now send all buffered messages to server
-try client.flush(allocator);  // Blocks until server confirms receipt
+try client.flush(allocator);
 ```
+
+**Buffer details:**
+- Default size: ~1MB (configurable via `buffer_size` option)
+- No allocator needed - `publish()` writes to a pre-allocated buffer
+- Auto-flushes when buffer fills (no manual flush required for throughput)
+- `flush()` guarantees delivery before returning
 
 ### High Throughput Publish Pattern
 
