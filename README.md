@@ -22,11 +22,23 @@ zig fetch --save https://github.com/M64GitHub/nats.zig/archive/refs/tags/v0.1.0.
 Then in `build.zig`:
 
 ```zig
-const nats = b.dependency("nats", .{
+const nats_dep = b.dependency("nats", .{
     .target = target,
     .optimize = optimize,
 });
-exe.root_module.addImport("nats", nats.module("nats"));
+
+const exe = b.addExecutable(.{
+    .name = "my-app",
+    .root_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "nats", .module = nats_dep.module("nats") },
+        },
+    }),
+});
+b.installArtifact(exe);
 ```
 
 ## Quick Start
