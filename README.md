@@ -139,7 +139,7 @@ try client.flush(allocator);
 ```
 
 **Buffer details:**
-- Default size: ~1MB (configurable via `buffer_size` option)
+- Default size: 1MB (configurable via `buffer_size` option)
 - No allocator needed - `publish()` writes to a pre-allocated buffer
 - Auto-flushes when buffer fills (no manual flush required for throughput)
 - `flush()` guarantees delivery before returning
