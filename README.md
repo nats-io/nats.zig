@@ -71,7 +71,7 @@ You **must** call `deinit()` to free memory:
 
 ```zig
 const msg = try sub.next(allocator, io);
-defer msg.deinit(allocator);  // ALWAYS do this
+defer msg.deinit(allocator);
 
 // Access message fields (valid until deinit)
 std.debug.print("Subject: {s}\n", .{msg.subject});
@@ -114,7 +114,7 @@ Source: `src/examples/`
 
 ### Buffered Writes
 
-Messages are buffered in memory. They do NOT hit the network until you flush:
+Messages are buffered in memory. They do not hit the network until you flush:
 
 ```zig
 // Writes to buffer (fast, does not block on network)
@@ -126,7 +126,7 @@ try client.publish("events.click", "button3");
 try client.flush(allocator);  // Blocks until server confirms receipt
 ```
 
-### Fire-and-Forget Pattern
+### High Throughput Publish Pattern
 
 For high-throughput scenarios, batch multiple publishes before flushing:
 
@@ -134,7 +134,7 @@ For high-throughput scenarios, batch multiple publishes before flushing:
 for (events) |event| {
     try client.publish("events", event);
 }
-try client.flush(allocator);  // Single network round-trip
+try client.flush(allocator);
 ```
 
 ### Publish with Reply-To
@@ -189,7 +189,7 @@ const sub2 = try client.subscribeQueue(allocator, "tasks.*", "workers");
 
 ### Unsubscribing
 
-**Idiomatic Zig (recommended):** Use `defer sub.deinit()` - it calls `unsubscribe()`
+**Zig deinit pattern (recommended):** Use `defer sub.deinit()` - it calls `unsubscribe()`
 internally and handles errors gracefully:
 
 ```zig
@@ -199,7 +199,7 @@ defer sub.deinit(allocator);  // Unsubscribes + frees memory
 // ... use subscription ...
 ```
 
-**Explicit unsubscribe (Go-style):** For users who need to check if the server
+**Explicit unsubscribe:** For users who need to check if the server
 received the UNSUB command, call `unsubscribe()` directly:
 
 ```zig
@@ -225,7 +225,7 @@ sub.deinit(allocator);  // Still needed to free memory
 
 ### Receiving Messages
 
-**Blocking:** `next()` blocks until a message arrives. Use in dedicated receiver loops:
+**Blocking:** `next()` blocks until a message arrives. For use in dedicated receiver loops:
 
 ```zig
 while (true) {
@@ -1076,7 +1076,7 @@ When multiple auth options are set:
 
 ### Security Notes
 
-- The library securely wipes seed data from memory after use
+- The library wipes seed data from memory after use (best effort)
 
 ---
 
