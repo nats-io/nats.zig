@@ -606,7 +606,7 @@ try client.flush(allocator);
 
 ## Async Patterns with std.Io
 
-### The Golden Rule
+### Cancellation pattern
 
 Always defer cancel when using `io.async()`:
 
@@ -848,6 +848,25 @@ const rtt_ns = try client.getRtt();
 const rtt_ms = @as(f64, @floatFromInt(rtt_ns)) / 1_000_000.0;
 std.debug.print("RTT: {d:.2}ms\n", .{rtt_ms});
 ```
+
+### Connection Statistics
+
+Monitor throughput and connection health:
+
+```zig
+const stats = client.getStats();
+std.debug.print("Messages: in={d} out={d}\n", .{stats.msgs_in, stats.msgs_out});
+std.debug.print("Bytes: in={d} out={d}\n", .{stats.bytes_in, stats.bytes_out});
+std.debug.print("Reconnects: {d}\n", .{stats.reconnects});
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `msgs_in` | `u64` | Total messages received |
+| `msgs_out` | `u64` | Total messages sent |
+| `bytes_in` | `u64` | Total bytes received |
+| `bytes_out` | `u64` | Total bytes sent |
+| `reconnects` | `u32` | Number of reconnections |
 
 ### Connection Control
 
@@ -1147,6 +1166,7 @@ if (client.getConnectedServerVersion()) |version| {
 | Respond to message | `msg.respond(client, data)` | `!void` |
 | Message size | `msg.size()` | `usize` |
 | Connection status | `client.getStatus()` | `State` |
+| Connection stats | `client.getStats()` | `Stats` |
 | Server RTT | `client.getRtt()` | `!u64` |
 | Server URL | `client.getConnectedUrl()` | `?[]const u8` |
 | Server ID | `client.getConnectedServerId()` | `?[]const u8` |
