@@ -636,39 +636,14 @@ try client.flush(allocator);
 
 ## Async Patterns with std.Io
 
-### Cancellation pattern
+### Cancellation Pattern
 
 Always defer cancel when using `io.async()`:
 
 ```zig
 var future = io.async(someFn, .{args});
-defer future.cancel(io) catch {};  // ALWAYS defer cancel
+defer future.cancel(io) catch {};  // defer cancel
 const result = try future.await(io);
-```
-
-### Concurrent Subscription Handlers
-
-Run multiple subscriptions in parallel:
-
-```zig
-fn handleEvents(io_ctx: std.Io, sub: *nats.Client.Sub, alloc: Allocator) void {
-    while (true) {
-        const msg = sub.next(alloc, io_ctx) catch break;
-        defer msg.deinit(alloc);
-        // Process message...
-    }
-}
-
-// Spawn concurrent handlers
-var task1 = try io.concurrent(handleEvents, .{ io, events_sub, allocator });
-defer task1.cancel(io) catch {};
-
-var task2 = try io.concurrent(handleEvents, .{ io, orders_sub, allocator });
-defer task2.cancel(io) catch {};
-
-// Wait for both to complete
-_ = task1.await(io);
-_ = task2.await(io);
 ```
 
 ### Racing Operations with `io.select()`
@@ -705,6 +680,68 @@ switch (result) {
     },
 }
 ```
+
+### Async Message Receive with Ownership
+
+When using `io.async()` to receive messages, handle ownership carefully:
+
+```zig
+var future = io.async(nats.Client.Sub.next, .{ sub, allocator, io });
+defer if (future.cancel(io)) |m| m.deinit(allocator) else |_| {};
+
+if (future.await(io)) |msg| {
+    // Message ownership transferred - use it here
+    // Do not add defer msg.deinit() - outer defer handles cleanup
+    std.debug.print("Got: {s}\n", .{msg.data});
+    return;  // outer defer runs, cancel() returns null
+} else |err| {
+    std.debug.print("Error: {}\n", .{err});
+}
+```
+
+**Key points:**
+- After `await()` succeeds, `cancel()` returns null (message already consumed)
+- If function exits before `await()`, `cancel()` returns the pending message
+- Adding a second `defer msg.deinit()` inside the if-block would cause double-free
+
+### Io.Queue for Cross-Thread Communication
+
+Use `Io.Queue(T)` for producer/consumer patterns across threads:
+
+```zig
+const WorkResult = struct {
+    worker_id: u8,
+    msg: nats.Message,
+
+    fn deinit(self: WorkResult, allocator: Allocator) void {
+        self.msg.deinit(allocator);
+    }
+};
+
+// Fixed-size buffer backing the queue
+var queue_buf: [32]WorkResult = undefined;
+var queue: Io.Queue(WorkResult) = .init(&queue_buf);
+
+// Worker thread: push results
+fn worker(io: Io, sub: *Sub, alloc: Allocator, q: *Io.Queue(WorkResult)) void {
+    while (true) {
+        const msg = sub.next(alloc, io) catch return;
+        q.putOne(io, .{ .worker_id = 1, .msg = msg }) catch return;
+    }
+}
+
+// Main thread: consume results
+while (true) {
+    const result = queue.getOne(io) catch break;
+    defer result.deinit(allocator);
+    std.debug.print("Worker {d}: {s}\n", .{ result.worker_id, result.msg.data });
+}
+```
+
+**Use cases:**
+- Load-balanced workers reporting to main thread
+- Aggregating results from `io.concurrent()` tasks
+- Decoupling message producers from consumers
 
 ---
 
