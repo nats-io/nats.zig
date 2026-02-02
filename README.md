@@ -1212,15 +1212,15 @@ Source: `src/testing/client/`
 
 | Component | Status |
 |-----------|--------|
-| Core Protocol | Complete |
-| Pub/Sub | Complete |
-| Request/Reply | Complete |
-| Headers | Complete |
-| Reconnection | Complete |
-| Event Callbacks | Complete |
-| NKey Authentication | Complete |
-| JWT/Credentials | Complete |
-| TLS | Complete |
+| Core Protocol | Implemented |
+| Pub/Sub | Implemented |
+| Request/Reply | Implemented |
+| Headers | Implemented |
+| Reconnection | Implemented |
+| Event Callbacks | Implemented |
+| NKey Authentication | Implemented |
+| JWT/Credentials | Implemented |
+| TLS | Implemented |
 | JetStream | Planned |
 | Key-Value | Planned |
 | Object Store | Planned |
