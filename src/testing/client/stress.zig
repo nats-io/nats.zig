@@ -45,7 +45,7 @@ pub fn testStress500Messages(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("stress_500", false, "flush failed");
         return;
     };
@@ -58,7 +58,7 @@ pub fn testStress500Messages(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    publisher.flush(allocator) catch {
+    publisher.flushBuffer() catch {
         reportResult("stress_500", false, "pub flush failed");
         return;
     };
@@ -109,7 +109,7 @@ pub fn testStress1000Messages(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("stress_1000", false, "flush failed");
         return;
     };
@@ -121,7 +121,7 @@ pub fn testStress1000Messages(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("stress_1000", false, "pub flush failed");
         return;
     };
@@ -165,7 +165,7 @@ pub fn testStress2000Messages(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("stress_2000", false, "flush failed");
         return;
     };
@@ -178,7 +178,7 @@ pub fn testStress2000Messages(allocator: std.mem.Allocator) void {
                 return;
             };
         }
-        client.flush(allocator) catch {
+        client.flushBuffer() catch {
             reportResult("stress_2000", false, "batch flush failed");
             return;
         };
@@ -225,7 +225,7 @@ pub fn testPayload30KB(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     const payload = allocator.alloc(u8, 30 * 1024) catch {
         reportResult("payload_30kb", false, "alloc failed");
@@ -238,7 +238,7 @@ pub fn testPayload30KB(allocator: std.mem.Allocator) void {
         reportResult("payload_30kb", false, "publish failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 3000) catch null) |m| {
         defer m.deinit(allocator);
@@ -323,7 +323,7 @@ pub fn testPayloadBoundary(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     const sizes = [_]usize{ 1024, 4096, 8192, 15360 };
     var all_passed = true;
@@ -340,7 +340,7 @@ pub fn testPayloadBoundary(allocator: std.mem.Allocator) void {
             all_passed = false;
             break;
         };
-        client.flush(allocator) catch {};
+        client.flushBuffer() catch {};
 
         const msg = sub.nextWithTimeout(allocator, 2000) catch {
             all_passed = false;

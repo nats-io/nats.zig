@@ -44,7 +44,7 @@ pub fn main() !void {
 
     const sub = try client.subscribe(allocator, "demo.select");
     defer sub.deinit(allocator);
-    try client.flush(allocator);
+    try client.flushBuffer();
 
     std.debug.print("Subscribed to 'demo.select'\n", .{});
     std.debug.print("\nPublishing 3 messages with 200ms gaps...\n", .{});
@@ -108,7 +108,7 @@ pub fn main() !void {
 fn publishMessages(
     client: *nats.Client,
     io: Io,
-    alloc: std.mem.Allocator,
+    _: std.mem.Allocator,
 ) void {
     io.sleep(.fromMilliseconds(100), .awake) catch {};
 
@@ -116,7 +116,7 @@ fn publishMessages(
         var buf: [32]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Message {d}", .{i}) catch "Msg";
         client.publish("demo.select", msg) catch return;
-        client.flush(alloc) catch return;
+        client.flushBuffer() catch return;
         io.sleep(.fromMilliseconds(200), .awake) catch {};
     }
 }

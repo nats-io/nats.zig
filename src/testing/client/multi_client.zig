@@ -47,7 +47,7 @@ pub fn testCrossClientRouting(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    subscriber.flush(allocator) catch {
+    subscriber.flushBuffer() catch {
         reportResult("cross_client", false, "sub flush failed");
         return;
     };
@@ -57,7 +57,7 @@ pub fn testCrossClientRouting(allocator: std.mem.Allocator) void {
         reportResult("cross_client", false, "publish failed");
         return;
     };
-    publisher.flush(allocator) catch {
+    publisher.flushBuffer() catch {
         reportResult("cross_client", false, "pub flush failed");
         return;
     };
@@ -160,7 +160,7 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("client_high_rate", false, "flush failed");
         return;
     };
@@ -172,7 +172,7 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    publisher.flush(allocator) catch {
+    publisher.flushBuffer() catch {
         reportResult("client_high_rate", false, "pub flush failed");
         return;
     };
@@ -261,8 +261,8 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
     };
     defer sub_c.deinit(allocator);
 
-    client_b.flush(allocator) catch {};
-    client_c.flush(allocator) catch {};
+    client_b.flushBuffer() catch {};
+    client_c.flushBuffer() catch {};
     io_a.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // A publishes to step1
@@ -270,7 +270,7 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
         reportResult("three_client_chain", false, "A publish failed");
         return;
     };
-    client_a.flush(allocator) catch {};
+    client_a.flushBuffer() catch {};
 
     // B receives and forwards to step2
     const msg_b = sub_b.nextWithTimeout(allocator, 2000) catch {
@@ -283,7 +283,7 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
             reportResult("three_client_chain", false, "B forward failed");
             return;
         };
-        client_b.flush(allocator) catch {};
+        client_b.flushBuffer() catch {};
     } else {
         reportResult("three_client_chain", false, "B no message");
         return;
@@ -342,13 +342,13 @@ pub fn testMultipleSubscribersSameSubject(allocator: std.mem.Allocator) void {
     };
     defer sub3.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     client.publish("broadcast.test", "hello all") catch {
         reportResult("multi_sub_same_subject", false, "publish failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var count: u32 = 0;
 

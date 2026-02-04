@@ -59,13 +59,13 @@ pub fn testClientManySubs(allocator: std.mem.Allocator) void {
     }
     defer for (subs) |s| s.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     for (topics) |t| {
         publisher.publish(t, "hello") catch {};
     }
-    publisher.flush(allocator) catch {};
+    publisher.flushBuffer() catch {};
 
     var received: usize = 0;
     for (subs) |s| {
@@ -128,7 +128,7 @@ pub fn testClientWildcard(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("client_wildcard", false, "flush failed");
         return;
     };
@@ -146,7 +146,7 @@ pub fn testClientWildcard(allocator: std.mem.Allocator) void {
         reportResult("client_wildcard", false, "pub c failed");
         return;
     };
-    publisher.flush(allocator) catch {
+    publisher.flushBuffer() catch {
         reportResult("client_wildcard", false, "pub flush failed");
         return;
     };
@@ -215,11 +215,11 @@ pub fn testClientDuplicateSubs(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     publisher.publish("dup", "hello") catch {};
-    publisher.flush(allocator) catch {};
+    publisher.flushBuffer() catch {};
 
     var future1 = io.io().async(
         nats.Client.Sub.next,
@@ -278,11 +278,11 @@ pub fn testClientQueueGroup(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     publisher.publish("qg", "task") catch {};
-    publisher.flush(allocator) catch {};
+    publisher.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -322,10 +322,10 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     client.publish("wc.test", "msg") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -365,10 +365,10 @@ pub fn testWildcardGreater(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     client.publish("gt.a.b.c", "msg") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -408,10 +408,10 @@ pub fn testSubjectCaseSensitivity(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     client.publish("case.test", "msg") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -450,13 +450,13 @@ pub fn testUnsubscribeStopsDelivery(allocator: std.mem.Allocator) void {
         return;
     };
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     sub.unsubscribe() catch {};
     sub.deinit(allocator);
 
     client.publish("unsub.test", "msg") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     if (client.isConnected()) {
@@ -495,7 +495,7 @@ pub fn testHierarchicalSubject(allocator: std.mem.Allocator) void {
         reportResult("hierarchical", false, "pub failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -534,12 +534,12 @@ pub fn testUnsubscribeWithPending(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     for (0..5) |_| {
         client.publish("pending.test", "msg") catch {};
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     sub.unsubscribe() catch {
@@ -607,7 +607,7 @@ pub fn testSubscriptionQueueCapacity(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("sub_queue_cap", false, "flush failed");
         return;
     };
@@ -619,7 +619,7 @@ pub fn testSubscriptionQueueCapacity(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("sub_queue_cap", false, "pub flush failed");
         return;
     };

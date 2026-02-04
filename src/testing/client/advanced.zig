@@ -60,7 +60,7 @@ pub fn testPublishMsg(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     // Create a message to republish
     const original = nats.Client.Message{
@@ -76,7 +76,7 @@ pub fn testPublishMsg(allocator: std.mem.Allocator) void {
         reportResult("publish_msg", false, "publishMsg failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
         defer msg.deinit(allocator);
@@ -157,7 +157,7 @@ pub fn testRequestMsg(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     // Spawn responder task
     var responder = io.io().async(responderTask, .{ &sub, client, allocator });
@@ -199,7 +199,7 @@ fn responderTask(
         defer msg.deinit(allocator);
         if (msg.reply_to) |reply_to| {
             client.publish(reply_to, "response-data") catch {};
-            client.flush(allocator) catch {};
+            client.flushBuffer() catch {};
         }
     }
 }

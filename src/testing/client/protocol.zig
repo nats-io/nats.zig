@@ -93,7 +93,7 @@ pub fn testPingPongKeepAlive(allocator: std.mem.Allocator) void {
             reportResult("ping_pong_keep_alive", false, "publish failed");
             return;
         };
-        client.flush(allocator) catch {
+        client.flushBuffer() catch {
             reportResult("ping_pong_keep_alive", false, "flush failed");
             return;
         };
@@ -178,7 +178,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
         return;
     };
 
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         sub1.deinit(allocator);
         reportResult("unknown_sid_handling", false, "flush1 failed");
         return;
@@ -191,7 +191,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
     };
     sub1.deinit(allocator);
 
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("unknown_sid_handling", false, "flush2 failed");
         return;
     };
@@ -202,7 +202,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit(allocator);
 
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("unknown_sid_handling", false, "flush3 failed");
         return;
     };
@@ -211,7 +211,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
         reportResult("unknown_sid_handling", false, "publish failed");
         return;
     };
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("unknown_sid_handling", false, "flush4 failed");
         return;
     };
@@ -485,7 +485,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
         };
     }
 
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("protocol_stability", false, "flush1 failed");
         return;
     };
@@ -500,7 +500,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
         };
     }
 
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("protocol_stability", false, "flush2 failed");
         return;
     };

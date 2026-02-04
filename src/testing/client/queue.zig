@@ -35,7 +35,7 @@ pub fn testQueueGroups(allocator: std.mem.Allocator) void {
         return;
     }
 
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("queue_groups", false, "flush failed");
         return;
     };
@@ -74,7 +74,7 @@ pub fn testQueueGroupDistribution(allocator: std.mem.Allocator) void {
     };
     defer sub3.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     for (0..30) |_| {
         client.publish("qdist.test", "work") catch {
@@ -82,7 +82,7 @@ pub fn testQueueGroupDistribution(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var count1: u32 = 0;
     var count2: u32 = 0;
@@ -183,8 +183,8 @@ pub fn testQueueGroupMultipleClients(allocator: std.mem.Allocator) void {
     };
     defer sub_b.deinit(allocator);
 
-    client_a.flush(allocator) catch {};
-    client_b.flush(allocator) catch {};
+    client_a.flushBuffer() catch {};
+    client_b.flushBuffer() catch {};
     io_a.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     for (0..20) |_| {
@@ -193,7 +193,7 @@ pub fn testQueueGroupMultipleClients(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    client_c.flush(allocator) catch {};
+    client_c.flushBuffer() catch {};
 
     var count_a: u32 = 0;
     var count_b: u32 = 0;
@@ -242,12 +242,12 @@ pub fn testQueueGroupSingleReceiver(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     for (0..10) |_| {
         client.publish("qsingle.test", "msg") catch {};
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var count: u32 = 0;
     for (0..15) |_| {
@@ -285,12 +285,12 @@ pub fn testQueueWithWildcard(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     client.publish("qw.foo", "one") catch {};
     client.publish("qw.bar", "two") catch {};
     client.publish("qw.baz.deep", "three") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var count: u32 = 0;
     for (0..5) |_| {
@@ -335,13 +335,13 @@ pub fn testMultipleQueueGroups(allocator: std.mem.Allocator) void {
     };
     defer sub_b.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     client.publish("mqg.test", "hello") catch {
         reportResult("multi_queue_groups", false, "publish failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var count: u32 = 0;
     if (sub_a.nextWithTimeout(allocator, 500) catch null) |m| {
@@ -398,7 +398,7 @@ pub fn testFourClientQueueGroup(allocator: std.mem.Allocator) void {
             reportResult("four_client_queue", false, "subscribe failed");
             return;
         };
-        clients[i].?.flush(allocator) catch {};
+        clients[i].?.flushBuffer() catch {};
     }
 
     ios[0].io().sleep(.fromMilliseconds(50), .awake) catch {};
@@ -406,7 +406,7 @@ pub fn testFourClientQueueGroup(allocator: std.mem.Allocator) void {
     for (0..40) |_| {
         clients[4].?.publish("fourq.test", "work") catch {};
     }
-    clients[4].?.flush(allocator) catch {};
+    clients[4].?.flushBuffer() catch {};
 
     var counts: [4]u32 = .{ 0, 0, 0, 0 };
     for (0..4) |i| {
@@ -454,24 +454,24 @@ pub fn testQueueMemberJoinsMidStream(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub1.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     for (0..10) |_| {
         client.publish("qjoin.test", "msg") catch {};
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     const sub2 = client.subscribeQueue(allocator, "qjoin.test", "workers") catch {
         reportResult("queue_join_midstream", false, "sub2 failed");
         return;
     };
     defer sub2.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     for (0..10) |_| {
         client.publish("qjoin.test", "msg") catch {};
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var count1: u32 = 0;
     var count2: u32 = 0;
@@ -531,21 +531,21 @@ pub fn testQueueMemberLeaves(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     for (0..10) |_| {
         client.publish("qleave.test", "msg") catch {};
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     sub1.unsubscribe() catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     for (0..10) |_| {
         client.publish("qleave.test", "msg") catch {};
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var count2: u32 = 0;
     for (0..25) |_| {
@@ -603,14 +603,14 @@ pub fn testLargeQueueGroup(allocator: std.mem.Allocator) void {
         return;
     }
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
     const NUM_MSGS = 100;
     for (0..NUM_MSGS) |_| {
         client.publish("lqg.test", "work") catch {};
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var total: u32 = 0;
     for (0..NUM_SUBS) |i| {
@@ -698,14 +698,14 @@ pub fn testQueueGroupFairness(allocator: std.mem.Allocator) void {
         };
     }
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
     const NUM_MSGS = 100;
     for (0..NUM_MSGS) |_| {
         client.publish("qfair.test", "msg") catch {};
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var counts: [NUM_SUBS]u32 = [_]u32{0} ** NUM_SUBS;
     for (0..NUM_SUBS) |i| {

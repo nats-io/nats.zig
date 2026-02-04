@@ -42,7 +42,7 @@ pub fn testDrainOperation(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     _ = client.drain(allocator) catch {
         reportResult("drain_operation", false, "drain failed");
@@ -88,7 +88,7 @@ pub fn testDrainCleansUp(allocator: std.mem.Allocator) void {
 
     client.publish("drain.cleanup.1", "msg1") catch {};
     client.publish("drain.cleanup.2", "msg2") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
@@ -171,7 +171,7 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
         created += 1;
     }
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     _ = client.drain(allocator) catch {
         reportResult("drain_many_subs", false, "drain failed");
@@ -209,13 +209,13 @@ pub fn testSubWaitDrained(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     // Publish some messages
     for (0..5) |_| {
         client.publish("wait.drained", "data") catch {};
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     // Wait for messages to arrive
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};

@@ -117,7 +117,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch |err| {
+    client.flushBuffer() catch |err| {
         std.debug.print("Flush failed: {}\n", .{err});
         return err;
     };

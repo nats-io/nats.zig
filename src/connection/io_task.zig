@@ -132,6 +132,13 @@ pub fn run(client: *Client, allocator: Allocator) void {
             }
         }
 
+        // Auto-flush: check if publish() requested a flush
+        if (client.flush_requested.swap(false, .acquire)) {
+            client.write_mutex.lock(client.io) catch continue :outer;
+            defer client.write_mutex.unlock(client.io);
+            client.active_writer.flush() catch {};
+        }
+
         // No progress - ALWAYS yield to allow other tasks to run
         // This is CRITICAL for async() mode where cooperative yielding is needed
         client.io.sleep(.fromNanoseconds(0), .awake) catch |err| {

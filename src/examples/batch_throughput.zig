@@ -41,7 +41,7 @@ pub fn main() !void {
 
     const sub = try client.subscribe(allocator, "bench.>");
     defer sub.deinit(allocator);
-    try client.flush(allocator);
+    try client.flushBuffer();
 
     std.debug.print("Subscribed to 'bench.>'\n\n", .{});
 
@@ -59,7 +59,7 @@ pub fn main() !void {
     }
 
     // Single flush sends all messages at once
-    try client.flush(allocator);
+    try client.flushBuffer();
 
     const elapsed = (std.time.Instant.now() catch unreachable).since(start);
     const elapsed_ms = @as(f64, @floatFromInt(elapsed)) / 1_000_000.0;
@@ -123,7 +123,7 @@ pub fn main() !void {
         const payload = std.fmt.bufPrint(&buf, "Extra {d}", .{i + 1}) catch "Msg";
         try client.publish("bench.extra", payload);
     }
-    try client.flush(allocator);
+    try client.flushBuffer();
 
     // Small delay to let messages arrive
     io.sleep(.fromMilliseconds(50), .awake) catch {};

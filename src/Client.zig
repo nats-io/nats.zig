@@ -483,6 +483,9 @@ last_ping_sent_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 last_pong_received_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 pings_outstanding: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 
+/// Auto-flush signal: set by publish(), cleared by io_task after flush.
+flush_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
 // Debug counters for io_task (only used when dbg.enabled)
 io_task_stats: IoTaskStats = .{},
 
@@ -1458,6 +1461,7 @@ pub fn publish(
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += payload.len;
+    self.flush_requested.store(true, .release);
 }
 
 /// Publishes with a reply-to subject.
@@ -1492,6 +1496,7 @@ pub fn publishRequest(
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += payload.len;
+    self.flush_requested.store(true, .release);
 }
 
 /// Publishes a message with headers.
@@ -1535,6 +1540,7 @@ pub fn publishWithHeaders(
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += payload.len;
+    self.flush_requested.store(true, .release);
 }
 
 /// Publishes with headers and reply-to subject.
@@ -1581,6 +1587,7 @@ pub fn publishRequestWithHeaders(
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += payload.len;
+    self.flush_requested.store(true, .release);
 }
 
 /// Publishes with a HeaderMap builder.
@@ -1629,6 +1636,7 @@ pub fn publishWithHeaderMap(
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += payload.len;
+    self.flush_requested.store(true, .release);
 }
 
 /// Publishes a Message object (convenience for republishing/forwarding).
@@ -1676,6 +1684,7 @@ pub fn publishMsg(self: *Client, msg: *const Message) !void {
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += msg.data.len;
+    self.flush_requested.store(true, .release);
 }
 
 /// Sends a request with headers and waits for a reply with timeout.
@@ -1714,14 +1723,14 @@ pub fn requestWithHeaders(
     defer sub.deinit(allocator);
 
     // Flush subscription registration before publishing
-    try self.flush(allocator);
+    try self.flushBuffer();
 
     // Brief delay to ensure server has registered subscription
     self.io.sleep(.fromMilliseconds(5), .awake) catch {};
 
     // Publish request with reply-to and headers
     try self.publishRequestWithHeaders(subject, inbox, hdrs, payload);
-    try self.flush(allocator);
+    try self.flushBuffer();
 
     // Wait for reply using io.select()
     var response_future = self.io.async(
@@ -1774,8 +1783,11 @@ pub fn requestWithHeaders(
 ///
 /// Sends all buffered data to the TCP socket. This is a simple TCP flush
 /// without PING/PONG verification - for maximum performance.
-pub fn flush(self: *Client, allocator: Allocator) !void {
-    _ = allocator;
+/// Sends all buffered data to the network (buffer-to-socket only).
+///
+/// This is a fast flush that does not wait for server confirmation.
+/// For confirmed delivery, use flush() which sends PING and waits for PONG.
+pub fn flushBuffer(self: *Client) !void {
     if (!self.state.canSend()) {
         return error.NotConnected;
     }
@@ -1791,64 +1803,18 @@ pub fn flush(self: *Client, allocator: Allocator) !void {
     }
 }
 
-/// Sends all buffered data with a timeout.
-/// Returns error.Timeout if the flush doesn't complete in time.
-pub fn flushTimeout(
-    self: *Client,
-    allocator: Allocator,
-    timeout_ns: u64,
-) !void {
-    assert(timeout_ns > 0);
-    if (!self.state.canSend()) {
-        return error.NotConnected;
-    }
-
-    var flush_future = self.io.async(flushHelper, .{ self, allocator });
-    var timeout_future = self.io.async(sleepNs, .{ self.io, timeout_ns });
-
-    var winner: enum { none, flush, timeout } = .none;
-
-    defer if (winner != .flush) {
-        _ = flush_future.cancel(self.io);
-    };
-    defer if (winner != .timeout) {
-        timeout_future.cancel(self.io);
-    };
-
-    const select_result = self.io.select(.{
-        .flush = &flush_future,
-        .timeout = &timeout_future,
-    }) catch |err| {
-        if (err == error.Canceled) return error.Canceled;
-        return err;
-    };
-
-    switch (select_result) {
-        .flush => |result| {
-            winner = .flush;
-            return result;
-        },
-        .timeout => {
-            winner = .timeout;
-            return error.Timeout;
-        },
-    }
-}
-
-/// Helper for async flush.
-fn flushHelper(self: *Client, allocator: Allocator) !void {
-    return self.flush(allocator);
-}
-
-/// Flushes with server confirmation via PING/PONG.
+/// Flushes all buffered data and confirms server received it.
 ///
 /// Sends all buffered data, then sends PING and waits for PONG response.
 /// This confirms the server received all messages up to this point.
 /// Safe in both sync and async contexts (uses io.select pattern).
 ///
+/// This matches Go/C client Flush() behavior (PING/PONG confirmation).
+/// For fast buffer-only flush without confirmation, use flushBuffer().
+///
 /// Note: Concurrent calls may have PONG mismatch issues. Use single-caller
 /// semantics or serialize calls externally.
-pub fn flushConfirmed(
+pub fn flush(
     self: *Client,
     allocator: Allocator,
     timeout_ns: u64,
@@ -2038,14 +2004,14 @@ pub fn request(
     defer sub.deinit(allocator);
 
     // Flush subscription registration before publishing
-    try self.flush(allocator);
+    try self.flushBuffer();
 
     // Brief delay to ensure server has registered subscription
     self.io.sleep(.fromMilliseconds(5), .awake) catch {};
 
     // Publish request with reply-to
     try self.publishRequest(subject, inbox, payload);
-    try self.flush(allocator);
+    try self.flushBuffer();
 
     // Wait for reply using io.select()
     var response_future = self.io.async(
@@ -2123,7 +2089,7 @@ pub fn requestMsg(
     defer sub.deinit(allocator);
 
     // Flush subscription registration before publishing
-    try self.flush(allocator);
+    try self.flushBuffer();
 
     // Brief delay to ensure server has registered subscription
     self.io.sleep(.fromMilliseconds(5), .awake) catch {};
@@ -2152,7 +2118,7 @@ pub fn requestMsg(
         self.stats.msgs_out += 1;
         self.stats.bytes_out += msg.data.len;
     }
-    try self.flush(allocator);
+    try self.flushBuffer();
 
     // Wait for reply using io.select()
     var response_future = self.io.async(

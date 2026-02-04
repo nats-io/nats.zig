@@ -36,14 +36,14 @@ pub fn testClientPubSub(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     client.publish("pubsub", "test-message") catch {
         reportResult("client_pubsub", false, "pub failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -89,7 +89,7 @@ pub fn testClientPublishReply(allocator: std.mem.Allocator) void {
         reportResult("client_pub_reply", false, "pub failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -137,7 +137,7 @@ pub fn testPublishEmptyPayload(allocator: std.mem.Allocator) void {
         reportResult("publish_empty_payload", false, "pub failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -190,7 +190,7 @@ pub fn testPublishLargePayload(allocator: std.mem.Allocator) void {
         reportResult("publish_large_payload", false, "pub failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -232,7 +232,7 @@ pub fn testPublishRapidFire(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     const stats = client.getStats();
     if (stats.msgs_out >= 1000) {
@@ -264,7 +264,7 @@ pub fn testPublishNoSubscribers(allocator: std.mem.Allocator) void {
         reportResult("publish_no_subscribers", false, "pub failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     reportResult("publish_no_subscribers", true, "");
 }
@@ -325,12 +325,12 @@ pub fn testPublishBatching(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     client.publish("batch.test", "data1") catch {};
     client.publish("batch.test", "data2") catch {};
     client.publish("batch.test", "data3") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var received: u32 = 0;
     for (0..3) |_| {
@@ -373,14 +373,14 @@ pub fn testFlushAfterEachPublish(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     for (0..50) |_| {
         client.publish("flush.each", "msg") catch {
             reportResult("flush_after_each", false, "publish failed");
             return;
         };
-        client.flush(allocator) catch {
+        client.flushBuffer() catch {
             reportResult("flush_after_each", false, "flush failed");
             return;
         };

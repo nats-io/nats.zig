@@ -41,7 +41,7 @@ pub fn main() !void {
     const events = try client.subscribe(allocator, "events.>");
     defer events.deinit(allocator);
 
-    try client.flush(allocator);
+    try client.flushBuffer();
 
     std.debug.print("Subscriptions active:\n", .{});
     std.debug.print("  - orders.* (sid={d})\n", .{orders.sid});
@@ -58,7 +58,7 @@ pub fn main() !void {
         const event = std.fmt.bufPrint(&buf, "Event {d}", .{i + 1}) catch "Event";
         try client.publish("events.user.login", event);
     }
-    try client.flush(allocator);
+    try client.flushBuffer();
 
     std.debug.print("Published 10 messages (5 orders, 5 events)\n", .{});
 

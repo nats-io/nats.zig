@@ -153,7 +153,7 @@ fn testSubscriptionRestored(
         return;
     };
     std.debug.print("[TEST reconnect_sub_restored] Flushing...\n", .{});
-    client.flush(allocator) catch |e| {
+    client.flushBuffer() catch |e| {
         std.debug.print(
             "[TEST reconnect_sub_restored] Flush error: {s}\n",
             .{@errorName(e)},
@@ -227,7 +227,7 @@ fn testMultipleSubscriptionsRestored(
     client.publish("multi.sub.one", "msg1") catch {};
     client.publish("multi.sub.two", "msg2") catch {};
     client.publish("multi.sub.three", "msg3") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var received: u8 = 0;
 
@@ -330,7 +330,7 @@ fn testReconnectDisabled(
     manager.stopAll(io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
-    const flush_result = client.flush(allocator);
+    const flush_result = client.flushBuffer();
 
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("reconnect_disabled", false, "restart failed");
@@ -493,7 +493,7 @@ fn testReconnectStatsIncrement(
 
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
     client.publish("stats.test", "trigger") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
@@ -546,7 +546,7 @@ fn testReconnectWithQueueGroup(
         reportResult("reconnect_queue_group", false, "publish failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
         msg.deinit(allocator);
@@ -698,7 +698,7 @@ fn testReconnectWildcardSub(
         reportResult("reconnect_wildcard", false, "publish failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
         msg.deinit(allocator);
@@ -919,7 +919,7 @@ fn testFailoverToSecondServer(
     defer sub.deinit(allocator);
 
     client.publish("failover.test", "before") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
         msg.deinit(allocator);
@@ -936,7 +936,7 @@ fn testFailoverToSecondServer(
         reportResult("failover_to_second", false, "publish after failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |msg| {
         msg.deinit(allocator);
@@ -1012,7 +1012,7 @@ fn testFailoverRoundRobin(
         reportResult("failover_round_robin", false, "publish 1 failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     server2.stop(io.io());
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
@@ -1021,7 +1021,7 @@ fn testFailoverRoundRobin(
         reportResult("failover_round_robin", false, "publish 2 failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     reportResult("failover_round_robin", true, "");
 }
@@ -1087,7 +1087,7 @@ fn testAllServersDownThenRecover(
         reportResult("all_servers_down_recover", false, "publish failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |msg| {
         msg.deinit(allocator);
@@ -1135,7 +1135,7 @@ fn testServerCooldownRespected(
         reportResult("server_cooldown", false, "publish failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     if (client.server_pool.serverCount() == 2) {
         reportResult("server_cooldown", true, "");
@@ -1205,7 +1205,7 @@ fn testMultipleSubsActivelyReceiving(
     client.publish("active.sub.three", "pre3") catch {};
     client.publish("active.sub.four", "pre4") catch {};
     client.publish("active.sub.five", "pre5") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var pre_received: u8 = 0;
     if (sub1.nextWithTimeout(allocator, 200) catch null) |m| {
@@ -1255,7 +1255,7 @@ fn testMultipleSubsActivelyReceiving(
     client.publish("active.sub.three", "post3") catch {};
     client.publish("active.sub.four", "post4") catch {};
     client.publish("active.sub.five", "post5") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var post_received: u8 = 0;
     if (sub1.nextWithTimeout(allocator, 500) catch null) |m| {
@@ -1331,7 +1331,7 @@ fn testHighVolumePendingBuffer(
         client.publish("buffer.test", "pre") catch continue;
         published_before += 1;
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
@@ -1361,7 +1361,7 @@ fn testHighVolumePendingBuffer(
     };
 
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var received_after: u32 = 0;
     while (received_after < 100) {
@@ -1456,7 +1456,7 @@ fn testQueueGroupMultiClientReconnect(
     while (i < 20) : (i += 1) {
         client1.publish("qgroup.test", "msg") catch {};
     }
-    client1.flush(allocator) catch {};
+    client1.flushBuffer() catch {};
 
     io1.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
@@ -1488,7 +1488,7 @@ fn testQueueGroupMultiClientReconnect(
     while (i < 20) : (i += 1) {
         client1.publish("qgroup.test", "msg") catch {};
     }
-    client1.flush(allocator) catch {};
+    client1.flushBuffer() catch {};
 
     io1.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
@@ -1575,7 +1575,7 @@ fn testRapidServerRestarts(
         reportResult("rapid_restarts", false, "final publish failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
         msg.deinit(allocator);
@@ -1665,7 +1665,7 @@ fn testMultipleReconnectionCycles(
             reportResult("multiple_cycles", false, details);
             return;
         };
-        client.flush(allocator) catch {};
+        client.flushBuffer() catch {};
 
         if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
             m.deinit(allocator);
@@ -1729,7 +1729,7 @@ fn testLongDisconnectionRecovery(
     defer sub.deinit(allocator);
 
     client.publish("long.test", "before") catch {};
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
         m.deinit(allocator);
@@ -1753,7 +1753,7 @@ fn testLongDisconnectionRecovery(
         reportResult("long_disconnection", false, "publish after failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |msg| {
         msg.deinit(allocator);

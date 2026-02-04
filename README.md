@@ -65,9 +65,8 @@ pub fn main() !void {
     const sub = try client.subscribe(allocator, "greet.*");
     defer sub.deinit(allocator);
 
-    // Publish (buffered)
+    // Publish (auto-flushed to network)
     try client.publish("greet.hello", "Hello, NATS!");
-    try client.flush(allocator);  // Send to network
 
     // Receive message
     const msg = try sub.next(allocator, io);
@@ -124,54 +123,32 @@ Source: `src/examples/`
 
 ## Publishing
 
-### Buffered Writes
+### Auto-Flush Behavior
 
-Messages are buffered in memory. They do not hit the network until you flush:
+Messages are buffered and automatically flushed to the network:
 
 ```zig
-// Writes to buffer (fast, does not block on network)
+// Write to buffer - auto-flushed within ~1ms by io_task
 try client.publish("events.click", "button1");
 try client.publish("events.click", "button2");
 try client.publish("events.click", "button3");
-
-// Now send all buffered messages to server
-try client.flush(allocator);
+// No explicit flush needed - happens automatically!
 ```
 
 **Buffer details:**
 - Default size: 1MB (configurable via `writer_buffer_size` option)
 - No allocator needed - `publish()` writes to a pre-allocated buffer
-- Auto-flushes when buffer fills (no manual flush required for throughput)
-- `flush()` writes data to the socket
-
-### High Throughput Publish Pattern
-
-For high-throughput scenarios, batch multiple publishes before flushing:
-
-```zig
-for (events) |event| {
-    try client.publish("events", event);
-}
-try client.flush(allocator);
-```
-
-### Publish with Reply-To
-
-For request/reply patterns where you manage the inbox:
-
-```zig
-try client.publishRequest("service.echo", "my.inbox", "ping");
-try client.flush(allocator);
-```
+- Auto-flushes within ~1ms (via io_task background loop)
+- Multiple rapid publishes are naturally batched for efficiency
 
 ### Confirmed Flush
 
 For scenarios where you need confirmation that the server received your messages,
-use `flushConfirmed()`. It sends PING and waits for PONG:
+use `flush()`. It sends PING and waits for PONG (matches Go/C client behavior):
 
 ```zig
 try client.publish("events.important", data);
-try client.flushConfirmed(allocator, 5_000_000_000); // 5 second timeout
+try client.flush(allocator, 5_000_000_000); // 5 second timeout
 // Server has confirmed receipt of all buffered messages
 ```
 
@@ -180,18 +157,25 @@ try client.flushConfirmed(allocator, 5_000_000_000); // 5 second timeout
 - Before shutting down to ensure all messages were sent
 - Synchronization points in your application
 
-**Note:** For high-throughput fire-and-forget scenarios, use `flush()` instead.
+### Manual Buffer Flush
+
+For explicit control without server confirmation, use `flushBuffer()`:
+
+```zig
+try client.publish("events", data);
+try client.flushBuffer();  // Sends buffer to socket, no PING/PONG
+```
 
 ### When Does Data Hit the Network?
 
 | Method | Network I/O |
 |--------|-------------|
-| `publish()` | No - writes to buffer |
-| `publishRequest()` | No - writes to buffer |
-| `publishWithHeaders()` | No - writes to buffer |
-| `publishRequestWithHeaders()` | No - writes to buffer |
-| `flush()` | Yes - sends buffer to socket |
-| `flushConfirmed()` | Yes - sends buffer + PING, waits for PONG |
+| `publish()` | Auto-flushed within ~1ms |
+| `publishRequest()` | Auto-flushed within ~1ms |
+| `publishWithHeaders()` | Auto-flushed within ~1ms |
+| `publishRequestWithHeaders()` | Auto-flushed within ~1ms |
+| `flushBuffer()` | Yes - sends buffer to socket immediately |
+| `flush()` | Yes - sends buffer + PING, waits for PONG |
 | `request()` | Yes - flushes, waits for response |
 | `requestWithHeaders()` | Yes - flushes, waits for response |
 
@@ -408,10 +392,9 @@ while (true) {
     var buf: [32]u8 = undefined;
     const result = std.fmt.bufPrint(&buf, "{d}", .{num * 2}) catch "error";
 
-    // Send reply
+    // Send reply (auto-flushed)
     if (req.reply_to) |reply_to| {
         try client.publish(reply_to, result);
-        try client.flush(allocator);
     }
 }
 ```
@@ -424,13 +407,12 @@ Convenience method for the request/reply pattern:
 const msg = try sub.next(allocator, io);
 defer msg.deinit(allocator);
 
-// Respond using the message's reply_to
+// Respond using the message's reply_to (auto-flushed)
 msg.respond(client, "response data") catch |err| {
     if (err == error.NoReplyTo) {
         // Message had no reply_to address
     }
 };
-try client.flush(allocator);
 ```
 
 ### Manual Request/Reply Pattern
@@ -444,11 +426,10 @@ defer allocator.free(inbox);
 
 const reply_sub = try client.subscribe(allocator, inbox);
 defer reply_sub.deinit(allocator);
-try client.flush(allocator);  // Ensure subscription is active
+try client.flushBuffer();  // Ensure subscription is active
 
-// Send request with reply-to
+// Send request with reply-to (auto-flushed)
 try client.publishRequest("service", inbox, "request data");
-try client.flush(allocator);
 
 // Wait for response with timeout
 if (try reply_sub.nextWithTimeout(allocator, 5000)) |reply| {
@@ -498,7 +479,6 @@ const hdrs = [_]headers.Entry{
     .{ .key = "X-Request-Id", .value = "req-123" },
 };
 try client.publishWithHeaders("events.user", &hdrs, "user logged in");
-try client.flush(allocator);
 
 // Multiple headers
 const multi_hdrs = [_]headers.Entry{
@@ -516,7 +496,6 @@ const hdrs = [_]headers.Entry{
     .{ .key = "X-Request-Id", .value = "req-789" },
 };
 try client.publishRequestWithHeaders("service.echo", "my.inbox", &hdrs, "ping");
-try client.flush(allocator);
 ```
 
 ### Request/Reply with Headers
@@ -621,9 +600,8 @@ if (try headers.getAll(allocator, "X-Tag")) |tags| {
 // Delete headers
 headers.delete(allocator, "X-Tag");
 
-// Publish with HeaderMap
+// Publish with HeaderMap (auto-flushed)
 try client.publishWithHeaderMap(allocator, "subject", &headers, "payload");
-try client.flush(allocator);
 ```
 
 ### Header Notes
@@ -938,10 +916,11 @@ std.debug.print("Reconnects: {d}\n", .{stats.reconnects});
 
 ### Connection Control
 
-**Flush with Timeout:**
+**Flush with Server Confirmation:**
 
 ```zig
-client.flushTimeout(allocator, 5_000_000_000) catch |err| {
+// Sends PING and waits for PONG (confirms server received messages)
+client.flush(allocator, 5_000_000_000) catch |err| {
     if (err == error.Timeout) {
         std.debug.print("Flush timed out\n", .{});
     }
@@ -1214,7 +1193,7 @@ if (client.getConnectedServerVersion()) |version| {
 |------------|--------|---------|
 | Publish message | `client.publish(subject, data)` | `!void` |
 | Publish with reply-to | `client.publishRequest(subject, reply_to, data)` | `!void` |
-| Flush to network | `client.flush(allocator)` | `!void` |
+| Flush buffer to socket | `client.flushBuffer()` | `!void` |
 | Subscribe | `client.subscribe(allocator, subject)` | `!*Sub` |
 | Queue subscribe | `client.subscribeQueue(allocator, subject, group)` | `!*Sub` |
 | Unsubscribe | `sub.unsubscribe()` | `!void` |
@@ -1239,8 +1218,7 @@ if (client.getConnectedServerVersion()) |version| {
 | Server RTT | `client.getRtt()` | `!u64` |
 | Server URL | `client.getConnectedUrl()` | `?[]const u8` |
 | Server ID | `client.getConnectedServerId()` | `?[]const u8` |
-| Flush with timeout | `client.flushTimeout(alloc, timeout_ns)` | `!void` |
-| Flush confirmed | `client.flushConfirmed(alloc, timeout_ns)` | `!void` |
+| Flush confirmed | `client.flush(alloc, timeout_ns)` | `!void` |
 | Force reconnect | `client.forceReconnect()` | `!void` |
 
 ---

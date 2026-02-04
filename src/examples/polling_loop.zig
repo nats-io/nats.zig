@@ -48,7 +48,7 @@ pub fn main() !void {
     const low_priority = try client.subscribe(allocator, "priority.low");
     defer low_priority.deinit(allocator);
 
-    try client.flush(allocator);
+    try client.flushBuffer();
 
     std.debug.print("Subscribed to: priority.high, priority.normal, priority.low\n\n", .{});
 
@@ -59,7 +59,7 @@ pub fn main() !void {
     try client.publish("priority.high", "URGENT: Disk space low!");
     try client.publish("priority.normal", "Info: Report generated");
     try client.publish("priority.low", "Debug: Metrics collected");
-    try client.flush(allocator);
+    try client.flushBuffer();
 
     std.debug.print("Published 6 messages (2 high, 2 normal, 2 low)\n\n", .{});
 
@@ -138,7 +138,7 @@ pub fn main() !void {
         const low_msg = std.fmt.bufPrint(&buf, "Low {d}", .{i + 1}) catch "Low";
         try client.publish("priority.low", low_msg);
     }
-    try client.flush(allocator);
+    try client.flushBuffer();
     io.sleep(.fromMilliseconds(50), .awake) catch {};
 
     std.debug.print("Published 9 more messages (3 each)\n", .{});

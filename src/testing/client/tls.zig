@@ -121,14 +121,14 @@ pub fn testTlsPubSub(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     const test_msg = "encrypted message over TLS";
     client.publish("tls.test.subject", test_msg) catch {
         reportResult("tls_pubsub", false, "publish failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         defer m.deinit(allocator);
@@ -268,7 +268,7 @@ pub fn testTlsMultipleMessages(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     const msg_count: usize = 100;
     for (0..msg_count) |i| {
@@ -283,7 +283,7 @@ pub fn testTlsMultipleMessages(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     var received: usize = 0;
     for (0..msg_count) |_| {

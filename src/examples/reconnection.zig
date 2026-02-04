@@ -62,7 +62,7 @@ pub fn main() !void {
     // Subscribe
     const sub = try client.subscribe(allocator, "demo.reconnect");
     defer sub.deinit(allocator);
-    try client.flush(allocator);
+    try client.flushBuffer();
 
     std.debug.print("\nSubscribed to 'demo.reconnect'\n", .{});
     std.debug.print("Monitoring connection for 10 seconds...\n", .{});
@@ -87,7 +87,7 @@ pub fn main() !void {
 
         if (publish_result) |_| {
             // Publish succeeded - try to flush
-            if (client.flush(allocator)) |_| {
+            if (client.flushBuffer()) |_| {
                 std.debug.print(
                     "[{d:2}] {s} - Published and flushed: {s}\n",
                     .{ iteration + 1, state_str, msg },
