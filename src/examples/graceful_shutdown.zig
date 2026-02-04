@@ -77,7 +77,10 @@ pub fn main() !void {
         events_count += 1;
     }
 
-    std.debug.print("Processed: {d} orders, {d} events\n", .{ orders_count, events_count });
+    std.debug.print(
+        "Processed: {d} orders, {d} events\n",
+        .{ orders_count, events_count },
+    );
 
     // CHECK FOR DROPPED MESSAGES before shutdown
     std.debug.print("\nPre-shutdown health check:\n", .{});

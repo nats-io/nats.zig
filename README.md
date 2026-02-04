@@ -139,7 +139,7 @@ try client.flush(allocator);
 ```
 
 **Buffer details:**
-- Default size: 1MB (configurable via `buffer_size` option)
+- Default size: 1MB (configurable via `writer_buffer_size` option)
 - No allocator needed - `publish()` writes to a pre-allocated buffer
 - Auto-flushes when buffer fills (no manual flush required for throughput)
 - `flush()` writes data to the socket
@@ -755,8 +755,9 @@ const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .
     .name = "my-app",              // Client name (visible in server logs)
 
     // Buffers
-    .buffer_size = 256 * 1024,     // Read/write buffer (default 256KB)
-    .async_queue_size = 256,       // Per-subscription queue size
+    .reader_buffer_size = 256 * 1024,  // Read buffer (default 1MB)
+    .writer_buffer_size = 256 * 1024,  // Write buffer (default 1MB)
+    .async_queue_size = 256,           // Per-subscription queue size
     .tcp_rcvbuf = 256 * 1024,      // TCP receive buffer hint
 
     // Timeouts
@@ -991,9 +992,10 @@ while (true) {
 
 ```zig
 const client = try nats.Client.connect(allocator, io, url, .{
-    .async_queue_size = 1024,      // Larger per-subscription queue
-    .tcp_rcvbuf = 512 * 1024,      // 512KB TCP buffer
-    .buffer_size = 1024 * 1024,    // 1MB read/write buffer
+    .async_queue_size = 1024,         // Larger per-subscription queue
+    .tcp_rcvbuf = 512 * 1024,         // 512KB TCP buffer
+    .reader_buffer_size = 1024 * 1024, // 1MB read buffer
+    .writer_buffer_size = 1024 * 1024, // 1MB write buffer
 });
 ```
 

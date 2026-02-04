@@ -60,9 +60,11 @@ pub const Memory = struct {
 pub const Connection = struct {
     /// Connection timeout (5 seconds).
     pub const timeout_ns: u64 = 5_000_000_000;
-    /// Read/write buffer size. Must be > max_payload + protocol overhead.
+    /// Read buffer size. Must be > max_payload + protocol overhead.
     /// Derived from Protocol.max_payload + 8KB headroom for MSG/HMSG headers.
-    pub const buffer_size: usize = Protocol.max_payload + 8 * 1024;
+    pub const reader_buffer_size: usize = Protocol.max_payload + 8 * 1024;
+    /// Write buffer size. Same default as read buffer.
+    pub const writer_buffer_size: usize = Protocol.max_payload + 8 * 1024;
     /// TCP receive buffer hint (1 MB for high throughput).
     pub const tcp_rcvbuf: u32 = 1024 * 1024;
     /// Ping interval (2 minutes).

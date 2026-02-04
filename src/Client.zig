@@ -46,7 +46,7 @@ const creds_auth = nkey_auth.creds;
 
 const Client = @This();
 
-/// Gets current time in nanoseconds (Zig 0.16 compatible).
+/// Gets current time in nanoseconds
 fn getNowNs() error{TimerUnavailable}!u64 {
     const instant = std.time.Instant.now() catch return error.TimerUnavailable;
     const secs: u64 = @intCast(instant.timestamp.sec);
@@ -184,8 +184,10 @@ pub const Options = struct {
     /// Credentials content (alternative to file path).
     /// Use when credentials are loaded from environment/memory.
     creds: ?[]const u8 = null,
-    /// Read/write buffer size. Must be >= max message size you expect (1MB).
-    buffer_size: usize = defaults.Connection.buffer_size,
+    /// Read buffer size. Must be >= max message size you expect (1MB).
+    reader_buffer_size: usize = defaults.Connection.reader_buffer_size,
+    /// Write buffer size. Smaller values force more frequent flushes.
+    writer_buffer_size: usize = defaults.Connection.writer_buffer_size,
     /// TCP receive buffer size hint. Larger values allow more messages to
     /// queue in the kernel before backpressure kicks in. Default 256KB.
     /// Set to 0 to use system default.
@@ -691,12 +693,12 @@ pub fn connect(
         };
     }
 
-    client.read_buffer = allocator.alloc(u8, opts.buffer_size) catch {
+    client.read_buffer = allocator.alloc(u8, opts.reader_buffer_size) catch {
         return error.OutOfMemory;
     };
     errdefer allocator.free(client.read_buffer);
 
-    client.write_buffer = allocator.alloc(u8, opts.buffer_size) catch {
+    client.write_buffer = allocator.alloc(u8, opts.writer_buffer_size) catch {
         return error.OutOfMemory;
     };
     errdefer allocator.free(client.write_buffer);

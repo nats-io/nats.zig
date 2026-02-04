@@ -30,7 +30,8 @@ pub fn main() !void {
         "nats://localhost:4222",
         .{
             .name = "batch-throughput",
-            .buffer_size = 512 * 1024, // 512KB buffer
+            .reader_buffer_size = 512 * 1024, // 512KB buffer
+            .writer_buffer_size = 512 * 1024, // 512KB buffer
             .sub_queue_size = 512, // Larger subscription queue
         },
     );

@@ -91,6 +91,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
 
     const client = nats.Client.connect(allocator, io, config.url, .{
         .name = "bench-pub",
+        // .writer_buffer_size = 144, // TEST: small write buffer for unbuffered benchmark
     }) catch |err| {
         std.debug.print("Failed to connect: {}\n", .{err});
         return err;
@@ -112,9 +113,10 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
             std.debug.print("Publish failed at msg {d}: {}\n", .{ i, err });
             return err;
         };
+        try client.flush(allocator);
     }
 
-    client.flush(allocator) catch |err| {
+    client.flushConfirmed(allocator, 5_000_000) catch |err| {
         std.debug.print("Flush failed: {}\n", .{err});
         return err;
     };
