@@ -1,6 +1,5 @@
 //! Protocol Encoder Edge Case Tests
 //!
-//! Comprehensive test coverage for NATS protocol encoding including:
 //! - Integer conversion edge cases
 //! - CRLF injection attacks (SECURITY)
 //! - Empty/optional field handling

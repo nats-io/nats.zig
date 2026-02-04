@@ -1,6 +1,6 @@
 //! Server Pool Tests
 //!
-//! Comprehensive unit tests for ServerPool including edge cases,
+//! Unit tests for ServerPool including edge cases,
 //! failure tracking, cooldown behavior, and URL parsing.
 
 const std = @import("std");

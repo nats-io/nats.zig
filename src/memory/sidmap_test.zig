@@ -1,6 +1,5 @@
 //! SidMap Edge Case Tests
 //!
-//! Comprehensive test coverage for SidMap including:
 //! - Sentinel value handling (EMPTY/TOMB corruption)
 //! - Hash collision stress testing
 //! - Tombstone accumulation and reuse

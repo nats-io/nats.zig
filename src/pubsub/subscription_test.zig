@@ -1,6 +1,5 @@
 //! Subscription Module Tests
 //!
-//! Comprehensive edge case tests for FixedQueue and FixedSubscription.
 //! Tests ring buffer wraparound, capacity limits, state transitions,
 //! and subject validation edge cases.
 

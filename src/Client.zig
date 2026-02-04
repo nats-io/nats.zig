@@ -88,7 +88,11 @@ pub const Message = struct {
     /// Sends a reply to this message using the reply_to subject.
     /// Convenience method for request/reply pattern.
     /// Returns error.NoReplyTo if message has no reply_to subject.
-    pub fn respond(self: *const Message, client: *Client, payload: []const u8) !void {
+    pub fn respond(
+        self: *const Message,
+        client: *Client,
+        payload: []const u8,
+    ) !void {
         const reply_to = self.reply_to orelse return error.NoReplyTo;
         assert(reply_to.len > 0);
         try client.publish(reply_to, payload);
@@ -221,7 +225,8 @@ pub const Options = struct {
     /// Messages between rate-limited error notifications.
     /// After first error (alloc_failed, protocol_error), subsequent errors
     /// only notify every N messages. Prevents event queue flooding.
-    error_notify_interval_msgs: u64 = defaults.ErrorReporting.notify_interval_msgs,
+    error_notify_interval_msgs: u64 =
+        defaults.ErrorReporting.notify_interval_msgs,
 
     // EVENT CALLBACKS
 
@@ -457,7 +462,8 @@ return_queue_buf: [][]u8 = undefined,
 // Reconnection state
 server_pool: connection.ServerPool = undefined,
 server_pool_initialized: bool = false,
-sub_backups: [MAX_SUBSCRIPTIONS]SubBackup = [_]SubBackup{.{}} ** MAX_SUBSCRIPTIONS,
+sub_backups: [MAX_SUBSCRIPTIONS]SubBackup =
+    [_]SubBackup{.{}} ** MAX_SUBSCRIPTIONS,
 sub_backup_count: u16 = 0,
 reconnect_attempt: u32 = 0,
 original_url: [256]u8 = undefined,
@@ -744,7 +750,9 @@ pub fn connect(
                 info.connect_urls_count,
             );
             if (new_servers > 0) {
-                client.pushEvent(.{ .discovered_servers = .{ .count = new_servers } });
+                client.pushEvent(
+                    .{ .discovered_servers = .{ .count = new_servers } },
+                );
             }
         }
     }
@@ -2347,9 +2355,7 @@ pub fn isTcpRcvBufSet(self: *const Client) bool {
     return self.tcp_rcvbuf_set;
 }
 
-// =========================================================================
 // Connection Info Getters
-// =========================================================================
 
 /// Returns the currently connected server URL.
 /// Returns the original URL used to connect, or null if not connected.
@@ -2611,7 +2617,9 @@ pub fn getConnectedUrlRedacted(
     const host_part = url[at_pos..];
     const redacted_pass = "***";
 
-    const new_len = prefix_len + user.len + 1 + redacted_pass.len + host_part.len;
+    const new_len =
+        prefix_len + user.len + 1 + redacted_pass.len + host_part.len;
+
     if (buf.len < new_len) return null;
 
     var pos: usize = 0;
@@ -2660,9 +2668,7 @@ pub fn clearLastError(self: *Client) void {
     self.last_error_msg_len = 0;
 }
 
-// =========================================================================
 // Connection State Methods
-// =========================================================================
 
 /// Returns the current connection state.
 /// Thread-safe: uses atomic load for cross-thread visibility.
@@ -3468,7 +3474,8 @@ pub const Subscription = struct {
         while (true) {
             if (self.queue.pop()) |msg| {
                 // Use backing_buf.len for speed (avoids 4 field accesses)
-                const msg_size = if (msg.backing_buf) |buf| buf.len else msg.size();
+                const msg_size =
+                    if (msg.backing_buf) |buf| buf.len else msg.size();
                 self.pending_bytes -|= msg_size;
                 return msg;
             }
@@ -3512,7 +3519,11 @@ pub const Subscription = struct {
             if (count > 0) {
                 // Decrement pending bytes for all popped messages
                 for (buf[0..count]) |msg| {
-                    const msg_size = if (msg.backing_buf) |buf_| buf_.len else msg.size();
+                    const msg_size =
+                        if (msg.backing_buf) |buf_|
+                            buf_.len
+                        else
+                            msg.size();
                     self.pending_bytes -|= msg_size;
                 }
                 return count;
@@ -3538,7 +3549,8 @@ pub const Subscription = struct {
     pub fn tryNextBatch(self: *Subscription, buf: []Message) usize {
         const count = self.queue.popBatch(buf);
         for (buf[0..count]) |msg| {
-            const msg_size = if (msg.backing_buf) |buf_| buf_.len else msg.size();
+            const msg_size =
+                if (msg.backing_buf) |buf_| buf_.len else msg.size();
             self.pending_bytes -|= msg_size;
         }
         return count;
@@ -3565,7 +3577,8 @@ pub const Subscription = struct {
         const start = std.time.Instant.now() catch {
             // Fallback to spin-only if timer unavailable
             if (self.queue.pop()) |msg| {
-                const msg_size = if (msg.backing_buf) |buf| buf.len else msg.size();
+                const msg_size =
+                    if (msg.backing_buf) |buf| buf.len else msg.size();
                 self.pending_bytes -|= msg_size;
                 return msg;
             }
@@ -3576,7 +3589,8 @@ pub const Subscription = struct {
 
         while (true) {
             if (self.queue.pop()) |msg| {
-                const msg_size = if (msg.backing_buf) |buf| buf.len else msg.size();
+                const msg_size =
+                    if (msg.backing_buf) |buf| buf.len else msg.size();
                 self.pending_bytes -|= msg_size;
                 return msg;
             }
@@ -3613,9 +3627,7 @@ pub const Subscription = struct {
         return self.alloc_failed_msgs;
     }
 
-    // =========================================================================
     // Subscription Control Methods
-    // =========================================================================
 
     /// Auto-unsubscribe after receiving max messages.
     /// Sends UNSUB with max_msgs to server for server-side enforcement.
@@ -3760,9 +3772,7 @@ pub const Subscription = struct {
         return self.state == .active or self.state == .draining;
     }
 
-    // =========================================================================
     // Subscription Info Getters
-    // =========================================================================
 
     /// Returns the subscription ID (SID).
     /// Unique within the connection, assigned during subscribe.
@@ -3790,9 +3800,7 @@ pub const Subscription = struct {
         return self.state == .draining;
     }
 
-    // =========================================================================
     // Subscription Statistics
-    // =========================================================================
 
     /// Subscription statistics snapshot.
     pub const SubStats = struct {
@@ -3818,7 +3826,10 @@ pub const Subscription = struct {
     }
 
     /// Returns high watermarks for pending messages and bytes.
-    pub fn maxPending(self: *const Subscription) struct { msgs: u64, bytes: u64 } {
+    pub fn maxPending(self: *const Subscription) struct {
+        msgs: u64,
+        bytes: u64,
+    } {
         return .{
             .msgs = self.max_pending_msgs,
             .bytes = self.max_pending_bytes,
@@ -3883,7 +3894,9 @@ pub const Subscription = struct {
         if (self.max_msgs != null) {
             self.delivered_count += 1;
             // Check if limit reached - fire subscription_complete event
-            if (self.delivered_count >= self.max_msgs.? and !self.auto_unsub_triggered) {
+            if (self.delivered_count >= self.max_msgs.? and
+                !self.auto_unsub_triggered)
+            {
                 self.auto_unsub_triggered = true;
                 // Notify via event callback that subscription reached its limit
                 self.client.pushEvent(.{

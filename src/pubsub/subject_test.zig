@@ -1,6 +1,5 @@
 //! Subject Validation Edge Case Tests
 //!
-//! Comprehensive test coverage for subject validation including:
 //! - Empty/boundary inputs
 //! - Null bytes and control characters
 //! - Wildcard position validation

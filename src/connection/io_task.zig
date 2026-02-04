@@ -1,28 +1,18 @@
 //! Background I/O Task for NATS Client
 //!
-//! Reader task: reads from socket, routes messages, responds to PING.
-//! All writes (PUB, SUB, flush) happen in user thread.
+//! Async task that handles:
+//! - All socket reads (fillMore)
+//! - Message routing (MSG/HMSG to subscription queues)
+//! - PONG responses to server PING
+//! - Reconnection (including handshake writes)
+//!
+//! Caller context handles:
+//! - PUB, SUB, UNSUB writes
+//! - Client-initiated PING
+//! - Flush operations
+//!
+//! Both contexts share the socket writer via write_mutex.
 //! Runs as async task started by Client.connect().
-//!
-//! ## Concurrency Model
-//!
-//! This task runs concurrently with the user thread. Key synchronization:
-//!
-//! **State checks (hot path)**: Uses plain reads, NOT atomics.
-//! - Rationale: "close-then-cancel" pattern in Client.deinit() ensures safe exit
-//! - Stale `.connected` read triggers socket op attempt
-//! - Socket op fails (already closed), error handler checks state, task exits
-//! - Worst case: one extra loop iteration, no corruption or crash
-//! - Benefit: avoids atomic overhead in hot loop (~2.5M msg/s throughput)
-//!
-//! **State changes (cold path)**: Uses atomics for reconnect/disconnect.
-//! - `State.atomicLoad()` / `@atomicStore()` used in error handlers
-//! - These are cold paths (only on disconnect), atomics acceptable
-//!
-//! **Stats counters**: Single-writer pattern, no atomics needed.
-//! - `msgs_in`, `bytes_in`: written ONLY by io_task
-//! - `msgs_out`, `bytes_out`: written ONLY by user thread
-//! - `getStats()` reads are safe: individual u64 loads are atomic on 64-bit
 
 const std = @import("std");
 const posix = std.posix;

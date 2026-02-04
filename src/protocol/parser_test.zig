@@ -1,6 +1,5 @@
 //! Parser Edge Case Tests
 //!
-//! Comprehensive test coverage for NATS protocol parser including:
 //! - Integer parsing edge cases (overflow, boundaries, invalid chars)
 //! - MSG/HMSG parsing (truncated, malformed, edge values)
 //! - INFO JSON parsing (invalid JSON, type mismatches, overflow)
