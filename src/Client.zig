@@ -1423,6 +1423,9 @@ pub fn subscribeQueue(
         return error.EncodingFailed;
     };
 
+    // Signal auto-flush to register subscription promptly
+    self.flush_requested.store(true, .release);
+
     return sub;
 }
 
@@ -1722,15 +1725,12 @@ pub fn requestWithHeaders(
     const sub = try self.subscribe(allocator, inbox);
     defer sub.deinit(allocator);
 
-    // Flush subscription registration before publishing
-    try self.flushBuffer();
-
     // Brief delay to ensure server has registered subscription
+    // (auto-flush sends SUB within ~1ms, sleep gives server processing time)
     self.io.sleep(.fromMilliseconds(5), .awake) catch {};
 
-    // Publish request with reply-to and headers
+    // Publish request with reply-to and headers (auto-flush sends promptly)
     try self.publishRequestWithHeaders(subject, inbox, hdrs, payload);
-    try self.flushBuffer();
 
     // Wait for reply using io.select()
     var response_future = self.io.async(
@@ -2003,15 +2003,12 @@ pub fn request(
     const sub = try self.subscribe(allocator, inbox);
     defer sub.deinit(allocator);
 
-    // Flush subscription registration before publishing
-    try self.flushBuffer();
-
     // Brief delay to ensure server has registered subscription
+    // (auto-flush sends SUB within ~1ms, sleep gives server processing time)
     self.io.sleep(.fromMilliseconds(5), .awake) catch {};
 
-    // Publish request with reply-to
+    // Publish request with reply-to (auto-flush sends promptly)
     try self.publishRequest(subject, inbox, payload);
-    try self.flushBuffer();
 
     // Wait for reply using io.select()
     var response_future = self.io.async(
@@ -2088,10 +2085,8 @@ pub fn requestMsg(
     const sub = try self.subscribe(allocator, inbox);
     defer sub.deinit(allocator);
 
-    // Flush subscription registration before publishing
-    try self.flushBuffer();
-
     // Brief delay to ensure server has registered subscription
+    // (auto-flush sends SUB within ~1ms, sleep gives server processing time)
     self.io.sleep(.fromMilliseconds(5), .awake) catch {};
 
     // Publish request with reply-to (with or without headers)
@@ -2117,8 +2112,10 @@ pub fn requestMsg(
 
         self.stats.msgs_out += 1;
         self.stats.bytes_out += msg.data.len;
+
+        // Signal auto-flush to send request promptly
+        self.flush_requested.store(true, .release);
     }
-    try self.flushBuffer();
 
     // Wait for reply using io.select()
     var response_future = self.io.async(
@@ -3619,6 +3616,9 @@ pub const Subscription = struct {
                 .sid = self.sid,
                 .max_msgs = max,
             }) catch return error.EncodingFailed;
+
+            // Signal auto-flush to send UNSUB promptly
+            client.flush_requested.store(true, .release);
         }
     }
 
@@ -3641,6 +3641,9 @@ pub const Subscription = struct {
                 .sid = self.sid,
                 .max_msgs = null,
             }) catch return error.EncodingFailed;
+
+            // Signal auto-flush to send UNSUB promptly
+            client.flush_requested.store(true, .release);
         }
     }
 
@@ -3911,6 +3914,9 @@ pub const Subscription = struct {
             }) catch {
                 send_failed = true;
             };
+
+            // Signal auto-flush to send UNSUB promptly
+            client.flush_requested.store(true, .release);
         }
 
         // Always remove from client tracking (inside mutex)

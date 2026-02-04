@@ -37,7 +37,6 @@ pub fn main(init: std.process.Init) !void {
 
     // Publish a message
     try client.publish("hello", "Hello, NATS!");
-    try client.flushBuffer();
 
     // Receive the message
     if (try sub.nextWithTimeout(allocator, 1000)) |msg| {

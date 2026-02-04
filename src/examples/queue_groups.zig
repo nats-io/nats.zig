@@ -77,8 +77,6 @@ pub fn main() !void {
     const worker3 = try client.subscribeQueue(allocator, "tasks", "workers");
     defer worker3.deinit(allocator);
 
-    try client.flushBuffer();
-
     std.debug.print("Created 3 workers in queue group 'workers'\n", .{});
 
     // Shared queue for results
@@ -111,7 +109,6 @@ pub fn main() !void {
         const msg = std.fmt.bufPrint(&buf, "Task {d}", .{i + 1}) catch "Task";
         try client.publish("tasks", msg);
     }
-    try client.flushBuffer();
 
     // Consume results from queue
     var counts = [3]u32{ 0, 0, 0 };

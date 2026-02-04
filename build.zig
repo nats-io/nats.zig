@@ -114,11 +114,11 @@ pub fn build(b: *std.Build) void {
     run_select.dependOn(&select_cmd.step);
     select_cmd.step.dependOn(b.getInstallStep());
 
-    // 5. Batch Throughput example (high performance patterns)
+    // 5. Batch Receiving example (efficient batch message retrieval)
     const batch_exe = b.addExecutable(.{
-        .name = "example-batch-throughput",
+        .name = "example-batch-receiving",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/examples/batch_throughput.zig"),
+            .root_source_file = b.path("src/examples/batch_receiving.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -129,8 +129,8 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(batch_exe);
 
     const run_batch = b.step(
-        "run-batch-throughput",
-        "Run high-throughput batch patterns example",
+        "run-batch-receiving",
+        "Run batch receiving patterns example",
     );
     const batch_cmd = b.addRunArtifact(batch_exe);
     run_batch.dependOn(&batch_cmd.step);

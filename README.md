@@ -426,7 +426,6 @@ defer allocator.free(inbox);
 
 const reply_sub = try client.subscribe(allocator, inbox);
 defer reply_sub.deinit(allocator);
-try client.flushBuffer();  // Ensure subscription is active
 
 // Send request with reply-to (auto-flushed)
 try client.publishRequest("service", inbox, "request data");

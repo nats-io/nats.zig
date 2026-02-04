@@ -1,11 +1,11 @@
-//! High-Throughput Batch Patterns
+//! Batch Receiving Patterns
 //!
-//! Demonstrates techniques for maximizing throughput:
-//! - Batch publishing: multiple publishes before single flush
-//! - Batch receiving: nextBatch() for efficient message retrieval
+//! Demonstrates efficient batch message retrieval:
+//! - nextBatch(): blocking batch receive (waits for at least 1 message)
+//! - tryNextBatch(): non-blocking batch receive for polling
 //! - Stats monitoring: track messages and detect drops
 //!
-//! Run with: zig build run-batch-throughput
+//! Run with: zig build run-batch-receiving
 //!
 //! Prerequisites: nats-server running on localhost:4222
 
@@ -23,16 +23,14 @@ pub fn main() !void {
     defer threaded.deinit();
     const io = threaded.io();
 
-    // Connect with larger buffers for high throughput
+    // Connect with larger subscription queue for batch receiving
     const client = try nats.Client.connect(
         allocator,
         io,
         "nats://localhost:4222",
         .{
-            .name = "batch-throughput",
-            .reader_buffer_size = 512 * 1024, // 512KB buffer
-            .writer_buffer_size = 512 * 1024, // 512KB buffer
-            .sub_queue_size = 512, // Larger subscription queue
+            .name = "batch-receiving",
+            .sub_queue_size = 512, // Larger queue for batch demos
         },
     );
     defer client.deinit(allocator);
@@ -41,37 +39,18 @@ pub fn main() !void {
 
     const sub = try client.subscribe(allocator, "bench.>");
     defer sub.deinit(allocator);
-    try client.flushBuffer();
 
     std.debug.print("Subscribed to 'bench.>'\n\n", .{});
 
-    // BATCH PUBLISHING: Write many messages, flush once
+    // Publish test messages
     const message_count: u32 = 100;
-    std.debug.print("Publishing {d} messages (batch mode)...\n", .{message_count});
-
-    const start = std.time.Instant.now() catch unreachable;
+    std.debug.print("Publishing {d} messages...\n", .{message_count});
 
     for (0..message_count) |i| {
         var buf: [64]u8 = undefined;
         const payload = std.fmt.bufPrint(&buf, "Message {d}", .{i + 1}) catch "Msg";
         try client.publish("bench.test", payload);
-        // No flush here - messages accumulate in buffer
     }
-
-    // Single flush sends all messages at once
-    try client.flushBuffer();
-
-    const elapsed = (std.time.Instant.now() catch unreachable).since(start);
-    const elapsed_ms = @as(f64, @floatFromInt(elapsed)) / 1_000_000.0;
-
-    std.debug.print(
-        "Published {d} messages in {d:.2}ms ({d:.0} msgs/sec)\n\n",
-        .{
-            message_count,
-            elapsed_ms,
-            @as(f64, @floatFromInt(message_count)) / (elapsed_ms / 1000.0),
-        },
-    );
 
     // BATCH RECEIVING: Receive multiple messages at once
     std.debug.print("Receiving messages (batch mode)...\n", .{});
@@ -123,7 +102,6 @@ pub fn main() !void {
         const payload = std.fmt.bufPrint(&buf, "Extra {d}", .{i + 1}) catch "Msg";
         try client.publish("bench.extra", payload);
     }
-    try client.flushBuffer();
 
     // Small delay to let messages arrive
     io.sleep(.fromMilliseconds(50), .awake) catch {};
