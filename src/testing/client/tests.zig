@@ -32,6 +32,7 @@ pub const tls = @import("tls.zig");
 pub const state_notifications = @import("state_notifications.zig");
 pub const advanced = @import("advanced.zig");
 pub const flush_confirmed = @import("flush_confirmed.zig");
+pub const autoflush = @import("autoflush.zig");
 
 /// Runs all async client tests.
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -61,4 +62,5 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     state_notifications.runAll(allocator);
     advanced.runAll(allocator);
     flush_confirmed.runAll(allocator);
+    autoflush.runAll(allocator, manager);
 }
