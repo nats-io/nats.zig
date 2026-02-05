@@ -194,6 +194,31 @@ defer sub.deinit(allocator);
 // > matches remainder: "events.>" matches "events.click" and "events.user.login"
 ```
 
+### Subscription Registration
+
+When subscribing, the SUB command is buffered and sent to the server asynchronously.
+If you need to ensure the subscription is fully registered before publishing (especially
+with separate publisher/subscriber clients), call `flush()` after subscribing:
+
+```zig
+const sub = try client.subscribe(allocator, "events.>");
+defer sub.deinit(allocator);
+
+// Ensure subscription is registered on server before publishing
+try client.flush(allocator, 5_000_000_000);  // 5 second timeout
+
+// Now safe to publish from another client
+```
+
+**When is this needed?**
+- Multi-client scenarios where one client publishes and another subscribes
+- Tests that need deterministic message delivery
+- Any situation requiring subscription to be active before first publish
+
+**When is this NOT needed?**
+- Single client publishing to itself (same client does subscribe + publish)
+- Using `request()` which handles synchronization internally
+
 ### Queue Groups (Load Balancing)
 
 Distribute messages across workers - only one subscriber in the group receives each message:

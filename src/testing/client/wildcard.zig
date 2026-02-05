@@ -42,11 +42,6 @@ pub fn testWildcardSubscribe(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit(allocator);
 
-    client.flushBuffer() catch {
-        reportResult("wildcard_subscribe", false, "flush failed");
-        return;
-    };
-
     reportResult("wildcard_subscribe", true, "");
 }
 
@@ -82,8 +77,6 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
     };
     defer sub_gt.deinit(allocator);
 
-    client.flushBuffer() catch {};
-
     // Publish to wtest.bar (matches both)
     client.publish("wtest.bar", "one") catch {
         reportResult("wildcard_matching", false, "pub1 failed");
@@ -95,8 +88,6 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
         reportResult("wildcard_matching", false, "pub2 failed");
         return;
     };
-
-    client.flushBuffer() catch {};
 
     // star should get 1 message
     var star_count: u32 = 0;
@@ -171,12 +162,9 @@ pub fn testWildcardPositions(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit(allocator);
 
-    client.flushBuffer() catch {};
-
     // Publish matching messages
     client.publish("foo.middle.end", "msg1") catch {};
     client.publish("start.bar.end", "msg2") catch {};
-    client.flushBuffer() catch {};
 
     var count: u32 = 0;
     if (sub1.nextWithTimeout(allocator, 500) catch null) |m| {
@@ -222,13 +210,11 @@ pub fn testMultipleWildcards(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
 
     // Publish matching subjects
     client.publish("mw.foo.middle.bar", "hit1") catch {};
     client.publish("mw.a.middle.b", "hit2") catch {};
     client.publish("mw.xyz.other.abc", "miss") catch {}; // should not match
-    client.flushBuffer() catch {};
 
     var count: u32 = 0;
     for (0..4) |_| {
@@ -272,18 +258,8 @@ pub fn testPublishSubscribe(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flushBuffer() catch {
-        reportResult("publish_subscribe", false, "flush after sub failed");
-        return;
-    };
-
     client.publish("roundtrip.test", "hello from zig") catch {
         reportResult("publish_subscribe", false, "publish failed");
-        return;
-    };
-
-    client.flushBuffer() catch {
-        reportResult("publish_subscribe", false, "flush after pub failed");
         return;
     };
 

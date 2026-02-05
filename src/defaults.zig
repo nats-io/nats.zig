@@ -125,8 +125,9 @@ pub const Spin = struct {
     /// After this many spins, yields to I/O runtime for cancellation support.
     pub const max_spins: u32 = 4096;
     /// Loop iterations between health check timestamp reads in io_task.
-    /// Avoids syscall overhead by only checking time periodically.
-    pub const health_check_iterations: u32 = 10000;
+    /// With 1ms poll timeout, 100 iterations = ~100ms between timestamp checks.
+    /// This aligns with health_check_interval_ns (100ms) in io_task.
+    pub const health_check_iterations: u32 = 100;
     /// Loop iterations between timeout checks in nextWithTimeout().
     /// Reduces syscalls while maintaining reasonable timeout granularity.
     pub const timeout_check_iterations: u32 = 10000;

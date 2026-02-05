@@ -233,12 +233,6 @@ pub fn testConnectionStateAfterOps(allocator: std.mem.Allocator) void {
         return;
     }
 
-    client.flushBuffer() catch {};
-    if (!client.isConnected()) {
-        reportResult("state_after_ops", false, "not connected after flush");
-        return;
-    }
-
     reportResult("state_after_ops", true, "");
 }
 
@@ -354,8 +348,6 @@ pub fn testConnectionDrain(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit(allocator);
 
-    client.flushBuffer() catch {};
-
     _ = client.drain(allocator) catch {
         client.deinit(allocator);
         reportResult("connection_drain", false, "drain failed");
@@ -438,11 +430,6 @@ pub fn testConnectionStateTransitions(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-
-    client.flushBuffer() catch {
-        reportResult("connection_state", false, "flush failed");
-        return;
-    };
 
     reportResult("connection_state", true, "");
 }

@@ -176,13 +176,10 @@ pub fn testSubscriptionCompleteEvent(allocator: std.mem.Allocator) void {
         return;
     };
 
-    client.flushBuffer() catch {};
-
     // Publish 3 messages
     for (0..3) |_| {
         client.publish("complete.test", "data") catch {};
     }
-    client.flushBuffer() catch {};
 
     // Receive messages to trigger the delivered count
     for (0..3) |_| {

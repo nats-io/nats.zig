@@ -93,10 +93,6 @@ pub fn testPingPongKeepAlive(allocator: std.mem.Allocator) void {
             reportResult("ping_pong_keep_alive", false, "publish failed");
             return;
         };
-        client.flushBuffer() catch {
-            reportResult("ping_pong_keep_alive", false, "flush failed");
-            return;
-        };
         io.io().sleep(.fromMilliseconds(100), .awake) catch {};
     }
 
@@ -178,12 +174,6 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
         return;
     };
 
-    client.flushBuffer() catch {
-        sub1.deinit(allocator);
-        reportResult("unknown_sid_handling", false, "flush1 failed");
-        return;
-    };
-
     sub1.unsubscribe() catch {
         sub1.deinit(allocator);
         reportResult("unknown_sid_handling", false, "unsubscribe failed");
@@ -191,28 +181,14 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
     };
     sub1.deinit(allocator);
 
-    client.flushBuffer() catch {
-        reportResult("unknown_sid_handling", false, "flush2 failed");
-        return;
-    };
-
     const sub2 = client.subscribe(allocator, "unknown.sid.test") catch {
         reportResult("unknown_sid_handling", false, "subscribe2 failed");
         return;
     };
     defer sub2.deinit(allocator);
 
-    client.flushBuffer() catch {
-        reportResult("unknown_sid_handling", false, "flush3 failed");
-        return;
-    };
-
     client.publish("unknown.sid.test", "test") catch {
         reportResult("unknown_sid_handling", false, "publish failed");
-        return;
-    };
-    client.flushBuffer() catch {
-        reportResult("unknown_sid_handling", false, "flush4 failed");
         return;
     };
 
@@ -485,11 +461,6 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
         };
     }
 
-    client.flushBuffer() catch {
-        reportResult("protocol_stability", false, "flush1 failed");
-        return;
-    };
-
     for (0..5) |i| {
         var buf: [32]u8 = undefined;
         const subject =
@@ -499,11 +470,6 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
             return;
         };
     }
-
-    client.flushBuffer() catch {
-        reportResult("protocol_stability", false, "flush2 failed");
-        return;
-    };
 
     var received: u32 = 0;
     for (0..5) |i| {

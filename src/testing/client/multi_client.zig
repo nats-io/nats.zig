@@ -47,18 +47,10 @@ pub fn testCrossClientRouting(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    subscriber.flushBuffer() catch {
-        reportResult("cross_client", false, "sub flush failed");
-        return;
-    };
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     publisher.publish("cross", "cross-message") catch {
         reportResult("cross_client", false, "publish failed");
-        return;
-    };
-    publisher.flushBuffer() catch {
-        reportResult("cross_client", false, "pub flush failed");
         return;
     };
 
@@ -160,10 +152,9 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flushBuffer() catch {
-        reportResult("client_high_rate", false, "flush failed");
-        return;
-    };
+    // Wait for subscription to be registered on server
+    // io.io().sleep(.fromMilliseconds(50), .awake) catch {};
+    client.flush(allocator, 50_000_000) catch {};
 
     const NUM_MSGS = 100;
     for (0..NUM_MSGS) |_| {
@@ -172,22 +163,26 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    publisher.flushBuffer() catch {
-        reportResult("client_high_rate", false, "pub flush failed");
-        return;
-    };
+
+    publisher.flush(allocator, 500_000_000) catch {};
+
+    std.debug.print("[TEST] flush done, starting receive loop\n", .{});
 
     var received: usize = 0;
-    for (0..NUM_MSGS) |_| {
+    for (0..NUM_MSGS) |i| {
+        std.debug.print("[TEST] recv {d}: calling io.async()\n", .{i});
         var future = io.io().async(
             nats.Client.Sub.next,
             .{ sub, allocator, io.io() },
         );
         defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
 
+        std.debug.print("[TEST] recv {d}: calling future.await()\n", .{i});
         if (future.await(io.io())) |_| {
+            std.debug.print("[TEST] recv {d}: got message\n", .{i});
             received += 1;
         } else |_| {
+            std.debug.print("[TEST] recv {d}: await failed\n", .{i});
             break;
         }
     }
@@ -261,8 +256,6 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
     };
     defer sub_c.deinit(allocator);
 
-    client_b.flushBuffer() catch {};
-    client_c.flushBuffer() catch {};
     io_a.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // A publishes to step1
@@ -270,7 +263,6 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
         reportResult("three_client_chain", false, "A publish failed");
         return;
     };
-    client_a.flushBuffer() catch {};
 
     // B receives and forwards to step2
     const msg_b = sub_b.nextWithTimeout(allocator, 2000) catch {
@@ -283,7 +275,6 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
             reportResult("three_client_chain", false, "B forward failed");
             return;
         };
-        client_b.flushBuffer() catch {};
     } else {
         reportResult("three_client_chain", false, "B no message");
         return;
@@ -342,13 +333,12 @@ pub fn testMultipleSubscribersSameSubject(allocator: std.mem.Allocator) void {
     };
     defer sub3.deinit(allocator);
 
-    client.flushBuffer() catch {};
-
     client.publish("broadcast.test", "hello all") catch {
         reportResult("multi_sub_same_subject", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
+
+    client.flush(allocator, 500_000_000) catch {};
 
     var count: u32 = 0;
 

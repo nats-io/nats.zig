@@ -71,8 +71,6 @@ pub fn testMessageOrdering(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flushBuffer() catch {};
-
     var pub_buf: [5][8]u8 = undefined;
     for (0..5) |i| {
         const payload = std.fmt.bufPrint(
@@ -82,7 +80,6 @@ pub fn testMessageOrdering(allocator: std.mem.Allocator) void {
         ) catch "e";
         client.publish("order", payload) catch {};
     }
-    client.flushBuffer() catch {};
 
     var in_order = true;
     for (0..5) |expected| {
@@ -145,7 +142,6 @@ pub fn testBinaryPayload(allocator: std.mem.Allocator) void {
         reportResult("binary_payload", false, "pub failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -190,13 +186,10 @@ pub fn testLongSubjectName(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flushBuffer() catch {};
-
     client.publish(long_subject, "test") catch {
         reportResult("long_subject_name", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);
@@ -232,13 +225,10 @@ pub fn testSubjectWithNumbersHyphens(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flushBuffer() catch {};
-
     client.publish(subject, "test") catch {
         reportResult("subject_nums_hyphens", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);
@@ -458,7 +448,6 @@ pub fn testInterleavedPubSub(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
 
     var received: u32 = 0;
     for (0..10) |i| {
@@ -469,7 +458,6 @@ pub fn testInterleavedPubSub(allocator: std.mem.Allocator) void {
             reportResult("interleaved_pubsub", false, "publish failed");
             return;
         };
-        client.flushBuffer() catch {};
 
         const msg = sub.nextWithTimeout(allocator, 500) catch {
             continue;
@@ -512,7 +500,6 @@ pub fn testReceiveOnlyAfterSubscribe(allocator: std.mem.Allocator) void {
     defer client.deinit(allocator);
 
     client.publish("timing.test", "before") catch {};
-    client.flushBuffer() catch {};
 
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
@@ -521,10 +508,8 @@ pub fn testReceiveOnlyAfterSubscribe(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
 
     client.publish("timing.test", "after") catch {};
-    client.flushBuffer() catch {};
 
     const msg = sub.nextWithTimeout(allocator, 500) catch {
         reportResult("receive_after_sub", false, "receive error");
@@ -566,7 +551,6 @@ pub fn testDataIntegrityPattern(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
 
     // Create pattern payload
     var payload: [256]u8 = undefined;
@@ -578,7 +562,6 @@ pub fn testDataIntegrityPattern(allocator: std.mem.Allocator) void {
         reportResult("data_integrity", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     const msg = sub.nextWithTimeout(allocator, 500) catch {
         reportResult("data_integrity", false, "receive failed");
@@ -631,7 +614,6 @@ pub fn testCompletePubSubRoundTrip(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
 
     const before = client.getStats();
 
@@ -640,7 +622,6 @@ pub fn testCompletePubSubRoundTrip(allocator: std.mem.Allocator) void {
         reportResult("complete_roundtrip", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     const msg = sub.nextWithTimeout(allocator, 1000) catch {
         reportResult("complete_roundtrip", false, "receive failed");
@@ -701,10 +682,6 @@ pub fn testQueueExactCapacity(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {
-        reportResult("queue_exact_cap", false, "flush failed");
-        return;
-    };
 
     for (0..QUEUE_SIZE) |_| {
         client.publish("boundary.exact", "x") catch {
@@ -712,10 +689,6 @@ pub fn testQueueExactCapacity(allocator: std.mem.Allocator) void {
             return;
         };
     }
-    client.flushBuffer() catch {
-        reportResult("queue_exact_cap", false, "pub flush failed");
-        return;
-    };
 
     var received: u32 = 0;
     for (0..QUEUE_SIZE) |_| {
@@ -769,10 +742,6 @@ pub fn testQueueOverflow(allocator: std.mem.Allocator) void {
     };
     defer sub_target.deinit(allocator);
 
-    client.flushBuffer() catch {
-        reportResult("queue_overflow", false, "flush failed");
-        return;
-    };
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     for (0..PUBLISH_COUNT) |_| {
@@ -783,10 +752,6 @@ pub fn testQueueOverflow(allocator: std.mem.Allocator) void {
     }
     client.publish("overflow.reader", "trigger") catch {
         reportResult("queue_overflow", false, "publish reader failed");
-        return;
-    };
-    client.flushBuffer() catch {
-        reportResult("queue_overflow", false, "pub flush failed");
         return;
     };
 
@@ -893,11 +858,6 @@ pub fn testLargePayloadHandling(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flushBuffer() catch {
-        reportResult("large_payload_handling", false, "flush failed");
-        return;
-    };
-
     const payload_size = 64 * 1024;
     const payload = allocator.alloc(u8, payload_size) catch {
         reportResult("large_payload_handling", false, "alloc failed");
@@ -908,10 +868,6 @@ pub fn testLargePayloadHandling(allocator: std.mem.Allocator) void {
 
     client.publish("large.payload", payload) catch {
         reportResult("large_payload_handling", false, "publish failed");
-        return;
-    };
-    client.flushBuffer() catch {
-        reportResult("large_payload_handling", false, "pub flush failed");
         return;
     };
 
@@ -966,16 +922,10 @@ pub fn testSubjectLengthBoundary(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flushBuffer() catch {
-        reportResult("subject_len_boundary", false, "flush failed");
-        return;
-    };
-
     client.publish(&long_subject_buf, "test") catch {
         reportResult("subject_len_boundary", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);
@@ -1009,13 +959,10 @@ pub fn testZeroLengthPayload(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flushBuffer() catch {};
-
     client.publish("zero.payload", "") catch {
         reportResult("zero_len_payload", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         defer m.deinit(allocator);
@@ -1053,13 +1000,10 @@ pub fn testSingleBytePayload(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flushBuffer() catch {};
-
     client.publish("single.byte", "X") catch {
         reportResult("single_byte_payload", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         defer m.deinit(allocator);

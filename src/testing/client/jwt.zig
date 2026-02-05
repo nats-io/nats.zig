@@ -89,13 +89,11 @@ pub fn testJwtPubSub(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
 
     client.publish("jwt.test.subject", "jwt message") catch {
         reportResult("jwt_pub_sub", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);

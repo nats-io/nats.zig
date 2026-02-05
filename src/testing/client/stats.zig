@@ -37,7 +37,6 @@ pub fn testClientStats(allocator: std.mem.Allocator) void {
     }
 
     client.publish("async.stats", "test") catch {};
-    client.flushBuffer() catch {};
 
     const stats = client.getStats();
     if (stats.msgs_out >= 1) {
@@ -70,7 +69,6 @@ pub fn testStatsIncrement(allocator: std.mem.Allocator) void {
     for (0..10) |_| {
         client.publish("async.stats.inc", "msg") catch {};
     }
-    client.flushBuffer() catch {};
 
     const after = client.getStats();
 
@@ -103,7 +101,6 @@ pub fn testStatsBytesAccuracy(allocator: std.mem.Allocator) void {
 
     const payload = "0123456789" ** 10;
     client.publish("async.stats.bytes", payload) catch {};
-    client.flushBuffer() catch {};
 
     const after = client.getStats();
 
@@ -137,14 +134,12 @@ pub fn testStatsMsgsIn(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
 
     const before = client.getStats();
 
     for (0..25) |_| {
         client.publish("msgsin.test", "data") catch {};
     }
-    client.flushBuffer() catch {};
 
     var received: u32 = 0;
     for (0..30) |_| {
@@ -194,7 +189,6 @@ pub fn testStatsBytesIn(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
 
     const before = client.getStats();
 
@@ -202,7 +196,6 @@ pub fn testStatsBytesIn(allocator: std.mem.Allocator) void {
     for (0..10) |_| {
         client.publish("bytesin.test", payload) catch {};
     }
-    client.flushBuffer() catch {};
 
     for (0..15) |_| {
         const msg = sub.nextWithTimeout(allocator, 200) catch break;
@@ -276,7 +269,6 @@ pub fn testSubStats(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
 
     // Initially should have 0 pending
     const initial = sub.getSubStats();
@@ -289,7 +281,6 @@ pub fn testSubStats(allocator: std.mem.Allocator) void {
     for (0..5) |_| {
         client.publish("substats.test", "test data") catch {};
     }
-    client.flushBuffer() catch {};
 
     // Wait for messages to arrive
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
@@ -326,14 +317,12 @@ pub fn testPendingBytes(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
 
     // Publish messages
     const payload = "0123456789";
     for (0..10) |_| {
         client.publish("pending.bytes", payload) catch {};
     }
-    client.flushBuffer() catch {};
 
     // Wait for messages
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
@@ -388,13 +377,11 @@ pub fn testMaxPending(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
 
     // Publish messages to create high water mark
     for (0..20) |_| {
         client.publish("max.pending", "payload") catch {};
     }
-    client.flushBuffer() catch {};
 
     // Wait for messages
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};

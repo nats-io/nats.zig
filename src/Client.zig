@@ -886,10 +886,8 @@ fn callbackTaskFn(client: *Client) void {
                 },
             }
         }
-        // Async-aware yield with cancellation support (replaces std.Thread.yield)
-        client.io.sleep(.fromNanoseconds(0), .awake) catch |err| {
-            if (err == error.Canceled) break;
-        };
+        // Yield to allow other threads to run
+        std.Thread.yield() catch {};
     }
 
     // Drain any remaining events queued during shutdown
@@ -1854,38 +1852,34 @@ pub fn flush(
     }
     self.write_mutex.unlock(self.io);
 
-    // Step 2: Wait for PONG with io.select() (async-safe)
+    // Step 2: Poll for PONG with timeout (direct loop, no io.select)
+    // Using direct polling avoids io.async()+io.select() which can deadlock
+    // when multiple clients share the same Io.Threaded instance.
     const old_pong_ns = self.last_pong_received_ns.load(.acquire);
+    const deadline_ns = (getNowNs() catch 0) +| timeout_ns;
+    var iteration: u32 = 0;
 
-    var pong_future = self.io.async(waitForPongHelper, .{ self, old_pong_ns });
-    var timeout_future = self.io.async(sleepNs, .{ self.io, timeout_ns });
+    dbg.print("flush: waiting for PONG, old_pong_ns={d}", .{old_pong_ns});
 
-    var winner: enum { none, pong, timeout } = .none;
+    while (true) {
+        // Check for PONG
+        const current = self.last_pong_received_ns.load(.acquire);
+        if (current > old_pong_ns) {
+            dbg.print("flush: got PONG, current={d}", .{current});
+            return; // Success!
+        }
 
-    defer if (winner != .pong) {
-        _ = pong_future.cancel(self.io) catch {};
-    };
-    defer if (winner != .timeout) {
-        timeout_future.cancel(self.io);
-    };
+        // Check timeout
+        const now = getNowNs() catch 0;
+        if (now >= deadline_ns) return error.Timeout;
 
-    const result = self.io.select(.{
-        .pong = &pong_future,
-        .timeout = &timeout_future,
-    }) catch |err| {
-        if (err == error.Canceled) return error.Canceled;
-        return err;
-    };
-
-    switch (result) {
-        .pong => |pong_result| {
-            winner = .pong;
-            return pong_result;
-        },
-        .timeout => {
-            winner = .timeout;
-            return error.Timeout;
-        },
+        // Yield periodically to allow io_task to process incoming PONG
+        iteration += 1;
+        if (iteration >= 100) {
+            iteration = 0;
+            std.Thread.yield() catch {};
+        }
+        std.atomic.spinLoopHint();
     }
 }
 
@@ -1899,9 +1893,7 @@ fn waitForPongHelper(self: *Client, old_pong_ns: u64) !void {
         iteration += 1;
         if (iteration >= 100) {
             iteration = 0;
-            // Yield to event loop - CRITICAL for io_task to run
-            self.io.sleep(.fromNanoseconds(0), .awake) catch
-                return error.Canceled;
+            std.Thread.yield() catch {};
         }
         std.atomic.spinLoopHint();
     }
@@ -2806,7 +2798,7 @@ fn sendPing(self: *Client) !void {
 /// Handles PONG response from server.
 fn handlePong(self: *Client) void {
     const now = getNowNs() catch self.last_pong_received_ns.load(.monotonic);
-    self.last_pong_received_ns.store(now, .monotonic);
+    self.last_pong_received_ns.store(now, .release);
     self.pings_outstanding.store(0, .monotonic);
     dbg.pingPong("PONG_RECEIVED", 0);
 }
@@ -3433,8 +3425,11 @@ pub const Subscription = struct {
         _ = allocator;
         assert(self.state == .active or self.state == .draining);
 
+        dbg.print("Sub.next: ENTERED, queue len={d}", .{self.queue.len()});
+
         // Hybrid spin-yield: spin for fast path, yield for cancellation support
         var spin_count: u32 = 0;
+        var yield_count: u32 = 0;
 
         while (true) {
             if (self.queue.pop()) |msg| {
@@ -3442,6 +3437,7 @@ pub const Subscription = struct {
                 const msg_size =
                     if (msg.backing_buf) |buf| buf.len else msg.size();
                 self.pending_bytes -|= msg_size;
+                dbg.print("Sub.next: GOT MESSAGE after {d} yields", .{yield_count});
                 return msg;
             }
             if (self.state != .active and self.state != .draining) {
@@ -3452,11 +3448,15 @@ pub const Subscription = struct {
             if (spin_count < defaults.Spin.max_spins) {
                 std.atomic.spinLoopHint();
             } else {
-                // Yield to I/O runtime - enables cancellation
+                // Yield to I/O runtime - enables cancellation and io.select()
                 io.sleep(.fromNanoseconds(0), .awake) catch |err| {
                     if (err == error.Canceled) return error.Canceled;
                 };
                 spin_count = 0;
+                yield_count += 1;
+                if (yield_count % 10000 == 0) {
+                    dbg.print("Sub.next: still waiting, yields={d}", .{yield_count});
+                }
             }
         }
     }
@@ -3501,7 +3501,7 @@ pub const Subscription = struct {
             if (spin_count < defaults.Spin.max_spins) {
                 std.atomic.spinLoopHint();
             } else {
-                // Yield to I/O runtime - enables cancellation
+                // Yield to I/O runtime - enables cancellation and io.select()
                 io.sleep(.fromNanoseconds(0), .awake) catch |err| {
                     if (err == error.Canceled) return error.Canceled;
                 };

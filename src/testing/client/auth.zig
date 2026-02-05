@@ -67,13 +67,11 @@ pub fn testAuthenticatedPubSub(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
 
     client.publish("auth.test.subject", "auth message") catch {
         reportResult("auth_pubsub", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);

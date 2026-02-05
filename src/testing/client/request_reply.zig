@@ -138,7 +138,6 @@ pub fn testReplyToPreserved(allocator: std.mem.Allocator) void {
         reportResult("reply_preserved", false, "pub failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -193,7 +192,6 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    responder.flushBuffer() catch {};
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const Handler = struct {
@@ -208,7 +206,6 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
                 defer req.deinit(a);
                 if (req.reply_to) |reply_inbox| {
                     r.publish(reply_inbox, "pong") catch {};
-                    r.flushBuffer() catch {};
                 }
             }
         }
@@ -278,7 +275,6 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client_b.flushBuffer() catch {};
     io_b.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const Handler = struct {
@@ -293,7 +289,6 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
                 defer req.deinit(a);
                 if (req.reply_to) |inbox| {
                     b.publish(inbox, "response-from-B") catch {};
-                    b.flushBuffer() catch {};
                 }
             }
         }
@@ -419,7 +414,6 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    responder.flushBuffer() catch {};
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const Handler = struct {
@@ -434,7 +428,6 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
                 defer req.deinit(a);
                 if (req.reply_to) |reply_inbox| {
                     r.publish(reply_inbox, req.data) catch {};
-                    r.flushBuffer() catch {};
                 }
             }
         }
@@ -511,7 +504,6 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    responder.flushBuffer() catch {};
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const Handler = struct {
@@ -527,7 +519,6 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
                     defer req.deinit(a);
                     if (req.reply_to) |reply_inbox| {
                         r.publish(reply_inbox, "response") catch {};
-                        r.flushBuffer() catch {};
                     }
                 } else break;
             }

@@ -54,7 +54,7 @@ inline fn drainReturnQueue(client: *Client) void {
 /// Reader: reads socket, routes MSG, responds to PING with PONG.
 /// Exits cleanly when stream is closed (close then cancel).
 pub fn run(client: *Client, allocator: Allocator) void {
-    dbg.print("io_task: STARTED", .{});
+    dbg.print("io_task[fd={d}]: STARTED", .{client.stream.socket.handle});
     var loop_count: u64 = 0;
 
     // Health check throttling (100ms interval to avoid hot-loop impact)
@@ -101,7 +101,10 @@ pub fn run(client: *Client, allocator: Allocator) void {
             if (client.return_queue.len() > 0) drainReturnQueue(client);
 
             const route_result = tryRouteBufferedMessages(client, allocator);
-            if (route_result == .progress) made_progress = true;
+            if (route_result == .progress) {
+                dbg.print("io_task[fd={d}]: routed messages", .{client.stream.socket.handle});
+                made_progress = true;
+            }
             if (route_result == .disconnected) {
                 const state = State.atomicLoad(&client.state);
                 if (client.options.reconnect and state != .closed) {
@@ -116,6 +119,9 @@ pub fn run(client: *Client, allocator: Allocator) void {
 
             if (!made_progress) {
                 const read_result = tryFillBuffer(client);
+                if (read_result == .progress) {
+                    dbg.print("io_task[fd={d}]: read data from socket", .{client.stream.socket.handle});
+                }
                 if (read_result == .canceled) break :outer;
                 if (read_result == .disconnected) {
                     const state = State.atomicLoad(&client.state);
@@ -133,17 +139,26 @@ pub fn run(client: *Client, allocator: Allocator) void {
         }
 
         // Auto-flush: check if publish() requested a flush
+        // Only flush if still connected (avoid BADF on closed socket)
         if (client.flush_requested.swap(false, .acquire)) {
-            client.write_mutex.lock(client.io) catch continue :outer;
-            defer client.write_mutex.unlock(client.io);
-            client.active_writer.flush() catch {};
+            // Atomic check before acquiring mutex
+            if (State.atomicLoad(&client.state) == .connected) {
+                client.write_mutex.lock(client.io) catch continue :outer;
+                defer client.write_mutex.unlock(client.io);
+                // Double-check after mutex (state may have changed)
+                if (State.atomicLoad(&client.state) == .connected) {
+                    client.active_writer.flush() catch {};
+                    // TLS: active_writer.flush() only encrypts to TCP buffer.
+                    // Must also flush underlying TCP writer to send to network.
+                    if (client.use_tls) {
+                        client.writer.interface.flush() catch {};
+                    }
+                }
+            }
         }
 
-        // No progress - ALWAYS yield to allow other tasks to run
-        // This is CRITICAL for async() mode where cooperative yielding is needed
-        client.io.sleep(.fromNanoseconds(0), .awake) catch |err| {
-            if (err == error.Canceled) break :outer;
-        };
+        // No progress - yield to allow other threads to run
+        std.Thread.yield() catch {};
     }
     if (dbg.enabled) {
         const stats = &client.io_task_stats;
@@ -379,10 +394,10 @@ inline fn tryRouteBufferedMessages(
                     client.active_writer.flush() catch return .disconnected;
                 },
                 .pong => {
-                    dbg.print("Got PONG, resetting pings_outstanding", .{});
-                    client.pings_outstanding.store(0, .monotonic);
                     const now = getNowNs() catch 0;
-                    client.last_pong_received_ns.store(now, .monotonic);
+                    dbg.print("Got PONG, storing timestamp={d}", .{now});
+                    client.pings_outstanding.store(0, .monotonic);
+                    client.last_pong_received_ns.store(now, .release);
                 },
                 .info => |info| {
                     if (client.server_info) |*old| {
@@ -418,7 +433,11 @@ inline fn routeMessageToSub(
     slab: *TieredSlab,
     args: protocol.MsgArgs,
 ) void {
-    const sub = client.getSubscriptionBySid(args.sid) orelse return;
+    dbg.print("routeMsg[fd={d}]: sid={d} subject={s}", .{ client.stream.socket.handle, args.sid, args.subject });
+    const sub = client.getSubscriptionBySid(args.sid) orelse {
+        dbg.print("routeMsg[fd={d}]: NO SUB FOUND for sid={d}", .{ client.stream.socket.handle, args.sid });
+        return;
+    };
 
     const subj_len = args.subject.len;
     const payload_len = args.payload.len;
@@ -477,12 +496,15 @@ inline fn routeMessageToSub(
     };
 
     sub.pushMessage(msg) catch {
+        dbg.print("routeMsg: PUSH FAILED (slow consumer) sid={d}", .{args.sid});
         sub.dropped_msgs += 1;
         slab.free(buf);
         if (sub.dropped_msgs == 1) {
             client.pushEvent(.{ .slow_consumer = .{ .sid = args.sid } });
         }
+        return;
     };
+    dbg.print("routeMsg: pushed to queue, sid={d}", .{args.sid});
     sub.received_msgs += 1;
 }
 

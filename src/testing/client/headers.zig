@@ -32,7 +32,6 @@ pub fn testHeadersPublishSingle(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -42,7 +41,6 @@ pub fn testHeadersPublishSingle(allocator: std.mem.Allocator) void {
         reportResult("headers_publish_single", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -96,7 +94,6 @@ pub fn testHeadersPublishMultiple(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -108,7 +105,6 @@ pub fn testHeadersPublishMultiple(allocator: std.mem.Allocator) void {
         reportResult("headers_publish_multiple", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -167,7 +163,6 @@ pub fn testHeadersPublishEmptyPayload(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -177,7 +172,6 @@ pub fn testHeadersPublishEmptyPayload(allocator: std.mem.Allocator) void {
         reportResult("headers_empty_payload", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -223,7 +217,6 @@ pub fn testHeadersPublishRequest(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -238,7 +231,6 @@ pub fn testHeadersPublishRequest(allocator: std.mem.Allocator) void {
         reportResult("headers_publish_request", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -309,7 +301,6 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    responder.flushBuffer() catch {};
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const Handler = struct {
@@ -329,7 +320,6 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
                     } else {
                         r.publish(reply_inbox, "no-headers") catch {};
                     }
-                    r.flushBuffer() catch {};
                 }
             }
         }
@@ -464,7 +454,6 @@ pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client_b.flushBuffer() catch {};
     io_b.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -475,7 +464,6 @@ pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
         reportResult("headers_cross_client", false, "A publish failed");
         return;
     };
-    client_a.flushBuffer() catch {};
 
     if (sub.nextWithTimeout(allocator, 2000) catch null) |msg| {
         defer msg.deinit(allocator);
@@ -529,7 +517,6 @@ pub fn testHeadersManyEntries(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -558,7 +545,6 @@ pub fn testHeadersManyEntries(allocator: std.mem.Allocator) void {
         reportResult("headers_many_entries", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -626,7 +612,6 @@ pub fn testHeadersLargeValues(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     var large_value: [200]u8 = undefined;
@@ -639,7 +624,6 @@ pub fn testHeadersLargeValues(allocator: std.mem.Allocator) void {
         reportResult("headers_large_values", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -693,7 +677,6 @@ pub fn testHeadersSpecialChars(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -704,7 +687,6 @@ pub fn testHeadersSpecialChars(allocator: std.mem.Allocator) void {
         reportResult("headers_special_chars", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -766,7 +748,6 @@ pub fn testHeadersBinaryPayload(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const binary_payload = [_]u8{ 0x00, 0x01, 0xFF, 0xFE, 0x7F, 0x80, 0x00, 0xFF };
@@ -782,7 +763,6 @@ pub fn testHeadersBinaryPayload(allocator: std.mem.Allocator) void {
         reportResult("headers_binary_payload", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -832,7 +812,6 @@ pub fn testHeadersWellKnown(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -842,7 +821,6 @@ pub fn testHeadersWellKnown(allocator: std.mem.Allocator) void {
         reportResult("headers_well_known", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
@@ -896,7 +874,6 @@ pub fn testHeadersCaseInsensitive(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -906,7 +883,6 @@ pub fn testHeadersCaseInsensitive(allocator: std.mem.Allocator) void {
         reportResult("headers_case_insensitive", false, "publish failed");
         return;
     };
-    client.flushBuffer() catch {};
 
     var future = io.io().async(
         nats.Client.Sub.next,
