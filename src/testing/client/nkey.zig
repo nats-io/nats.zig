@@ -85,13 +85,11 @@ pub fn testNKeyPubSub(allocator: std.mem.Allocator) void {
         return;
     };
     defer sub.deinit(allocator);
-    client.flush(allocator) catch {};
 
     client.publish("nkey.test.subject", "nkey message") catch {
         reportResult("nkey_pubsub", false, "publish failed");
         return;
     };
-    client.flush(allocator) catch {};
 
     if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
         m.deinit(allocator);

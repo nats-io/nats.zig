@@ -483,6 +483,9 @@ last_ping_sent_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 last_pong_received_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 pings_outstanding: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 
+/// Auto-flush signal: set by publish(), cleared by io_task after flush.
+flush_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
 // Debug counters for io_task (only used when dbg.enabled)
 io_task_stats: IoTaskStats = .{},
 
@@ -883,10 +886,8 @@ fn callbackTaskFn(client: *Client) void {
                 },
             }
         }
-        // Async-aware yield with cancellation support (replaces std.Thread.yield)
-        client.io.sleep(.fromNanoseconds(0), .awake) catch |err| {
-            if (err == error.Canceled) break;
-        };
+        // Yield to allow other threads to run
+        std.Thread.yield() catch {};
     }
 
     // Drain any remaining events queued during shutdown
@@ -1420,6 +1421,9 @@ pub fn subscribeQueue(
         return error.EncodingFailed;
     };
 
+    // Signal auto-flush to register subscription promptly
+    self.flush_requested.store(true, .release);
+
     return sub;
 }
 
@@ -1458,6 +1462,7 @@ pub fn publish(
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += payload.len;
+    self.flush_requested.store(true, .release);
 }
 
 /// Publishes with a reply-to subject.
@@ -1492,6 +1497,7 @@ pub fn publishRequest(
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += payload.len;
+    self.flush_requested.store(true, .release);
 }
 
 /// Publishes a message with headers.
@@ -1535,6 +1541,7 @@ pub fn publishWithHeaders(
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += payload.len;
+    self.flush_requested.store(true, .release);
 }
 
 /// Publishes with headers and reply-to subject.
@@ -1581,6 +1588,7 @@ pub fn publishRequestWithHeaders(
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += payload.len;
+    self.flush_requested.store(true, .release);
 }
 
 /// Publishes with a HeaderMap builder.
@@ -1629,6 +1637,7 @@ pub fn publishWithHeaderMap(
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += payload.len;
+    self.flush_requested.store(true, .release);
 }
 
 /// Publishes a Message object (convenience for republishing/forwarding).
@@ -1676,6 +1685,7 @@ pub fn publishMsg(self: *Client, msg: *const Message) !void {
 
     self.stats.msgs_out += 1;
     self.stats.bytes_out += msg.data.len;
+    self.flush_requested.store(true, .release);
 }
 
 /// Sends a request with headers and waits for a reply with timeout.
@@ -1713,15 +1723,12 @@ pub fn requestWithHeaders(
     const sub = try self.subscribe(allocator, inbox);
     defer sub.deinit(allocator);
 
-    // Flush subscription registration before publishing
-    try self.flush(allocator);
-
     // Brief delay to ensure server has registered subscription
+    // (auto-flush sends SUB within ~1ms, sleep gives server processing time)
     self.io.sleep(.fromMilliseconds(5), .awake) catch {};
 
-    // Publish request with reply-to and headers
+    // Publish request with reply-to and headers (auto-flush sends promptly)
     try self.publishRequestWithHeaders(subject, inbox, hdrs, payload);
-    try self.flush(allocator);
 
     // Wait for reply using io.select()
     var response_future = self.io.async(
@@ -1774,8 +1781,11 @@ pub fn requestWithHeaders(
 ///
 /// Sends all buffered data to the TCP socket. This is a simple TCP flush
 /// without PING/PONG verification - for maximum performance.
-pub fn flush(self: *Client, allocator: Allocator) !void {
-    _ = allocator;
+/// Sends all buffered data to the network (buffer-to-socket only).
+///
+/// This is a fast flush that does not wait for server confirmation.
+/// For confirmed delivery, use flush() which sends PING and waits for PONG.
+pub fn flushBuffer(self: *Client) !void {
     if (!self.state.canSend()) {
         return error.NotConnected;
     }
@@ -1791,64 +1801,18 @@ pub fn flush(self: *Client, allocator: Allocator) !void {
     }
 }
 
-/// Sends all buffered data with a timeout.
-/// Returns error.Timeout if the flush doesn't complete in time.
-pub fn flushTimeout(
-    self: *Client,
-    allocator: Allocator,
-    timeout_ns: u64,
-) !void {
-    assert(timeout_ns > 0);
-    if (!self.state.canSend()) {
-        return error.NotConnected;
-    }
-
-    var flush_future = self.io.async(flushHelper, .{ self, allocator });
-    var timeout_future = self.io.async(sleepNs, .{ self.io, timeout_ns });
-
-    var winner: enum { none, flush, timeout } = .none;
-
-    defer if (winner != .flush) {
-        _ = flush_future.cancel(self.io);
-    };
-    defer if (winner != .timeout) {
-        timeout_future.cancel(self.io);
-    };
-
-    const select_result = self.io.select(.{
-        .flush = &flush_future,
-        .timeout = &timeout_future,
-    }) catch |err| {
-        if (err == error.Canceled) return error.Canceled;
-        return err;
-    };
-
-    switch (select_result) {
-        .flush => |result| {
-            winner = .flush;
-            return result;
-        },
-        .timeout => {
-            winner = .timeout;
-            return error.Timeout;
-        },
-    }
-}
-
-/// Helper for async flush.
-fn flushHelper(self: *Client, allocator: Allocator) !void {
-    return self.flush(allocator);
-}
-
-/// Flushes with server confirmation via PING/PONG.
+/// Flushes all buffered data and confirms server received it.
 ///
 /// Sends all buffered data, then sends PING and waits for PONG response.
 /// This confirms the server received all messages up to this point.
 /// Safe in both sync and async contexts (uses io.select pattern).
 ///
+/// This matches Go/C client Flush() behavior (PING/PONG confirmation).
+/// For fast buffer-only flush without confirmation, use flushBuffer().
+///
 /// Note: Concurrent calls may have PONG mismatch issues. Use single-caller
 /// semantics or serialize calls externally.
-pub fn flushConfirmed(
+pub fn flush(
     self: *Client,
     allocator: Allocator,
     timeout_ns: u64,
@@ -1888,38 +1852,34 @@ pub fn flushConfirmed(
     }
     self.write_mutex.unlock(self.io);
 
-    // Step 2: Wait for PONG with io.select() (async-safe)
+    // Step 2: Poll for PONG with timeout (direct loop, no io.select)
+    // Using direct polling avoids io.async()+io.select() which can deadlock
+    // when multiple clients share the same Io.Threaded instance.
     const old_pong_ns = self.last_pong_received_ns.load(.acquire);
+    const deadline_ns = (getNowNs() catch 0) +| timeout_ns;
+    var iteration: u32 = 0;
 
-    var pong_future = self.io.async(waitForPongHelper, .{ self, old_pong_ns });
-    var timeout_future = self.io.async(sleepNs, .{ self.io, timeout_ns });
+    dbg.print("flush: waiting for PONG, old_pong_ns={d}", .{old_pong_ns});
 
-    var winner: enum { none, pong, timeout } = .none;
+    while (true) {
+        // Check for PONG
+        const current = self.last_pong_received_ns.load(.acquire);
+        if (current > old_pong_ns) {
+            dbg.print("flush: got PONG, current={d}", .{current});
+            return; // Success!
+        }
 
-    defer if (winner != .pong) {
-        _ = pong_future.cancel(self.io) catch {};
-    };
-    defer if (winner != .timeout) {
-        timeout_future.cancel(self.io);
-    };
+        // Check timeout
+        const now = getNowNs() catch 0;
+        if (now >= deadline_ns) return error.Timeout;
 
-    const result = self.io.select(.{
-        .pong = &pong_future,
-        .timeout = &timeout_future,
-    }) catch |err| {
-        if (err == error.Canceled) return error.Canceled;
-        return err;
-    };
-
-    switch (result) {
-        .pong => |pong_result| {
-            winner = .pong;
-            return pong_result;
-        },
-        .timeout => {
-            winner = .timeout;
-            return error.Timeout;
-        },
+        // Yield periodically to allow io_task to process incoming PONG
+        iteration += 1;
+        if (iteration >= 100) {
+            iteration = 0;
+            std.Thread.yield() catch {};
+        }
+        std.atomic.spinLoopHint();
     }
 }
 
@@ -1933,9 +1893,7 @@ fn waitForPongHelper(self: *Client, old_pong_ns: u64) !void {
         iteration += 1;
         if (iteration >= 100) {
             iteration = 0;
-            // Yield to event loop - CRITICAL for io_task to run
-            self.io.sleep(.fromNanoseconds(0), .awake) catch
-                return error.Canceled;
+            std.Thread.yield() catch {};
         }
         std.atomic.spinLoopHint();
     }
@@ -2037,15 +1995,12 @@ pub fn request(
     const sub = try self.subscribe(allocator, inbox);
     defer sub.deinit(allocator);
 
-    // Flush subscription registration before publishing
-    try self.flush(allocator);
-
     // Brief delay to ensure server has registered subscription
+    // (auto-flush sends SUB within ~1ms, sleep gives server processing time)
     self.io.sleep(.fromMilliseconds(5), .awake) catch {};
 
-    // Publish request with reply-to
+    // Publish request with reply-to (auto-flush sends promptly)
     try self.publishRequest(subject, inbox, payload);
-    try self.flush(allocator);
 
     // Wait for reply using io.select()
     var response_future = self.io.async(
@@ -2122,10 +2077,8 @@ pub fn requestMsg(
     const sub = try self.subscribe(allocator, inbox);
     defer sub.deinit(allocator);
 
-    // Flush subscription registration before publishing
-    try self.flush(allocator);
-
     // Brief delay to ensure server has registered subscription
+    // (auto-flush sends SUB within ~1ms, sleep gives server processing time)
     self.io.sleep(.fromMilliseconds(5), .awake) catch {};
 
     // Publish request with reply-to (with or without headers)
@@ -2151,8 +2104,10 @@ pub fn requestMsg(
 
         self.stats.msgs_out += 1;
         self.stats.bytes_out += msg.data.len;
+
+        // Signal auto-flush to send request promptly
+        self.flush_requested.store(true, .release);
     }
-    try self.flush(allocator);
 
     // Wait for reply using io.select()
     var response_future = self.io.async(
@@ -2843,7 +2798,7 @@ fn sendPing(self: *Client) !void {
 /// Handles PONG response from server.
 fn handlePong(self: *Client) void {
     const now = getNowNs() catch self.last_pong_received_ns.load(.monotonic);
-    self.last_pong_received_ns.store(now, .monotonic);
+    self.last_pong_received_ns.store(now, .release);
     self.pings_outstanding.store(0, .monotonic);
     dbg.pingPong("PONG_RECEIVED", 0);
 }
@@ -3470,8 +3425,11 @@ pub const Subscription = struct {
         _ = allocator;
         assert(self.state == .active or self.state == .draining);
 
+        dbg.print("Sub.next: ENTERED, queue len={d}", .{self.queue.len()});
+
         // Hybrid spin-yield: spin for fast path, yield for cancellation support
         var spin_count: u32 = 0;
+        var yield_count: u32 = 0;
 
         while (true) {
             if (self.queue.pop()) |msg| {
@@ -3479,6 +3437,7 @@ pub const Subscription = struct {
                 const msg_size =
                     if (msg.backing_buf) |buf| buf.len else msg.size();
                 self.pending_bytes -|= msg_size;
+                dbg.print("Sub.next: GOT MESSAGE after {d} yields", .{yield_count});
                 return msg;
             }
             if (self.state != .active and self.state != .draining) {
@@ -3489,11 +3448,15 @@ pub const Subscription = struct {
             if (spin_count < defaults.Spin.max_spins) {
                 std.atomic.spinLoopHint();
             } else {
-                // Yield to I/O runtime - enables cancellation
+                // Yield to I/O runtime - enables cancellation and io.select()
                 io.sleep(.fromNanoseconds(0), .awake) catch |err| {
                     if (err == error.Canceled) return error.Canceled;
                 };
                 spin_count = 0;
+                yield_count += 1;
+                if (yield_count % 10000 == 0) {
+                    dbg.print("Sub.next: still waiting, yields={d}", .{yield_count});
+                }
             }
         }
     }
@@ -3538,7 +3501,7 @@ pub const Subscription = struct {
             if (spin_count < defaults.Spin.max_spins) {
                 std.atomic.spinLoopHint();
             } else {
-                // Yield to I/O runtime - enables cancellation
+                // Yield to I/O runtime - enables cancellation and io.select()
                 io.sleep(.fromNanoseconds(0), .awake) catch |err| {
                     if (err == error.Canceled) return error.Canceled;
                 };
@@ -3653,6 +3616,9 @@ pub const Subscription = struct {
                 .sid = self.sid,
                 .max_msgs = max,
             }) catch return error.EncodingFailed;
+
+            // Signal auto-flush to send UNSUB promptly
+            client.flush_requested.store(true, .release);
         }
     }
 
@@ -3675,6 +3641,9 @@ pub const Subscription = struct {
                 .sid = self.sid,
                 .max_msgs = null,
             }) catch return error.EncodingFailed;
+
+            // Signal auto-flush to send UNSUB promptly
+            client.flush_requested.store(true, .release);
         }
     }
 
@@ -3945,6 +3914,9 @@ pub const Subscription = struct {
             }) catch {
                 send_failed = true;
             };
+
+            // Signal auto-flush to send UNSUB promptly
+            client.flush_requested.store(true, .release);
         }
 
         // Always remove from client tracking (inside mutex)

@@ -115,11 +115,6 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {
-        reportResult("rapid_publish", false, "flush1 failed");
-        return;
-    };
-
     const NUM_MSGS = 100;
     var published: u32 = 0;
     for (0..NUM_MSGS) |_| {
@@ -129,10 +124,7 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
         published += 1;
     }
 
-    client.flush(allocator) catch {
-        reportResult("rapid_publish", false, "flush2 failed");
-        return;
-    };
+    client.flush(allocator, 500_000_000) catch {};
 
     if (published != NUM_MSGS) {
         var buf: [32]u8 = undefined;
@@ -253,20 +245,16 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    subscriber.flush(allocator) catch {};
-
     publisher.publish("race.delivery", "race-msg-1") catch {
         reportResult("race_sub_delivery", false, "publish1 failed");
         return;
     };
-    publisher.flush(allocator) catch {};
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     publisher.publish("race.delivery", "race-msg-2") catch {
         reportResult("race_sub_delivery", false, "publish2 failed");
         return;
     };
-    publisher.flush(allocator) catch {};
 
     var received: u32 = 0;
     for (0..2) |_| {
@@ -305,22 +293,15 @@ pub fn testRaceUnsubscribeVsDelivery(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {
-        reportResult("race_unsub_delivery", false, "flush1 failed");
-        return;
-    };
-
     for (0..50) |_| {
         client.publish("race.unsub", "msg") catch {};
     }
-    client.flush(allocator) catch {};
 
     sub.unsubscribe() catch {};
 
     for (0..50) |_| {
         client.publish("race.unsub", "msg") catch {};
     }
-    client.flush(allocator) catch {};
 
     if (client.isConnected()) {
         reportResult("race_unsub_delivery", true, "");
@@ -438,7 +419,6 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client1.flush(allocator) catch {};
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     client2.publish("shared.io.test", "from-client2") catch {
@@ -449,9 +429,6 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
         reportResult("multi_client_shared_io", false, "pub3 failed");
         return;
     };
-
-    client2.flush(allocator) catch {};
-    client3.flush(allocator) catch {};
 
     var received: u32 = 0;
     for (0..2) |_| {
@@ -506,15 +483,11 @@ pub fn testParallelReceive(allocator: std.mem.Allocator) void {
     };
     defer sub3.deinit(allocator);
 
-    client.flush(allocator) catch {
-        reportResult("parallel_recv", false, "flush1 failed");
-        return;
-    };
-
     client.publish("parallel.1", "msg1") catch {};
     client.publish("parallel.2", "msg2") catch {};
     client.publish("parallel.3", "msg3") catch {};
-    client.flush(allocator) catch {};
+
+    client.flush(allocator, 500_000_000) catch {};
 
     var received: u32 = 0;
 
@@ -566,7 +539,7 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
 
     var success: u32 = 0;
     for (0..50) |_| {
-        client.flush(allocator) catch {
+        client.flushBuffer() catch {
             continue;
         };
         success += 1;
@@ -585,7 +558,7 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
 
     for (0..50) |_| {
         client.publish("flush.test", "x") catch {};
-        client.flush(allocator) catch {};
+        client.flushBuffer() catch {};
     }
 
     if (client.isConnected()) {
@@ -619,15 +592,14 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {};
-
     const before = client.getStats();
 
     const NUM_MSGS: u64 = 100;
     for (0..NUM_MSGS) |_| {
         client.publish("stats.test", "stat-msg") catch {};
     }
-    client.flush(allocator) catch {};
+
+    client.flush(allocator, 500_000_000) catch {};
 
     for (0..NUM_MSGS) |_| {
         if (sub.nextWithTimeout(allocator, 100) catch null) |m| {

@@ -192,10 +192,6 @@ pub fn testClientVerbose(allocator: std.mem.Allocator) void {
         reportResult("client_verbose", false, "publish failed");
         return;
     };
-    client.flush(allocator) catch {
-        reportResult("client_verbose", false, "flush failed");
-        return;
-    };
 
     reportResult("client_verbose", true, "");
 }

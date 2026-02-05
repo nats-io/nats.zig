@@ -36,7 +36,7 @@ pub fn testFlushConfirmedBasic(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     client.publish("fc.basic", "confirmed-message") catch {
@@ -45,7 +45,7 @@ pub fn testFlushConfirmedBasic(allocator: std.mem.Allocator) void {
     };
 
     // Use flushConfirmed with 5 second timeout
-    client.flushConfirmed(allocator, 5_000_000_000) catch {
+    client.flush(allocator, 5_000_000_000) catch {
         reportResult("flush_confirmed_basic", false, "flushConfirmed failed");
         return;
     };
@@ -91,7 +91,7 @@ pub fn testFlushConfirmedMultipleMessages(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     // Publish 10 messages without flushing
@@ -105,7 +105,7 @@ pub fn testFlushConfirmedMultipleMessages(allocator: std.mem.Allocator) void {
     }
 
     // Single flushConfirmed should send all
-    client.flushConfirmed(allocator, 5_000_000_000) catch {
+    client.flush(allocator, 5_000_000_000) catch {
         reportResult("flush_confirmed_multi", false, "flushConfirmed failed");
         return;
     };
@@ -157,7 +157,7 @@ pub fn testFlushConfirmedNoSideEffects(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     // First: publish + flushConfirmed
@@ -165,7 +165,7 @@ pub fn testFlushConfirmedNoSideEffects(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_side_effects", false, "pub1 failed");
         return;
     };
-    client.flushConfirmed(allocator, 5_000_000_000) catch {
+    client.flush(allocator, 5_000_000_000) catch {
         reportResult("flush_confirmed_side_effects", false, "flushConfirmed failed");
         return;
     };
@@ -175,7 +175,7 @@ pub fn testFlushConfirmedNoSideEffects(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_side_effects", false, "pub2 failed");
         return;
     };
-    client.flush(allocator) catch {
+    client.flushBuffer() catch {
         reportResult("flush_confirmed_side_effects", false, "flush failed");
         return;
     };
@@ -227,7 +227,7 @@ pub fn testFlushConfirmedVsFlush(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     // Publish with regular flush
@@ -235,14 +235,14 @@ pub fn testFlushConfirmedVsFlush(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_vs_flush", false, "pub1 failed");
         return;
     };
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
 
     // Publish with flushConfirmed
     client.publish("fc.compare", "via-confirmed") catch {
         reportResult("flush_confirmed_vs_flush", false, "pub2 failed");
         return;
     };
-    client.flushConfirmed(allocator, 5_000_000_000) catch {
+    client.flush(allocator, 5_000_000_000) catch {
         reportResult("flush_confirmed_vs_flush", false, "flushConfirmed failed");
         return;
     };
@@ -298,7 +298,7 @@ pub fn testFlushConfirmedNotConnected(allocator: std.mem.Allocator) void {
     };
 
     // Now try flushConfirmed - should fail
-    const result = client.flushConfirmed(allocator, 1_000_000_000);
+    const result = client.flush(allocator, 1_000_000_000);
     client.deinit(allocator);
 
     if (result) |_| {
@@ -333,7 +333,7 @@ pub fn testFlushConfirmedLargePayload(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     // Allocate 64KB payload
@@ -349,7 +349,7 @@ pub fn testFlushConfirmedLargePayload(allocator: std.mem.Allocator) void {
         return;
     };
 
-    client.flushConfirmed(allocator, 5_000_000_000) catch {
+    client.flush(allocator, 5_000_000_000) catch {
         reportResult("flush_confirmed_large", false, "flushConfirmed failed");
         return;
     };
@@ -395,7 +395,7 @@ pub fn testFlushConfirmedRapidFire(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
-    client.flush(allocator) catch {};
+    client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     // 20 cycles of publish + flushConfirmed
@@ -408,7 +408,7 @@ pub fn testFlushConfirmedRapidFire(allocator: std.mem.Allocator) void {
             return;
         };
 
-        client.flushConfirmed(allocator, 5_000_000_000) catch {
+        client.flush(allocator, 5_000_000_000) catch {
             reportResult("flush_confirmed_rapid", false, "flushConfirmed failed");
             return;
         };
@@ -462,7 +462,7 @@ pub fn testFlushConfirmedTimeout(allocator: std.mem.Allocator) void {
     };
 
     // Should fail quickly (NotConnected, not timeout in this case)
-    const result = client.flushConfirmed(allocator, 100_000_000); // 100ms
+    const result = client.flush(allocator, 100_000_000); // 100ms
     client.deinit(allocator);
 
     if (result) |_| {
