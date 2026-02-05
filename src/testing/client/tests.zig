@@ -33,6 +33,7 @@ pub const state_notifications = @import("state_notifications.zig");
 pub const advanced = @import("advanced.zig");
 pub const flush_confirmed = @import("flush_confirmed.zig");
 pub const autoflush = @import("autoflush.zig");
+pub const async_patterns = @import("async_patterns.zig");
 
 /// Runs all async client tests.
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -63,4 +64,5 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     advanced.runAll(allocator);
     flush_confirmed.runAll(allocator);
     autoflush.runAll(allocator, manager);
+    async_patterns.runAll(allocator, manager);
 }
