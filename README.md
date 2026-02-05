@@ -156,15 +156,6 @@ try client.flush(allocator, 5_000_000_000); // 5 second timeout
 - Before shutting down to ensure all messages were sent
 - Synchronization points in your application
 
-### Manual Buffer Flush
-
-For explicit control without server confirmation, use `flushBuffer()`:
-
-```zig
-try client.publish("events", data);
-try client.flushBuffer();  // Sends buffer to socket, no PING/PONG
-```
-
 ### When Does Data Hit the Network?
 
 | Method | Network I/O |
@@ -173,7 +164,7 @@ try client.flushBuffer();  // Sends buffer to socket, no PING/PONG
 | `publishRequest()` | Auto-flushed |
 | `publishWithHeaders()` | Auto-flushed |
 | `publishRequestWithHeaders()` | Auto-flushed |
-| `flushBuffer()` | Yes - sends buffer to socket immediately |
+| `flushBuffer()` | Yes - sends buffer to socket immediately (used internally) |
 | `flush()` | Yes - sends buffer + PING, waits for PONG |
 | `request()` | Yes - flushes, waits for response |
 | `requestWithHeaders()` | Yes - flushes, waits for response |
