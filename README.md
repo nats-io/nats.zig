@@ -128,17 +128,16 @@ Source: `src/examples/`
 Messages are buffered and automatically flushed to the network:
 
 ```zig
-// Write to buffer - auto-flushed within ~1ms by io_task
+// Write to buffer - auto-flushed by io_task
 try client.publish("events.click", "button1");
 try client.publish("events.click", "button2");
 try client.publish("events.click", "button3");
-// No explicit flush needed - happens automatically!
 ```
 
 **Buffer details:**
 - Default size: 1MB (configurable via `writer_buffer_size` option)
 - No allocator needed - `publish()` writes to a pre-allocated buffer
-- Auto-flushes within ~1ms (via io_task background loop)
+- Auto-flushes (via io_task background loop)
 - Multiple rapid publishes are naturally batched for efficiency
 
 ### Confirmed Flush
@@ -170,10 +169,10 @@ try client.flushBuffer();  // Sends buffer to socket, no PING/PONG
 
 | Method | Network I/O |
 |--------|-------------|
-| `publish()` | Auto-flushed within ~1ms |
-| `publishRequest()` | Auto-flushed within ~1ms |
-| `publishWithHeaders()` | Auto-flushed within ~1ms |
-| `publishRequestWithHeaders()` | Auto-flushed within ~1ms |
+| `publish()` | Auto-flushed |
+| `publishRequest()` | Auto-flushed |
+| `publishWithHeaders()` | Auto-flushed |
+| `publishRequestWithHeaders()` | Auto-flushed |
 | `flushBuffer()` | Yes - sends buffer to socket immediately |
 | `flush()` | Yes - sends buffer + PING, waits for PONG |
 | `request()` | Yes - flushes, waits for response |
