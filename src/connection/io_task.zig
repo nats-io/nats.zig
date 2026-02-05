@@ -30,8 +30,12 @@ const defaults = @import("../defaults.zig");
 const Message = Client.Message;
 
 /// Poll timeout when buffer empty (milliseconds).
-/// Use 1ms timeout - kernel wait acts as yield point.
-const POLL_TIMEOUT_MS: i32 = 1;
+/// Derived from defaults.Poll.timeout_us for configurability.
+/// 0 = busy poll (from timeout_us=0), >=1 otherwise.
+const POLL_TIMEOUT_MS: i32 = if (defaults.Poll.timeout_us == 0)
+    0
+else
+    @max(1, @divFloor(defaults.Poll.timeout_us + 999, 1000));
 
 /// Gets current time in nanoseconds.
 fn getNowNs() error{TimerUnavailable}!u64 {
@@ -43,10 +47,16 @@ fn getNowNs() error{TimerUnavailable}!u64 {
 
 /// Drain return queue - free returned buffers back to slab.
 /// Called periodically from read loop to reclaim memory.
+/// Uses batch pop to reduce atomic operations from N to ceil(N/64).
 inline fn drainReturnQueue(client: *Client) void {
     const slab = &client.tiered_slab;
-    while (client.return_queue.pop()) |buf| {
-        slab.free(buf);
+    var batch_buf: [64][]u8 = undefined;
+    while (true) {
+        const count = client.return_queue.popBatch(&batch_buf);
+        if (count == 0) break;
+        for (batch_buf[0..count]) |buf| {
+            slab.free(buf);
+        }
     }
 }
 

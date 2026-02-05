@@ -112,7 +112,7 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 | queue_groups | `run-queue-groups` | Load-balanced workers with `io.concurrent()` |
 | polling_loop | `run-polling-loop` | Non-blocking `tryNext()` with priority scheduling |
 | select | `run-select` | Race subscription against timeout with `io.select()` |
-| batch_throughput | `run-batch-throughput` | `nextBatch()` for bulk receives, stats monitoring |
+| batch_receiving | `run-batch-receiving` | `nextBatch()` for bulk receives, stats monitoring |
 | reconnection | `run-reconnection` | Auto-reconnect, backoff, buffer during disconnect |
 | events | `run-events` | EventHandler callbacks with external state |
 | graceful_shutdown | `run-graceful-shutdown` | `drain()` lifecycle, pre-shutdown health checks |
@@ -587,7 +587,7 @@ For programmatic header construction:
 ```zig
 const nats = @import("nats");
 
-var headers: nats.HeaderMap = .{};
+var headers: nats.Client.HeaderMap = .{};
 defer headers.deinit(allocator);
 
 // Set headers (replaces existing)
@@ -643,11 +643,11 @@ const result = try future.await(io);
 Wait for the first of multiple operations to complete:
 
 ```zig
-fn sleepMs(io_ctx: std.Io, ms: u32) void {
+fn sleepMs(io_ctx: std.Io, ms: i64) void {
     io_ctx.sleep(.fromMilliseconds(ms), .awake) catch {};
 }
 
-var recv_future = io.async(nats.Client.Subscription.next, .{ sub, allocator, io });
+var recv_future = io.async(nats.Client.Sub.next, .{ sub, allocator, io });
 var timeout_future = io.async(sleepMs, .{ io, 5000 });
 
 const result = io.select(.{
@@ -749,7 +749,7 @@ const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .
     // Buffers
     .reader_buffer_size = 256 * 1024,  // Read buffer (default 1MB)
     .writer_buffer_size = 256 * 1024,  // Write buffer (default 1MB)
-    .async_queue_size = 256,           // Per-subscription queue size
+    .sub_queue_size = 8192,            // Per-subscription queue size
     .tcp_rcvbuf = 256 * 1024,      // TCP receive buffer hint
 
     // Timeouts
@@ -848,6 +848,9 @@ const client = try nats.Client.connect(allocator, io, url, .{
 | `onClose()` | Connection permanently closed |
 | `onError(anyerror)` | Async error (slow consumer, etc.) |
 | `onLameDuck()` | Server entering shutdown mode |
+| `onDiscoveredServers(u8)` | New server discovered in cluster |
+| `onDraining()` | Drain process started |
+| `onSubscriptionComplete(u64)` | Subscription drain finished (receives SID) |
 
 All callbacks are **optional** - only implement the ones you need.
 
@@ -985,7 +988,7 @@ while (true) {
 
 ```zig
 const client = try nats.Client.connect(allocator, io, url, .{
-    .async_queue_size = 1024,         // Larger per-subscription queue
+    .sub_queue_size = 16384,          // Larger per-subscription queue
     .tcp_rcvbuf = 512 * 1024,         // 512KB TCP buffer
     .reader_buffer_size = 1024 * 1024, // 1MB read buffer
     .writer_buffer_size = 1024 * 1024, // 1MB write buffer
@@ -1171,8 +1174,10 @@ client.publish(subject, data) catch |err| switch (err) {
 | Error | Meaning |
 |-------|---------|
 | `NotConnected` | Not connected to server |
-| `ConnectionFailed` | Failed to establish connection |
-| `AuthorizationViolation` | Authentication failed |
+| `ConnectionClosed` | Connection closed unexpectedly |
+| `ConnectionTimeout` | Connection attempt timed out |
+| `ConnectionRefused` | Server refused connection |
+| `AuthenticationFailed` | Authentication failed |
 | `PayloadTooLarge` | Message exceeds max_payload |
 | `TooManySubscriptions` | Subscription limit reached (256) |
 | `Closed` | Connection was closed |
@@ -1223,10 +1228,21 @@ if (client.getConnectedServerVersion()) |version| {
 | Check drops | `sub.getDroppedCount()` | `u64` |
 | Auto-unsubscribe | `sub.autoUnsubscribe(max_msgs)` | `!void` |
 | Check pending | `sub.pending()` | `usize` |
+| Check pending bytes | `sub.pendingBytes()` | `u64` |
 | Check delivered | `sub.delivered()` | `u64` |
 | Check valid | `sub.isValid()` | `bool` |
+| Check sub draining | `sub.isDraining()` | `bool` |
+| Get subscription ID | `sub.getSid()` | `u64` |
+| Get subject | `sub.getSubject()` | `[]const u8` |
+| Get queue group | `sub.getQueueGroup()` | `?[]const u8` |
+| Set pending limits | `sub.setPendingLimits(msg_limit)` | `void` |
+| Get pending limits | `sub.getPendingLimits()` | `usize` |
+| Subscription stats | `sub.getSubStats()` | `SubStats` |
 | Respond to message | `msg.respond(client, data)` | `!void` |
 | Message size | `msg.size()` | `usize` |
+| No-responders check | `msg.isNoResponders()` | `bool` |
+| Status code | `msg.getStatus()` | `?u16` |
+| Create inbox | `client.newInbox(allocator)` | `![]u8` |
 | Connection status | `client.getStatus()` | `State` |
 | Connection stats | `client.getStats()` | `Stats` |
 | Server RTT | `client.getRtt()` | `!u64` |
@@ -1300,4 +1316,4 @@ Apache 2.0
 
 ## Contributing
 
-Contributions welcome! Please read CONTRIBUTING.md first.
+Contributions welcome!
