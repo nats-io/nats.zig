@@ -318,7 +318,7 @@ fn testReconnectDisabled(
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .reconnect = false,
-        .ping_interval_ms = 100,
+        // .ping_interval_ms = 100,
         .max_pings_outstanding = 1,
     }) catch {
         reportResult("reconnect_disabled", false, "connect failed");
