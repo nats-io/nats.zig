@@ -46,6 +46,52 @@ const creds_auth = nkey_auth.creds;
 
 const Client = @This();
 
+/// Type-erased message handler for callback subscriptions.
+/// Uses comptime vtable pattern (same as EventHandler).
+///
+/// ```zig
+/// const MyHandler = struct {
+///     counter: *u32,
+///     pub fn onMessage(self: *@This(), msg: *const Message) void {
+///         self.counter.* += 1;
+///     }
+/// };
+/// var handler = MyHandler{ .counter = &count };
+/// const sub = try client.subscribeWithCallback(
+///     allocator, "subject", MsgHandler.init(MyHandler, &handler),
+/// );
+/// ```
+pub const MsgHandler = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        onMessage: *const fn (*anyopaque, *const Message) void,
+    };
+
+    /// Create handler from concrete type using comptime.
+    pub fn init(comptime T: type, ptr: *T) MsgHandler {
+        const gen = struct {
+            fn onMessage(p: *anyopaque, msg: *const Message) void {
+                const self: *T = @ptrCast(@alignCast(p));
+                self.onMessage(msg);
+            }
+        };
+        return .{
+            .ptr = ptr,
+            .vtable = &.{ .onMessage = gen.onMessage },
+        };
+    }
+
+    /// Dispatch message to handler.
+    pub fn dispatch(
+        self: MsgHandler,
+        msg: *const Message,
+    ) void {
+        self.vtable.onMessage(self.ptr, msg);
+    }
+};
+
 /// Gets current monotonic time in nanoseconds.
 fn getNowNs(io: Io) u64 {
     const ts = Io.Timestamp.now(io, .awake);
@@ -923,6 +969,47 @@ fn callbackTaskFn(client: *Client) void {
     dbg.print("callback_task: EXITED (state closed)", .{});
 }
 
+/// Drain loop for MsgHandler callback subscriptions.
+/// Runs as io.async task, pops messages and dispatches to handler.
+/// Automatically frees each message after dispatch.
+fn callbackDrainFn(
+    sub: *Subscription,
+    allocator: Allocator,
+    handler: MsgHandler,
+) void {
+    assert(sub.mode == .callback);
+    const io = sub.client.io;
+    while (sub.state == .active or sub.state == .draining) {
+        const msg = sub.nextRaw(io) catch |err| {
+            if (err == error.Canceled or
+                err == error.Closed) break;
+            continue;
+        };
+        handler.dispatch(&msg);
+        msg.deinit(allocator);
+    }
+}
+
+/// Drain loop for plain fn callback subscriptions.
+/// Same as callbackDrainFn but calls a plain function pointer.
+fn callbackDrainFnPlain(
+    sub: *Subscription,
+    allocator: Allocator,
+    cb: *const fn (*const Message) void,
+) void {
+    assert(sub.mode == .callback);
+    const io = sub.client.io;
+    while (sub.state == .active or sub.state == .draining) {
+        const msg = sub.nextRaw(io) catch |err| {
+            if (err == error.Canceled or
+                err == error.Closed) break;
+            continue;
+        };
+        cb(&msg);
+        msg.deinit(allocator);
+    }
+}
+
 /// Upgrades the connection to TLS.
 /// Allocates TLS buffers, loads CA certificates, and performs handshake.
 fn upgradeTls(
@@ -1422,6 +1509,85 @@ pub fn subscribeQueue(
     // Signal auto-flush to register subscription promptly
     self.flush_requested.store(true, .release);
 
+    return sub;
+}
+
+/// Subscribes with a MsgHandler callback.
+/// Messages are dispatched to handler.onMessage() automatically.
+/// The drain task frees each message after dispatch.
+///
+/// Do NOT call next()/tryNext() on the returned subscription.
+pub fn subscribeWithCallback(
+    self: *Client,
+    allocator: Allocator,
+    subject: []const u8,
+    handler: MsgHandler,
+) !*Sub {
+    return self.subscribeWithCallbackQueue(
+        allocator,
+        subject,
+        null,
+        handler,
+    );
+}
+
+/// Subscribes with a MsgHandler callback and queue group.
+pub fn subscribeWithCallbackQueue(
+    self: *Client,
+    allocator: Allocator,
+    subject: []const u8,
+    queue_group: ?[]const u8,
+    handler: MsgHandler,
+) !*Sub {
+    const sub = try self.subscribeQueue(
+        allocator,
+        subject,
+        queue_group,
+    );
+    errdefer sub.deinit(allocator);
+    sub.mode = .callback;
+    sub.callback_future = self.io.async(
+        callbackDrainFn,
+        .{ sub, allocator, handler },
+    );
+    return sub;
+}
+
+/// Subscribes with a plain function callback.
+/// Simpler alternative when no handler state is needed.
+pub fn subscribeWithCallbackFn(
+    self: *Client,
+    allocator: Allocator,
+    subject: []const u8,
+    cb: *const fn (*const Message) void,
+) !*Sub {
+    return self.subscribeWithCallbackFnQueue(
+        allocator,
+        subject,
+        null,
+        cb,
+    );
+}
+
+/// Subscribes with a plain function callback and queue group.
+pub fn subscribeWithCallbackFnQueue(
+    self: *Client,
+    allocator: Allocator,
+    subject: []const u8,
+    queue_group: ?[]const u8,
+    cb: *const fn (*const Message) void,
+) !*Sub {
+    const sub = try self.subscribeQueue(
+        allocator,
+        subject,
+        queue_group,
+    );
+    errdefer sub.deinit(allocator);
+    sub.mode = .callback;
+    sub.callback_future = self.io.async(
+        callbackDrainFnPlain,
+        .{ sub, allocator, cb },
+    );
     return sub;
 }
 
@@ -3384,6 +3550,12 @@ pub const SubscriptionState = enum {
     unsubscribed,
 };
 
+/// Whether a subscription is manually polled or callback-driven.
+pub const SubscriptionMode = enum {
+    manual,
+    callback,
+};
+
 /// Subscription with Io.Queue for async message delivery.
 ///
 /// Supports multiple concurrent consumers via inline routing:
@@ -3407,6 +3579,12 @@ pub const Subscription = struct {
     client_destroyed: bool = false,
     /// msgs_in value when alloc_failed event was last pushed (rate-limit).
     last_alloc_notified_at: u64 = 0,
+
+    // Callback subscription support
+    /// Whether this sub is manually polled or callback-driven.
+    mode: SubscriptionMode = .manual,
+    /// Future for the callback drain task (set for callback subs).
+    callback_future: ?Io.Future(void) = null,
 
     // Auto-unsubscribe support
     /// Maximum messages before auto-unsubscribe. Null = no limit.
@@ -3432,38 +3610,33 @@ pub const Subscription = struct {
     /// High watermark for pending bytes.
     max_pending_bytes: u64 = 0,
 
-    /// Blocks until a message is available or connection is closed.
-    ///
-    /// Arguments:
-    ///     allocator: Allocator for owned message copy
-    ///     io: Io interface for blocking operations
-    /// Blocks until a message arrives on this subscription.
-    ///
-    /// The background io_task handles all socket I/O and routes messages
-    /// to subscription queues. This function blocks on the queue.
-    /// Lock-free spin-wait for message.
-    ///
-    /// Returns owned Message that caller must free via msg.deinit(allocator).
-    pub fn next(self: *Subscription, allocator: Allocator, io: Io) !Message {
-        _ = allocator;
+    /// Spin-yield loop to pop next message from queue.
+    /// Internal: used by both next() and callback drain tasks.
+    fn nextRaw(self: *Subscription, io: Io) !Message {
         assert(self.state == .active or self.state == .draining);
 
-        dbg.print("Sub.next: ENTERED, queue len={d}", .{self.queue.len()});
+        dbg.print(
+            "Sub.nextRaw: ENTERED, queue len={d}",
+            .{self.queue.len()},
+        );
 
-        // Hybrid spin-yield: spin for fast path, yield for cancellation support
         var spin_count: u32 = 0;
         var yield_count: u32 = 0;
 
         while (true) {
             if (self.queue.pop()) |msg| {
-                // Use backing_buf.len for speed (avoids 4 field accesses)
                 const msg_size =
                     if (msg.backing_buf) |buf| buf.len else msg.size();
                 self.pending_bytes -|= msg_size;
-                dbg.print("Sub.next: GOT MESSAGE after {d} yields", .{yield_count});
+                dbg.print(
+                    "Sub.nextRaw: GOT MESSAGE after {d} yields",
+                    .{yield_count},
+                );
                 return msg;
             }
-            if (self.state != .active and self.state != .draining) {
+            if (self.state != .active and
+                self.state != .draining)
+            {
                 return error.Closed;
             }
 
@@ -3471,23 +3644,53 @@ pub const Subscription = struct {
             if (spin_count < defaults.Spin.max_spins) {
                 std.atomic.spinLoopHint();
             } else {
-                // Yield to I/O runtime - enables cancellation and io.select()
-                io.sleep(.fromNanoseconds(0), .awake) catch |err| {
-                    if (err == error.Canceled) return error.Canceled;
+                io.sleep(
+                    .fromNanoseconds(0),
+                    .awake,
+                ) catch |err| {
+                    if (err == error.Canceled)
+                        return error.Canceled;
                 };
                 spin_count = 0;
                 yield_count += 1;
                 if (yield_count % 10000 == 0) {
-                    dbg.print("Sub.next: still waiting, yields={d}", .{yield_count});
+                    dbg.print(
+                        "Sub.nextRaw: still waiting, yields={d}",
+                        .{yield_count},
+                    );
                 }
             }
         }
     }
 
-    /// Try receive without blocking. Returns null if no message available.
+    /// Blocks until a message is available or connection is closed.
+    ///
+    /// Arguments:
+    ///     allocator: Allocator (unused, kept for API compat)
+    ///     io: Io interface for blocking operations
+    ///
+    /// Only valid for manual-mode subscriptions (not callback).
+    /// Returns owned Message that caller must free via msg.deinit().
+    pub fn next(
+        self: *Subscription,
+        allocator: Allocator,
+        io: Io,
+    ) !Message {
+        _ = allocator;
+        assert(self.mode == .manual);
+        if (self.mode != .manual)
+            return error.SubscriptionModeConflict;
+        return self.nextRaw(io);
+    }
+
+    /// Try receive without blocking. Returns null if no message.
+    /// Only valid for manual-mode subscriptions.
     pub fn tryNext(self: *Subscription) ?Message {
+        assert(self.mode == .manual);
+        if (self.mode != .manual) return null;
         if (self.queue.pop()) |msg| {
-            const msg_size = if (msg.backing_buf) |buf| buf.len else msg.size();
+            const msg_size =
+                if (msg.backing_buf) |buf| buf.len else msg.size();
             self.pending_bytes -|= msg_size;
             return msg;
         }
@@ -3495,17 +3698,23 @@ pub const Subscription = struct {
     }
 
     /// Batch receive - waits for at least 1, returns up to buf.len.
-    pub fn nextBatch(self: *Subscription, io: Io, buf: []Message) !usize {
+    /// Only valid for manual-mode subscriptions.
+    pub fn nextBatch(
+        self: *Subscription,
+        io: Io,
+        buf: []Message,
+    ) !usize {
+        assert(self.mode == .manual);
+        if (self.mode != .manual)
+            return error.SubscriptionModeConflict;
         assert(self.state == .active or self.state == .draining);
         assert(buf.len > 0);
 
-        // Hybrid spin-yield: spin for fast path, yield for cancellation support
         var spin_count: u32 = 0;
 
         while (true) {
             const count = self.queue.popBatch(buf);
             if (count > 0) {
-                // Decrement pending bytes for all popped messages
                 for (buf[0..count]) |msg| {
                     const msg_size =
                         if (msg.backing_buf) |buf_|
@@ -3516,7 +3725,9 @@ pub const Subscription = struct {
                 }
                 return count;
             }
-            if (self.state != .active and self.state != .draining) {
+            if (self.state != .active and
+                self.state != .draining)
+            {
                 return error.Closed;
             }
 
@@ -3524,9 +3735,12 @@ pub const Subscription = struct {
             if (spin_count < defaults.Spin.max_spins) {
                 std.atomic.spinLoopHint();
             } else {
-                // Yield to I/O runtime - enables cancellation and io.select()
-                io.sleep(.fromNanoseconds(0), .awake) catch |err| {
-                    if (err == error.Canceled) return error.Canceled;
+                io.sleep(
+                    .fromNanoseconds(0),
+                    .awake,
+                ) catch |err| {
+                    if (err == error.Canceled)
+                        return error.Canceled;
                 };
                 spin_count = 0;
             }
@@ -3534,7 +3748,10 @@ pub const Subscription = struct {
     }
 
     /// Non-blocking batch receive.
+    /// Only valid for manual-mode subscriptions.
     pub fn tryNextBatch(self: *Subscription, buf: []Message) usize {
+        assert(self.mode == .manual);
+        if (self.mode != .manual) return 0;
         const count = self.queue.popBatch(buf);
         for (buf[0..count]) |msg| {
             const msg_size =
@@ -3547,9 +3764,10 @@ pub const Subscription = struct {
     /// Receive with timeout using timer-based polling.
     ///
     /// Arguments:
-    ///     allocator: Allocator for message (unused, kept for API compat)
+    ///     allocator: Allocator (unused, kept for API compat)
     ///     timeout_ms: Maximum wait time in milliseconds
     ///
+    /// Only valid for manual-mode subscriptions.
     /// Returns null on timeout. Uses lock-free polling with timer.
     pub fn nextWithTimeout(
         self: *Subscription,
@@ -3557,6 +3775,9 @@ pub const Subscription = struct {
         timeout_ms: u32,
     ) !?Message {
         _ = allocator;
+        assert(self.mode == .manual);
+        if (self.mode != .manual)
+            return error.SubscriptionModeConflict;
         assert(self.state == .active or self.state == .draining);
         assert(timeout_ms > 0);
 
@@ -3974,6 +4195,12 @@ pub const Subscription = struct {
     /// If not yet unsubscribed, calls unsubscribe() and ignores errors.
     /// Safe to use in defer blocks (like Rust's Drop trait).
     pub fn deinit(self: *Subscription, allocator: Allocator) void {
+        // Cancel callback drain task before unsubscribe
+        if (self.callback_future) |*future| {
+            _ = future.cancel(self.client.io);
+            self.callback_future = null;
+        }
+
         // Ensure unsubscribed (errors ignored - like Rust Drop)
         if (self.state != .unsubscribed) {
             self.unsubscribe() catch |err| {

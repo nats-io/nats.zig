@@ -224,6 +224,54 @@ pub fn build(b: *std.Build) void {
     run_events.dependOn(&events_cmd.step);
     events_cmd.step.dependOn(b.getInstallStep());
 
+    // 10. Callback Subscriptions example
+    const callback_exe = b.addExecutable(.{
+        .name = "example-callback",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(
+                "src/examples/callback.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(callback_exe);
+
+    const run_callback = b.step(
+        "run-callback",
+        "Run callback subscriptions example",
+    );
+    const callback_cmd = b.addRunArtifact(callback_exe);
+    run_callback.dependOn(&callback_cmd.step);
+    callback_cmd.step.dependOn(b.getInstallStep());
+
+    // 11. Request/Reply with Callback example
+    const req_rep_cb_exe = b.addExecutable(.{
+        .name = "example-request-reply-callback",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(
+                "src/examples/request_reply_callback.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(req_rep_cb_exe);
+
+    const run_req_rep_cb = b.step(
+        "run-request-reply-callback",
+        "Run request/reply callback example",
+    );
+    const req_rep_cb_cmd = b.addRunArtifact(req_rep_cb_exe);
+    run_req_rep_cb.dependOn(&req_rep_cb_cmd.step);
+    req_rep_cb_cmd.step.dependOn(b.getInstallStep());
+
     // NATS by Example: Pub-Sub messaging
     const nbe_pubsub_exe = b.addExecutable(.{
         .name = "nbe-messaging-pub-sub",

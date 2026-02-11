@@ -52,6 +52,9 @@ pub const Stats = Client.Stats;
 pub const Event = Client.Event;
 pub const EventHandler = Client.EventHandler;
 
+// Message callback type (nested in Client)
+pub const MsgHandler = Client.MsgHandler;
+
 // Events module exports
 const events = @import("events.zig");
 pub const EventError = events.Error;

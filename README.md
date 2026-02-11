@@ -89,6 +89,8 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 | batch_receiving | `run-batch-receiving` | `nextBatch()` for bulk receives, stats monitoring |
 | reconnection | `run-reconnection` | Auto-reconnect, backoff, buffer during disconnect |
 | events | `run-events` | EventHandler callbacks with external state |
+| callback | `run-callback` | MsgHandler and plain fn callback subscriptions |
+| request_reply_callback | `run-request-reply-callback` | Service responder via callback subscription |
 | graceful_shutdown | `run-graceful-shutdown` | `drain()` lifecycle, pre-shutdown health checks |
 
 Source: `src/examples/`
@@ -237,6 +239,62 @@ const sub2 = try client.subscribeQueue(allocator, "tasks.*", "workers");
 
 // Message goes to either sub1 OR sub2, not both
 ```
+
+### Callback Subscriptions
+
+Instead of manually calling `next()`, you can subscribe with a callback handler.
+An async drain task calls your handler for each message and frees it automatically.
+
+**MsgHandler pattern** (handler struct with state):
+
+```zig
+const MyHandler = struct {
+    counter: *u32,
+    pub fn onMessage(self: *@This(), msg: *const nats.Message) void {
+        self.counter.* += 1;
+        std.debug.print("got: {s}\n", .{msg.data});
+    }
+};
+
+var count: u32 = 0;
+var handler = MyHandler{ .counter = &count };
+const sub = try client.subscribeWithCallback(
+    allocator, "events.>",
+    nats.MsgHandler.init(MyHandler, &handler),
+);
+defer sub.deinit(allocator);
+```
+
+**Plain function** (no state needed):
+
+```zig
+fn onAlert(msg: *const nats.Message) void {
+    std.debug.print("alert: {s}\n", .{msg.data});
+}
+
+const sub = try client.subscribeWithCallbackFn(
+    allocator, "alerts.>", onAlert,
+);
+defer sub.deinit(allocator);
+```
+
+**Queue group** variant:
+
+```zig
+const sub = try client.subscribeWithCallbackQueue(
+    allocator, "tasks.*", "workers", handler,
+);
+```
+
+| Method | Handler | Queue Group |
+|--------|---------|-------------|
+| `subscribeWithCallback` | MsgHandler | No |
+| `subscribeWithCallbackQueue` | MsgHandler | Yes |
+| `subscribeWithCallbackFn` | plain fn | No |
+| `subscribeWithCallbackFnQueue` | plain fn | Yes |
+
+> **Warning:** Do not call `next()`, `tryNext()`, or other receive methods on
+> a callback subscription. They assert `mode == .manual` and will trap.
 
 ### Unsubscribing
 
@@ -1329,6 +1387,10 @@ if (client.getConnectedServerVersion()) |version| {
 | Flush buffer to socket | `client.flushBuffer()` | `!void` |
 | Subscribe | `client.subscribe(allocator, subject)` | `!*Sub` |
 | Queue subscribe | `client.subscribeQueue(allocator, subject, group)` | `!*Sub` |
+| Callback subscribe | `client.subscribeWithCallback(allocator, subject, handler)` | `!*Sub` |
+| Callback queue sub | `client.subscribeWithCallbackQueue(allocator, subject, group, handler)` | `!*Sub` |
+| Callback fn sub | `client.subscribeWithCallbackFn(allocator, subject, fn)` | `!*Sub` |
+| Callback fn queue sub | `client.subscribeWithCallbackFnQueue(allocator, subject, group, fn)` | `!*Sub` |
 | Unsubscribe | `sub.unsubscribe()` | `!void` |
 | Free subscription | `sub.deinit(allocator)` | `void` |
 | Request/reply | `client.request(allocator, subject, data, timeout_ms)` | `!?Message` |
