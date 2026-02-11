@@ -75,32 +75,6 @@ pub fn main() !void {
 }
 ```
 
-## Memory Ownership
-
-Messages returned by `next()`, `tryNext()`, and `nextWithTimeout()` are **owned**.
-You **must** call `deinit()` to free memory:
-
-```zig
-const msg = try sub.next(allocator, io);
-defer msg.deinit(allocator);
-
-// Access message fields (valid until deinit)
-std.debug.print("Subject: {s}\n", .{msg.subject});
-std.debug.print("Data: {s}\n", .{msg.data});
-```
-
-### Message Structure
-
-```zig
-pub const Message = struct {
-    subject: []const u8,       // Message subject
-    sid: u64,                  // Subscription ID
-    reply_to: ?[]const u8,     // Reply-to address (for request/reply)
-    data: []const u8,          // Message payload
-    headers: ?[]const u8,      // Raw NATS headers (use headers.parse())
-};
-```
-
 ## Examples
 
 Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
@@ -132,6 +106,33 @@ Ports of [natsbyexample.com](https://natsbyexample.com) examples.
 | [Multiple Subscriptions](doc/nats-by-example/messaging/iterating-multiple-subscriptions.zig) | `run-nbe-messaging-iterating-multiple-subscriptions` | Yes |
 | [NKeys & JWTs](doc/nats-by-example/auth/nkeys-jwts.zig) | `run-nbe-auth-nkeys-jwts` | No |
 
+---
+
+## Memory Ownership
+
+Messages returned by `next()`, `tryNext()`, and `nextWithTimeout()` are **owned**.
+You **must** call `deinit()` to free memory:
+
+```zig
+const msg = try sub.next(allocator, io);
+defer msg.deinit(allocator);
+
+// Access message fields (valid until deinit)
+std.debug.print("Subject: {s}\n", .{msg.subject});
+std.debug.print("Data: {s}\n", .{msg.data});
+```
+
+### Message Structure
+
+```zig
+pub const Message = struct {
+    subject: []const u8,       // Message subject
+    sid: u64,                  // Subscription ID
+    reply_to: ?[]const u8,     // Reply-to address (for request/reply)
+    data: []const u8,          // Message payload
+    headers: ?[]const u8,      // Raw NATS headers (use headers.parse())
+};
+```
 
 ---
 
