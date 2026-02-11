@@ -1391,29 +1391,6 @@ zig build test-integration
 # Format code
 zig build fmt
 ```
-
-## Integration Tests
-
-26 test modules covering connection, authentication, pub/sub, reconnection, and edge cases.
-
-```bash
-# Run all integration tests (starts nats-server instances automatically)
-zig build test-integration
-```
-
-| Category | Tests |
-|----------|-------|
-| Connection | basic, refused, consecutive, multi-client |
-| Auth | token, NKey (Ed25519), JWT/credentials |
-| TLS | connection, insecure mode, pub/sub over TLS, reconnect |
-| Pub/Sub | publish, subscribe, wildcards, queue groups, headers |
-| Request/Reply | basic, timeout handling |
-| Reconnection | 25+ scenarios: auto-reconnect, subscription restore, failover, backoff, queue groups, multi-server |
-| Lifecycle | drain, stats, state notifications, graceful shutdown |
-| Edge Cases | subject limits, double unsubscribe, concurrent access, stress (500+ msgs) |
-
-Source: `src/testing/client/`
-
 ---
 
 ## Status
