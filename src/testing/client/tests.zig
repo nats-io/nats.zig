@@ -36,7 +36,7 @@ pub const autoflush = @import("autoflush.zig");
 pub const async_patterns = @import("async_patterns.zig");
 pub const dynamic_jwt = @import("dynamic_jwt.zig");
 
-/// Runs all async client tests.
+/// Runs all client tests.
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     basic.runAll(allocator);
     publish.runAll(allocator);
