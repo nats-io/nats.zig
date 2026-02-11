@@ -385,13 +385,16 @@ fn readPipeWithTimeout(
 ) []const u8 {
     const file = pipe orelse return "";
     var total: usize = 0;
-    const start = std.time.Instant.now() catch return "";
+    const start = Io.Timestamp.now(io, .awake);
 
     while (total < buf.len) {
         const n = file.read(buf[total..]) catch break;
         if (n == 0) {
-            const now = std.time.Instant.now() catch break;
-            if (now.since(start) > timeout_ns) break;
+            const elapsed = start.durationTo(
+                Io.Timestamp.now(io, .awake),
+            );
+            const ns: u64 = @intCast(elapsed.nanoseconds);
+            if (ns > timeout_ns) break;
             io.sleep(.fromMilliseconds(10), .awake) catch {};
             continue;
         }
@@ -419,14 +422,17 @@ fn readAllFromPipe(io: Io, pipe: ?File, buf: []u8) []const u8 {
 fn readUntilDone(io: Io, pipe: ?File, buf: []u8, timeout_ns: u64) []const u8 {
     const file = pipe orelse return "";
     var total: usize = 0;
-    const start = std.time.Instant.now() catch return "";
+    const start = Io.Timestamp.now(io, .awake);
 
     while (total < buf.len) {
         var slice = [_][]u8{buf[total..]};
         const n = file.readStreaming(io, &slice) catch break;
         if (n == 0) {
-            const now = std.time.Instant.now() catch break;
-            if (now.since(start) > timeout_ns) break;
+            const elapsed = start.durationTo(
+                Io.Timestamp.now(io, .awake),
+            );
+            const ns: u64 = @intCast(elapsed.nanoseconds);
+            if (ns > timeout_ns) break;
             io.sleep(.fromMilliseconds(10), .awake) catch {};
             continue;
         }
@@ -1373,24 +1379,29 @@ fn generateMarkdown(
 
     try writer.print("# NATS Performance Benchmark Results\n\n", .{});
 
-    if (std.time.Instant.now()) |instant| {
-        const epoch_secs: u64 = @intCast(instant.timestamp.sec);
-        const epoch = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
+    {
+        const ts = Io.Timestamp.now(io, .real);
+        const total_ns: u64 = @intCast(ts.nanoseconds);
+        const epoch_secs = total_ns / std.time.ns_per_s;
+        const epoch = std.time.epoch.EpochSeconds{
+            .secs = epoch_secs,
+        };
         const day_secs = epoch.getDaySeconds();
         const year_day = epoch.getEpochDay().calculateYearDay();
         const month_day = year_day.calculateMonthDay();
 
-        try writer.print("**Date:** {d:0>4}-{d:0>2}-{d:0>2}" ++
-            " {d:0>2}:{d:0>2}:{d:0>2}\n", .{
-            year_day.year,
-            @intFromEnum(month_day.month),
-            month_day.day_index + 1,
-            day_secs.getHoursIntoDay(),
-            day_secs.getMinutesIntoHour(),
-            day_secs.getSecondsIntoMinute(),
-        });
-    } else |_| {
-        try writer.print("**Date:** (unavailable)\n", .{});
+        try writer.print(
+            "**Date:** {d:0>4}-{d:0>2}-{d:0>2}" ++
+                " {d:0>2}:{d:0>2}:{d:0>2}\n",
+            .{
+                year_day.year,
+                @intFromEnum(month_day.month),
+                month_day.day_index + 1,
+                day_secs.getHoursIntoDay(),
+                day_secs.getMinutesIntoHour(),
+                day_secs.getSecondsIntoMinute(),
+            },
+        );
     }
 
     const uname = std.posix.uname();

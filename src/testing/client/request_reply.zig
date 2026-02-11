@@ -71,10 +71,7 @@ pub fn testRequestReturns(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    const start = std.time.Instant.now() catch {
-        reportResult("request_returns", false, "timer failed");
-        return;
-    };
+    const start = std.Io.Timestamp.now(io.io(), .awake);
 
     const result = client.request(
         allocator,
@@ -86,11 +83,9 @@ pub fn testRequestReturns(allocator: std.mem.Allocator) void {
         return;
     };
 
-    const now = std.time.Instant.now() catch {
-        reportResult("request_returns", false, "timer failed");
-        return;
-    };
-    const elapsed_ns = now.since(start);
+    const end = std.Io.Timestamp.now(io.io(), .awake);
+    const elapsed = start.durationTo(end);
+    const elapsed_ns: u64 = @intCast(elapsed.nanoseconds);
     const elapsed_ms = elapsed_ns / std.time.ns_per_ms;
 
     if (result) |msg| {
@@ -339,10 +334,7 @@ pub fn testRequestTimeout(allocator: std.mem.Allocator) void {
     };
     defer client.deinit(allocator);
 
-    const start = std.time.Instant.now() catch {
-        reportResult("request_timeout", false, "timer failed");
-        return;
-    };
+    const start = std.Io.Timestamp.now(io.io(), .awake);
 
     const result = client.request(
         allocator,
@@ -350,15 +342,18 @@ pub fn testRequestTimeout(allocator: std.mem.Allocator) void {
         "ping",
         200,
     ) catch {
-        reportResult("request_timeout", false, "request error");
+        reportResult(
+            "request_timeout",
+            false,
+            "request error",
+        );
         return;
     };
 
-    const end = std.time.Instant.now() catch {
-        reportResult("request_timeout", false, "timer failed");
-        return;
-    };
-    const elapsed_ms = end.since(start) / std.time.ns_per_ms;
+    const end = std.Io.Timestamp.now(io.io(), .awake);
+    const elapsed = start.durationTo(end);
+    const elapsed_ns: u64 = @intCast(elapsed.nanoseconds);
+    const elapsed_ms = elapsed_ns / std.time.ns_per_ms;
 
     if (result) |msg| {
         msg.deinit(allocator);

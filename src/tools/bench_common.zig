@@ -42,12 +42,13 @@ pub const TimeOfDay = struct {
     minutes: u64,
     seconds: u64,
 
-    pub fn now() ?TimeOfDay {
-        const instant = std.time.Instant.now() catch return null;
-        const secs: u64 = @intCast(instant.timestamp.sec);
+    pub fn now(io: std.Io) ?TimeOfDay {
+        const ts = std.Io.Timestamp.now(io, .real);
+        const total_ns: u64 = @intCast(ts.nanoseconds);
+        const secs = total_ns / std.time.ns_per_s;
         return .{
-            .hours = @mod(@divFloor(secs, 3600), 24),
-            .minutes = @mod(@divFloor(secs, 60), 60),
+            .hours = @mod(secs / 3600, 24),
+            .minutes = @mod(secs / 60, 60),
             .seconds = @mod(secs, 60),
         };
     }

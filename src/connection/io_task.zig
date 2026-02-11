@@ -37,12 +37,12 @@ const POLL_TIMEOUT_MS: i32 = if (defaults.Poll.timeout_us == 0)
 else
     @max(1, @divFloor(defaults.Poll.timeout_us + 999, 1000));
 
-/// Gets current time in nanoseconds.
-fn getNowNs() error{TimerUnavailable}!u64 {
-    const instant = std.time.Instant.now() catch return error.TimerUnavailable;
-    const secs: u64 = @intCast(instant.timestamp.sec);
-    const nsecs: u64 = @intCast(instant.timestamp.nsec);
-    return secs * std.time.ns_per_s + nsecs;
+const Io = std.Io;
+
+/// Gets current monotonic time in nanoseconds.
+fn getNowNs(io: Io) u64 {
+    const ts = Io.Timestamp.now(io, .awake);
+    return @intCast(ts.nanoseconds);
 }
 
 /// Drain return queue - free returned buffers back to slab.
@@ -86,7 +86,7 @@ pub fn run(client: *Client, allocator: Allocator) void {
         if (health_check_counter >= defaults.Spin.health_check_iterations) {
             health_check_counter = 0;
 
-            const now_ns = getNowNs() catch 0;
+            const now_ns = getNowNs(client.io);
             if (now_ns - last_health_check_ns >= health_check_interval_ns) {
                 last_health_check_ns = now_ns;
                 if (client.checkHealthAndDetectStale()) {
@@ -405,7 +405,7 @@ inline fn tryRouteBufferedMessages(
                     client.active_writer.flush() catch return .disconnected;
                 },
                 .pong => {
-                    const now = getNowNs() catch 0;
+                    const now = getNowNs(client.io);
                     dbg.print("Got PONG, storing timestamp={d}", .{now});
                     client.pings_outstanding.store(0, .monotonic);
                     client.last_pong_received_ns.store(now, .release);
