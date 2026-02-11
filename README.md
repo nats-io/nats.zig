@@ -10,7 +10,7 @@ Native Zig. Zero dependencies. Built on `std.Io`.
 
 ## Requirements
 
-- Zig 0.16.0-dev.2193 or later
+- Zig 0.16.0-dev.2535 or later
 - NATS server (for running examples and tests)
 
 ## Installation
