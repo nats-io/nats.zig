@@ -14,14 +14,9 @@ const nats = @import("nats");
 
 const Io = std.Io;
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     // Connect with larger subscription queue for batch receiving
     const client = try nats.Client.connect(
@@ -33,12 +28,12 @@ pub fn main() !void {
             .sub_queue_size = 512, // Larger queue for batch demos
         },
     );
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     std.debug.print("Connected to NATS!\n", .{});
 
-    const sub = try client.subscribe(allocator, "bench.>");
-    defer sub.deinit(allocator);
+    const sub = try client.subscribe("bench.>");
+    defer sub.deinit();
 
     std.debug.print("Subscribed to 'bench.>'\n\n", .{});
 
@@ -67,7 +62,7 @@ pub fn main() !void {
         batch_count += 1;
 
         for (batch_buf[0..count]) |*msg| {
-            defer msg.deinit(allocator);
+            defer msg.deinit();
             total_received += 1;
         }
 
@@ -114,7 +109,7 @@ pub fn main() !void {
     std.debug.print("  tryNextBatch returned {d} messages immediately\n", .{available});
 
     for (batch_buf[0..available]) |*msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         std.debug.print("    {s}\n", .{msg.data});
     }
 

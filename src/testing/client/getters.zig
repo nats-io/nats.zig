@@ -26,7 +26,7 @@ pub fn testConnectionInfoGetters(allocator: std.mem.Allocator) void {
         reportResult("connection_info_getters", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Test getName()
     const name = client.getName();
@@ -87,7 +87,7 @@ pub fn testServerInfoGetters(allocator: std.mem.Allocator) void {
         reportResult("server_info_getters", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Test tlsRequired() - default server doesn't require TLS
     // (this may vary by server config, just check it doesn't crash)
@@ -128,7 +128,7 @@ pub fn testConnectedAddrGetter(allocator: std.mem.Allocator) void {
         reportResult("connected_addr_getter", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var addr_buf: [64]u8 = undefined;
     const addr = client.getConnectedAddr(&addr_buf);
@@ -163,7 +163,7 @@ pub fn testUrlRedaction(allocator: std.mem.Allocator) void {
         reportResult("url_redaction", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var redact_buf: [256]u8 = undefined;
     const redacted = client.getConnectedUrlRedacted(&redact_buf);
@@ -198,14 +198,14 @@ pub fn testSubscriptionInfoGetters(allocator: std.mem.Allocator) void {
         reportResult("subscription_info_getters", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Create a regular subscription
-    const sub = client.subscribe(allocator, "test.getters") catch {
+    const sub = client.subscribe("test.getters") catch {
         reportResult("subscription_info_getters", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Test getSid() - should be > 0
     if (sub.getSid() == 0) {
@@ -250,18 +250,17 @@ pub fn testQueueSubGetters(allocator: std.mem.Allocator) void {
         reportResult("queue_sub_getters", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Create a queue subscription
     const sub = client.subscribeQueue(
-        allocator,
         "test.queue.getters",
         "workers",
     ) catch {
         reportResult("queue_sub_getters", false, "subscribeQueue failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Test getQueueGroup() - should return "workers"
     const qg = sub.getQueueGroup();
@@ -289,13 +288,13 @@ pub fn testDrainingState(allocator: std.mem.Allocator) void {
         reportResult("draining_state", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "test.draining") catch {
+    const sub = client.subscribe("test.draining") catch {
         reportResult("draining_state", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Initially not draining
     if (sub.isDraining()) {

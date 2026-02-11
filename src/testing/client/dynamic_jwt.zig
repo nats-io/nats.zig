@@ -221,7 +221,7 @@ pub fn testDynamicJwtConnect(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.isConnected()) {
         reportResult(
@@ -288,10 +288,9 @@ pub fn testDynamicJwtPubSub(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const sub = client.subscribe(
-        allocator,
         "dynamic.jwt.test",
     ) catch {
         reportResult(
@@ -301,7 +300,7 @@ pub fn testDynamicJwtPubSub(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const test_msg = "dynamic jwt message";
     client.publish(
@@ -316,13 +315,12 @@ pub fn testDynamicJwtPubSub(
         return;
     };
 
-    client.flush(allocator, 500_000_000) catch {};
+    client.flush(500_000_000) catch {};
 
     if (sub.nextWithTimeout(
-        allocator,
         1000,
     ) catch null) |m| {
-        defer m.deinit(allocator);
+        defer m.deinit();
         if (std.mem.eql(u8, m.data, test_msg)) {
             reportResult(
                 "dynamic_jwt_pubsub",

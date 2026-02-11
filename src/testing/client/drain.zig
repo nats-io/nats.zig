@@ -28,21 +28,21 @@ pub fn testDrainOperation(allocator: std.mem.Allocator) void {
         reportResult("drain_operation", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub1 = client.subscribe(allocator, "drain.test.1") catch {
+    const sub1 = client.subscribe("drain.test.1") catch {
         reportResult("drain_operation", false, "sub1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
-    const sub2 = client.subscribe(allocator, "drain.test.2") catch {
+    const sub2 = client.subscribe("drain.test.2") catch {
         reportResult("drain_operation", false, "sub2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
-    _ = client.drain(allocator) catch {
+    _ = client.drain() catch {
         reportResult("drain_operation", false, "drain failed");
         return;
     };
@@ -70,26 +70,26 @@ pub fn testDrainCleansUp(allocator: std.mem.Allocator) void {
         reportResult("drain_cleanup", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub1 = client.subscribe(allocator, "drain.cleanup.1") catch {
+    const sub1 = client.subscribe("drain.cleanup.1") catch {
         reportResult("drain_cleanup", false, "sub1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
-    const sub2 = client.subscribe(allocator, "drain.cleanup.2") catch {
+    const sub2 = client.subscribe("drain.cleanup.2") catch {
         reportResult("drain_cleanup", false, "sub2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
     client.publish("drain.cleanup.1", "msg1") catch {};
     client.publish("drain.cleanup.2", "msg2") catch {};
 
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    _ = client.drain(allocator) catch {
+    _ = client.drain() catch {
         reportResult("drain_cleanup", false, "drain failed");
         return;
     };
@@ -117,14 +117,14 @@ pub fn testDrainTwice(allocator: std.mem.Allocator) void {
         reportResult("drain_twice", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    _ = client.drain(allocator) catch {
+    _ = client.drain() catch {
         reportResult("drain_twice", false, "first drain failed");
         return;
     };
 
-    _ = client.drain(allocator) catch {};
+    _ = client.drain() catch {};
 
     reportResult("drain_twice", true, "");
 }
@@ -145,13 +145,13 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
         reportResult("drain_many_subs", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var subs: [20]?*nats.Subscription = undefined;
     @memset(&subs, null);
 
     defer for (&subs) |*s| {
-        if (s.*) |sub| sub.deinit(allocator);
+        if (s.*) |sub| sub.deinit();
     };
 
     var created: usize = 0;
@@ -164,11 +164,11 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
         ) catch {
             continue;
         };
-        subs[i] = client.subscribe(allocator, subject) catch break;
+        subs[i] = client.subscribe(subject) catch break;
         created += 1;
     }
 
-    _ = client.drain(allocator) catch {
+    _ = client.drain() catch {
         reportResult("drain_many_subs", false, "drain failed");
         return;
     };
@@ -197,13 +197,13 @@ pub fn testSubWaitDrained(allocator: std.mem.Allocator) void {
         reportResult("sub_wait_drained", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "wait.drained") catch {
+    const sub = client.subscribe("wait.drained") catch {
         reportResult("sub_wait_drained", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Publish some messages
     for (0..5) |_| {
@@ -223,7 +223,7 @@ pub fn testSubWaitDrained(allocator: std.mem.Allocator) void {
     for (0..10) |_| {
         const msg = sub.tryNext();
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
         } else break;
     }
 
@@ -262,13 +262,13 @@ pub fn testWaitDrainedNotDraining(allocator: std.mem.Allocator) void {
         reportResult("wait_not_draining", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "not.draining") catch {
+    const sub = client.subscribe("not.draining") catch {
         reportResult("wait_not_draining", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Try waitDrained without calling drain() first
     sub.waitDrained(100) catch |err| {

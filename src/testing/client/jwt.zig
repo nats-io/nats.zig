@@ -28,7 +28,7 @@ pub fn testJwtCredsFile(allocator: std.mem.Allocator) void {
         reportResult("jwt_creds_file", false, detail);
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.isConnected()) {
         reportResult("jwt_creds_file", true, "");
@@ -56,7 +56,7 @@ pub fn testJwtCredsContent(allocator: std.mem.Allocator) void {
         reportResult("jwt_creds_content", false, detail);
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.isConnected()) {
         reportResult("jwt_creds_content", true, "");
@@ -82,21 +82,21 @@ pub fn testJwtPubSub(allocator: std.mem.Allocator) void {
         reportResult("jwt_pub_sub", false, detail);
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "jwt.test.subject") catch {
+    const sub = client.subscribe("jwt.test.subject") catch {
         reportResult("jwt_pub_sub", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish("jwt.test.subject", "jwt message") catch {
         reportResult("jwt_pub_sub", false, "publish failed");
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
-        m.deinit(allocator);
+    if (sub.nextWithTimeout(1000) catch null) |m| {
+        m.deinit();
         reportResult("jwt_pub_sub", true, "");
     } else {
         reportResult("jwt_pub_sub", false, "no message");
@@ -126,7 +126,7 @@ pub fn testJwtInvalidCreds(allocator: std.mem.Allocator) void {
     });
 
     if (result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("jwt_invalid_creds", false, "should have failed");
     } else |_| {
         reportResult("jwt_invalid_creds", true, "");
@@ -148,7 +148,7 @@ pub fn testJwtMalformedCreds(allocator: std.mem.Allocator) void {
     });
 
     if (result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("jwt_malformed_creds", false, "should have failed");
     } else |_| {
         reportResult("jwt_malformed_creds", true, "");
@@ -168,7 +168,7 @@ pub fn testJwtMissingFile(allocator: std.mem.Allocator) void {
     });
 
     if (result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("jwt_missing_file", false, "should have failed");
     } else |_| {
         reportResult("jwt_missing_file", true, "");

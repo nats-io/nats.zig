@@ -52,17 +52,9 @@ fn alertFn(msg: *const nats.Message) void {
     );
 }
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var threaded: std.Io.Threaded = .init(
-        allocator,
-        .{ .environ = .empty },
-    );
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     const client = try nats.Client.connect(
         allocator,
@@ -70,7 +62,7 @@ pub fn main() !void {
         "nats://localhost:4222",
         .{ .name = "callback-example" },
     );
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     std.debug.print("Connected to NATS!\n\n", .{});
 
@@ -79,19 +71,17 @@ pub fn main() !void {
     var handler = MyHandler{ .app = &app };
 
     const sub1 = try client.subscribeWithCallback(
-        allocator,
         "demo.handler",
         nats.MsgHandler.init(MyHandler, &handler),
     );
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
     // 2. Plain fn callback subscription
     const sub2 = try client.subscribeWithCallbackFn(
-        allocator,
         "demo.alert",
         alertFn,
     );
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
     std.debug.print("Subscribed with callbacks.\n", .{});
     std.debug.print(

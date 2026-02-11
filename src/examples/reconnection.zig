@@ -18,16 +18,9 @@
 const std = @import("std");
 const nats = @import("nats");
 
-const Io = std.Io;
-
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     std.debug.print("Connecting with reconnection enabled...\n", .{});
 
@@ -54,14 +47,14 @@ pub fn main() !void {
             .pending_buffer_size = 8 * 1024 * 1024,
         },
     );
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     std.debug.print("Connected!\n", .{});
     printConnectionInfo(client);
 
     // Subscribe
-    const sub = try client.subscribe(allocator, "demo.reconnect");
-    defer sub.deinit(allocator);
+    const sub = try client.subscribe("demo.reconnect");
+    defer sub.deinit();
 
     std.debug.print("\nSubscribed to 'demo.reconnect'\n", .{});
     std.debug.print("Monitoring connection for 10 seconds...\n", .{});
@@ -96,7 +89,7 @@ pub fn main() !void {
 
         // Try to receive any messages
         while (sub.tryNext()) |recv_msg| {
-            defer recv_msg.deinit(allocator);
+            defer recv_msg.deinit();
             std.debug.print("      Received: {s}\n", .{recv_msg.data});
         }
 

@@ -25,7 +25,7 @@ pub fn main(init: std.process.Init) !void {
         return err;
     };
 
-    try runBenchmark(allocator, config);
+    try runBenchmark(init.io, allocator, config);
 }
 
 fn parseArgs(init: std.process.Init) !BenchConfig {
@@ -66,16 +66,13 @@ fn parseArgs(init: std.process.Init) !BenchConfig {
     return config;
 }
 
-fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
+fn runBenchmark(
+    io: std.Io,
+    allocator: Allocator,
+    config: BenchConfig,
+) !void {
     assert(config.subject.len > 0);
     assert(config.msgs > 0);
-
-    var threaded: std.Io.Threaded = .init(
-        allocator,
-        .{ .environ = .empty },
-    );
-    defer threaded.deinit();
-    const io = threaded.io();
 
     if (bench.TimeOfDay.now(io)) |tod| {
         var buf: [8]u8 = undefined;
@@ -110,7 +107,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         std.debug.print("Failed to connect: {}\n", .{err});
         return err;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const payload = try allocator.alloc(u8, config.size);
     defer allocator.free(payload);
@@ -126,7 +123,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         };
     }
 
-    client.flush(allocator, 50_000_000) catch |err| {
+    client.flush(50_000_000) catch |err| {
         std.debug.print("Flush failed: {}\n", .{err});
         return err;
     };

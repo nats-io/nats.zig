@@ -23,7 +23,7 @@ pub fn testAuthentication(allocator: std.mem.Allocator) void {
         reportResult("authentication", false, "auth connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.isConnected()) {
         reportResult("authentication", true, "");
@@ -42,7 +42,7 @@ pub fn testAuthenticationFailure(allocator: std.mem.Allocator) void {
     const result = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false });
 
     if (result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("auth_failure", false, "should have failed");
     } else |_| {
         reportResult("auth_failure", true, "");
@@ -60,21 +60,21 @@ pub fn testAuthenticatedPubSub(allocator: std.mem.Allocator) void {
         reportResult("auth_pubsub", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "auth.test.subject") catch {
+    const sub = client.subscribe("auth.test.subject") catch {
         reportResult("auth_pubsub", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish("auth.test.subject", "auth message") catch {
         reportResult("auth_pubsub", false, "publish failed");
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
-        m.deinit(allocator);
+    if (sub.nextWithTimeout(1000) catch null) |m| {
+        m.deinit();
         reportResult("auth_pubsub", true, "");
     } else {
         reportResult("auth_pubsub", false, "no message");
@@ -92,11 +92,11 @@ pub fn testEmptyToken(allocator: std.mem.Allocator) void {
 
     if (result) |client| {
         if (client.isConnected()) {
-            client.deinit(allocator);
+            client.deinit();
             reportResult("empty_token", false, "should fail auth");
             return;
         }
-        client.deinit(allocator);
+        client.deinit();
     } else |_| {
         // Expected - auth failed
     }
@@ -115,7 +115,7 @@ pub fn testTokenSpecialChars(allocator: std.mem.Allocator) void {
         reportResult("token_special_chars", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.isConnected()) {
         reportResult("token_special_chars", true, "");
@@ -133,7 +133,7 @@ pub fn testAuthRejectionRecovery(allocator: std.mem.Allocator) void {
 
     const bad_result = nats.Client.connect(allocator, io.io(), bad_url, .{ .reconnect = false });
     if (bad_result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         // If it connected, that's unexpected but not a failure of this test
     } else |_| {
         // Expected - auth failed
@@ -145,7 +145,7 @@ pub fn testAuthRejectionRecovery(allocator: std.mem.Allocator) void {
 
     const good_result = nats.Client.connect(allocator, io.io(), good_url, .{ .reconnect = false });
     if (good_result) |client| {
-        defer client.deinit(allocator);
+        defer client.deinit();
         if (client.isConnected()) {
             reportResult("auth_rejection_recovery", true, "");
             return;
@@ -169,7 +169,7 @@ pub fn testMultipleAuthAttempts(allocator: std.mem.Allocator) void {
     for (0..5) |_| {
         const result = nats.Client.connect(allocator, io.io(), bad_url, .{ .reconnect = false });
         if (result) |client| {
-            client.deinit(allocator);
+            client.deinit();
         } else |_| {
             failures += 1;
         }
@@ -195,7 +195,7 @@ pub fn testAuthRequiredDetection(allocator: std.mem.Allocator) void {
         reportResult("auth_required_detect", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const info = client.getServerInfo();
     if (info == null) {

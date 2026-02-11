@@ -24,7 +24,7 @@ pub fn testConnectionRefused(allocator: std.mem.Allocator) void {
     );
 
     if (result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("connection_refused", false, "expected error");
     } else |_| {
         reportResult("connection_refused", true, "");
@@ -54,7 +54,7 @@ pub fn testConsecutiveConnections(allocator: std.mem.Allocator) void {
             reportResult("consecutive_connections", false, msg);
             return;
         };
-        client.deinit(allocator);
+        client.deinit();
     }
 
     reportResult("consecutive_connections", true, "");
@@ -78,7 +78,7 @@ pub fn testIsConnectedState(allocator: std.mem.Allocator) void {
     };
 
     if (!client.isConnected()) {
-        client.deinit(allocator);
+        client.deinit();
         reportResult(
             "is_connected_state",
             false,
@@ -87,7 +87,7 @@ pub fn testIsConnectedState(allocator: std.mem.Allocator) void {
         return;
     }
 
-    client.deinit(allocator);
+    client.deinit();
     reportResult("is_connected_state", true, "");
 }
 
@@ -110,7 +110,7 @@ pub fn testReconnection(
         reportResult("reconnection", false, "initial connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (!client.isConnected()) {
         reportResult("reconnection", false, "not connected initially");
@@ -150,12 +150,12 @@ pub fn testServerRestartNewConnection(
     };
 
     if (!client1.isConnected()) {
-        client1.deinit(allocator);
+        client1.deinit();
         reportResult("server_restart", false, "not connected");
         return;
     }
 
-    client1.deinit(allocator);
+    client1.deinit();
 
     manager.stopServer(0, io1.io());
     io1.io().sleep(.fromMilliseconds(100), .awake) catch {};
@@ -181,7 +181,7 @@ pub fn testServerRestartNewConnection(
         reportResult("server_restart", false, "reconnect failed");
         return;
     };
-    defer client2.deinit(allocator);
+    defer client2.deinit();
 
     if (client2.isConnected()) {
         reportResult("server_restart", true, "");
@@ -210,7 +210,7 @@ pub fn testConnectionStateAfterOps(allocator: std.mem.Allocator) void {
         reportResult("state_after_ops", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (!client.isConnected()) {
         reportResult("state_after_ops", false, "not connected after connect");
@@ -223,11 +223,11 @@ pub fn testConnectionStateAfterOps(allocator: std.mem.Allocator) void {
         return;
     }
 
-    const sub = client.subscribe(allocator, "state.sub") catch {
+    const sub = client.subscribe("state.sub") catch {
         reportResult("state_after_ops", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     if (!client.isConnected()) {
         reportResult("state_after_ops", false, "not connected after subscribe");
         return;
@@ -262,7 +262,7 @@ pub fn testRapidConnectDisconnect(allocator: std.mem.Allocator) void {
             success += 1;
         }
 
-        client.deinit(allocator);
+        client.deinit();
     }
 
     if (success == CYCLES) {
@@ -299,7 +299,7 @@ pub fn testConnectionOptions(allocator: std.mem.Allocator) void {
         reportResult("connection_options", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (!client.isConnected()) {
         reportResult("connection_options", false, "not connected");
@@ -332,35 +332,35 @@ pub fn testConnectionDrain(allocator: std.mem.Allocator) void {
         reportResult("connection_drain", false, "connect failed");
         return;
     };
+    defer client.deinit();
 
     // Create some subscriptions
-    const sub1 = client.subscribe(allocator, "drain.1") catch {
-        client.deinit(allocator);
+    const sub1 = client.subscribe("drain.1") catch {
         reportResult("connection_drain", false, "sub1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
-    const sub2 = client.subscribe(allocator, "drain.2") catch {
-        client.deinit(allocator);
+    const sub2 = client.subscribe("drain.2") catch {
         reportResult("connection_drain", false, "sub2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
-    _ = client.drain(allocator) catch {
-        client.deinit(allocator);
+    _ = client.drain() catch {
         reportResult("connection_drain", false, "drain failed");
         return;
     };
 
     if (client.isConnected()) {
-        client.deinit(allocator);
-        reportResult("connection_drain", false, "still connected");
+        reportResult(
+            "connection_drain",
+            false,
+            "still connected",
+        );
         return;
     }
 
-    client.deinit(allocator);
     reportResult("connection_drain", true, "");
 }
 
@@ -376,7 +376,7 @@ pub fn testInvalidUrlHandling(allocator: std.mem.Allocator) void {
         .{ .reconnect = false },
     );
     if (empty_result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("invalid_url_handling", false, "empty should fail");
         return;
     } else |_| {}
@@ -388,7 +388,7 @@ pub fn testInvalidUrlHandling(allocator: std.mem.Allocator) void {
         .{ .reconnect = false },
     );
     if (invalid_result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("invalid_url_handling", false, "invalid should fail");
         return;
     } else |_| {}
@@ -413,7 +413,7 @@ pub fn testConnectionStateTransitions(allocator: std.mem.Allocator) void {
         reportResult("connection_state", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (!client.isConnected()) {
         reportResult("connection_state", false, "not connected");
@@ -425,11 +425,11 @@ pub fn testConnectionStateTransitions(allocator: std.mem.Allocator) void {
         return;
     };
 
-    const sub = client.subscribe(allocator, "state.trans") catch {
+    const sub = client.subscribe("state.trans") catch {
         reportResult("connection_state", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     reportResult("connection_state", true, "");
 }
@@ -451,7 +451,7 @@ pub fn testManyClientSubscriptions(allocator: std.mem.Allocator) void {
         reportResult("many_client_subs", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const NUM_SUBS = 100;
     var subs: [NUM_SUBS]?*nats.Subscription =
@@ -459,7 +459,7 @@ pub fn testManyClientSubscriptions(allocator: std.mem.Allocator) void {
     var created: usize = 0;
 
     defer for (&subs) |*s| {
-        if (s.*) |sub| sub.deinit(allocator);
+        if (s.*) |sub| sub.deinit();
     };
 
     for (0..NUM_SUBS) |i| {
@@ -470,7 +470,7 @@ pub fn testManyClientSubscriptions(allocator: std.mem.Allocator) void {
             .{i},
         ) catch continue;
 
-        subs[i] = client.subscribe(allocator, subject) catch {
+        subs[i] = client.subscribe(subject) catch {
             break;
         };
         created += 1;

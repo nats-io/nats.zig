@@ -12,17 +12,9 @@
 const std = @import("std");
 const nats = @import("nats");
 
-const Io = std.Io;
-const Allocator = std.mem.Allocator;
-
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     const client = try nats.Client.connect(
         allocator,
@@ -30,16 +22,16 @@ pub fn main() !void {
         "nats://localhost:4222",
         .{ .name = "graceful-shutdown-example" },
     );
-    // Using drain() for graceful cleanup instead of deinit()
+    defer client.deinit();
 
     std.debug.print("Connected to NATS!\n", .{});
 
     // Create multiple subscriptions
-    const orders = try client.subscribe(allocator, "orders.*");
-    defer orders.deinit(allocator);
+    const orders = try client.subscribe("orders.*");
+    defer orders.deinit();
 
-    const events = try client.subscribe(allocator, "events.>");
-    defer events.deinit(allocator);
+    const events = try client.subscribe("events.>");
+    defer events.deinit();
 
     std.debug.print("Subscriptions active:\n", .{});
     std.debug.print("  - orders.* (sid={d})\n", .{orders.sid});
@@ -64,13 +56,13 @@ pub fn main() !void {
 
     var orders_count: u32 = 0;
     while (orders.tryNext()) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         orders_count += 1;
     }
 
     var events_count: u32 = 0;
     while (events.tryNext()) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         events_count += 1;
     }
 
@@ -101,9 +93,8 @@ pub fn main() !void {
     // 2. Drains any remaining messages from queues (frees memory)
     // 3. Flushes pending writes to server
     // 4. Closes connection and transitions to closed state
-    const drain_result = client.drain(allocator) catch |err| {
+    const drain_result = client.drain() catch |err| {
         std.debug.print("Drain failed: {}\n", .{err});
-        client.deinit(allocator);
         return err;
     };
 
@@ -128,9 +119,6 @@ pub fn main() !void {
     std.debug.print("  Messages received: {d}\n", .{stats.msgs_in});
     std.debug.print("  Bytes sent: {d}\n", .{stats.bytes_out});
     std.debug.print("  Bytes received: {d}\n", .{stats.bytes_in});
-
-    // Now safe to deinit
-    client.deinit(allocator);
 
     std.debug.print("\nGraceful shutdown complete!\n", .{});
 }

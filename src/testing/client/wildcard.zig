@@ -26,21 +26,21 @@ pub fn testWildcardSubscribe(allocator: std.mem.Allocator) void {
         reportResult("wildcard_subscribe", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Test * wildcard
-    const sub1 = client.subscribe(allocator, "wild.*") catch {
+    const sub1 = client.subscribe("wild.*") catch {
         reportResult("wildcard_subscribe", false, "* wildcard failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
     // Test > wildcard
-    const sub2 = client.subscribe(allocator, "wild.>") catch {
+    const sub2 = client.subscribe("wild.>") catch {
         reportResult("wildcard_subscribe", false, "> wildcard failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
     reportResult("wildcard_subscribe", true, "");
 }
@@ -61,21 +61,21 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
         reportResult("wildcard_matching", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Subscribe to foo.*
-    const sub_star = client.subscribe(allocator, "wtest.*") catch {
+    const sub_star = client.subscribe("wtest.*") catch {
         reportResult("wildcard_matching", false, "star sub failed");
         return;
     };
-    defer sub_star.deinit(allocator);
+    defer sub_star.deinit();
 
     // Subscribe to foo.>
-    const sub_gt = client.subscribe(allocator, "wtest.>") catch {
+    const sub_gt = client.subscribe("wtest.>") catch {
         reportResult("wildcard_matching", false, "gt sub failed");
         return;
     };
-    defer sub_gt.deinit(allocator);
+    defer sub_gt.deinit();
 
     // Publish to wtest.bar (matches both)
     client.publish("wtest.bar", "one") catch {
@@ -92,11 +92,11 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
     // star should get 1 message
     var star_count: u32 = 0;
     while (true) {
-        const msg = sub_star.nextWithTimeout(allocator, 200) catch {
+        const msg = sub_star.nextWithTimeout(200) catch {
             break;
         };
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
             star_count += 1;
         } else {
             break;
@@ -106,11 +106,11 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
     // gt should get 2 messages
     var gt_count: u32 = 0;
     while (true) {
-        const msg = sub_gt.nextWithTimeout(allocator, 200) catch {
+        const msg = sub_gt.nextWithTimeout(200) catch {
             break;
         };
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
             gt_count += 1;
         } else {
             break;
@@ -146,33 +146,33 @@ pub fn testWildcardPositions(allocator: std.mem.Allocator) void {
         reportResult("wildcard_positions", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Wildcard at beginning: *.bar
-    const sub1 = client.subscribe(allocator, "*.middle.end") catch {
+    const sub1 = client.subscribe("*.middle.end") catch {
         reportResult("wildcard_positions", false, "sub1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
     // Wildcard in middle: foo.*.baz
-    const sub2 = client.subscribe(allocator, "start.*.end") catch {
+    const sub2 = client.subscribe("start.*.end") catch {
         reportResult("wildcard_positions", false, "sub2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
     // Publish matching messages
     client.publish("foo.middle.end", "msg1") catch {};
     client.publish("start.bar.end", "msg2") catch {};
 
     var count: u32 = 0;
-    if (sub1.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub1.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         count += 1;
     }
-    if (sub2.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub2.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         count += 1;
     }
 
@@ -202,14 +202,14 @@ pub fn testMultipleWildcards(allocator: std.mem.Allocator) void {
         reportResult("multi_wildcards", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Subscribe with multiple * wildcards
-    const sub = client.subscribe(allocator, "mw.*.middle.*") catch {
+    const sub = client.subscribe("mw.*.middle.*") catch {
         reportResult("multi_wildcards", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Publish matching subjects
     client.publish("mw.foo.middle.bar", "hit1") catch {};
@@ -218,9 +218,9 @@ pub fn testMultipleWildcards(allocator: std.mem.Allocator) void {
 
     var count: u32 = 0;
     for (0..4) |_| {
-        const msg = sub.nextWithTimeout(allocator, 200) catch break;
+        const msg = sub.nextWithTimeout(200) catch break;
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
             count += 1;
         } else break;
     }
@@ -250,13 +250,13 @@ pub fn testPublishSubscribe(allocator: std.mem.Allocator) void {
         reportResult("publish_subscribe", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "roundtrip.test") catch {
+    const sub = client.subscribe("roundtrip.test") catch {
         reportResult("publish_subscribe", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish("roundtrip.test", "hello from zig") catch {
         reportResult("publish_subscribe", false, "publish failed");
@@ -264,13 +264,13 @@ pub fn testPublishSubscribe(allocator: std.mem.Allocator) void {
     };
 
     // Receive message
-    const msg = sub.nextWithTimeout(allocator, 1000) catch {
+    const msg = sub.nextWithTimeout(1000) catch {
         reportResult("publish_subscribe", false, "nextWithTimeout failed");
         return;
     };
 
     if (msg) |m| {
-        defer m.deinit(allocator);
+        defer m.deinit();
         if (std.mem.eql(u8, m.subject, "roundtrip.test") and
             std.mem.eql(u8, m.data, "hello from zig"))
         {

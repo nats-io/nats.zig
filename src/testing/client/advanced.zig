@@ -24,7 +24,7 @@ pub fn testCheckCompatibility(allocator: std.mem.Allocator) void {
         reportResult("check_compatibility", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // NATS server should be at least 2.0.0
     if (client.checkCompatibility(2, 0, 0)) {
@@ -53,13 +53,13 @@ pub fn testPublishMsg(allocator: std.mem.Allocator) void {
         reportResult("publish_msg", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub = client.subscribe(allocator, "test.publishmsg") catch {
+    var sub = client.subscribe("test.publishmsg") catch {
         reportResult("publish_msg", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Create a message to republish
     const original = nats.Client.Message{
@@ -76,8 +76,8 @@ pub fn testPublishMsg(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
-        defer msg.deinit(allocator);
+    if (sub.nextWithTimeout(500) catch null) |msg| {
+        defer msg.deinit();
         if (std.mem.eql(u8, msg.data, "republished-data")) {
             reportResult("publish_msg", true, "");
         } else {
@@ -103,11 +103,10 @@ pub fn testNoRespondersStatus(allocator: std.mem.Allocator) void {
         reportResult("no_responders_status", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Request to a subject with no subscribers - should get 503
     const reply = client.request(
-        allocator,
         "nonexistent.subject.xyz",
         "test",
         500,
@@ -117,7 +116,7 @@ pub fn testNoRespondersStatus(allocator: std.mem.Allocator) void {
     };
 
     if (reply) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         // Check status via getStatus()
         const status = msg.getStatus();
         if (status == 503 and msg.isNoResponders()) {
@@ -147,17 +146,17 @@ pub fn testRequestMsg(allocator: std.mem.Allocator) void {
         reportResult("request_msg", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Set up a responder
-    var sub = client.subscribe(allocator, "test.requestmsg") catch {
+    var sub = client.subscribe("test.requestmsg") catch {
         reportResult("request_msg", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Spawn responder task
-    var responder = io.io().async(responderTask, .{ &sub, client, allocator });
+    var responder = io.io().async(responderTask, .{ &sub, client });
     defer responder.cancel(io.io());
 
     // Create message to send as request
@@ -170,13 +169,13 @@ pub fn testRequestMsg(allocator: std.mem.Allocator) void {
         .owned = false,
     };
 
-    const reply = client.requestMsg(allocator, &request_msg, 1000) catch {
+    const reply = client.requestMsg(&request_msg, 1000) catch {
         reportResult("request_msg", false, "requestMsg failed");
         return;
     };
 
     if (reply) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         if (std.mem.eql(u8, msg.data, "response-data")) {
             reportResult("request_msg", true, "");
         } else {
@@ -190,10 +189,9 @@ pub fn testRequestMsg(allocator: std.mem.Allocator) void {
 fn responderTask(
     sub: **nats.Subscription,
     client: *nats.Client,
-    allocator: std.mem.Allocator,
 ) void {
-    if (sub.*.nextWithTimeout(allocator, 500) catch null) |msg| {
-        defer msg.deinit(allocator);
+    if (sub.*.nextWithTimeout(500) catch null) |msg| {
+        defer msg.deinit();
         if (msg.reply_to) |reply_to| {
             client.publish(reply_to, "response-data") catch {};
         }

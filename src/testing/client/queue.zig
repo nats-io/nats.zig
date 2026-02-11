@@ -21,14 +21,14 @@ pub fn testQueueGroups(allocator: std.mem.Allocator) void {
         reportResult("queue_groups", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const queue = "workers";
-    const sub = client.subscribeQueue(allocator, "queue.test", queue) catch {
+    const sub = client.subscribeQueue("queue.test", queue) catch {
         reportResult("queue_groups", false, "queue subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     if (sub.sid == 0) {
         reportResult("queue_groups", false, "invalid queue sid");
@@ -49,25 +49,25 @@ pub fn testQueueGroupDistribution(allocator: std.mem.Allocator) void {
         reportResult("queue_group_distribution", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub1 = client.subscribeQueue(allocator, "qdist.test", "workers") catch {
+    const sub1 = client.subscribeQueue("qdist.test", "workers") catch {
         reportResult("queue_group_distribution", false, "sub1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
-    const sub2 = client.subscribeQueue(allocator, "qdist.test", "workers") catch {
+    const sub2 = client.subscribeQueue("qdist.test", "workers") catch {
         reportResult("queue_group_distribution", false, "sub2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
-    const sub3 = client.subscribeQueue(allocator, "qdist.test", "workers") catch {
+    const sub3 = client.subscribeQueue("qdist.test", "workers") catch {
         reportResult("queue_group_distribution", false, "sub3 failed");
         return;
     };
-    defer sub3.deinit(allocator);
+    defer sub3.deinit();
 
     for (0..30) |_| {
         client.publish("qdist.test", "work") catch {
@@ -83,31 +83,31 @@ pub fn testQueueGroupDistribution(allocator: std.mem.Allocator) void {
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
     while (true) {
-        const msg = sub1.nextWithTimeout(allocator, 50) catch {
+        const msg = sub1.nextWithTimeout(50) catch {
             break;
         };
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
             count1 += 1;
         } else break;
     }
 
     while (true) {
-        const msg = sub2.nextWithTimeout(allocator, 50) catch {
+        const msg = sub2.nextWithTimeout(50) catch {
             break;
         };
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
             count2 += 1;
         } else break;
     }
 
     while (true) {
-        const msg = sub3.nextWithTimeout(allocator, 50) catch {
+        const msg = sub3.nextWithTimeout(50) catch {
             break;
         };
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
             count3 += 1;
         } else break;
     }
@@ -137,7 +137,7 @@ pub fn testQueueGroupMultipleClients(allocator: std.mem.Allocator) void {
         reportResult("queue_multi_client", false, "A connect failed");
         return;
     };
-    defer client_a.deinit(allocator);
+    defer client_a.deinit();
 
     var io_b: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_b.deinit();
@@ -145,7 +145,7 @@ pub fn testQueueGroupMultipleClients(allocator: std.mem.Allocator) void {
         reportResult("queue_multi_client", false, "B connect failed");
         return;
     };
-    defer client_b.deinit(allocator);
+    defer client_b.deinit();
 
     var io_c: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_c.deinit();
@@ -153,27 +153,25 @@ pub fn testQueueGroupMultipleClients(allocator: std.mem.Allocator) void {
         reportResult("queue_multi_client", false, "C connect failed");
         return;
     };
-    defer client_c.deinit(allocator);
+    defer client_c.deinit();
 
     const sub_a = client_a.subscribeQueue(
-        allocator,
         "qmc.test",
         "workers",
     ) catch {
         reportResult("queue_multi_client", false, "A sub failed");
         return;
     };
-    defer sub_a.deinit(allocator);
+    defer sub_a.deinit();
 
     const sub_b = client_b.subscribeQueue(
-        allocator,
         "qmc.test",
         "workers",
     ) catch {
         reportResult("queue_multi_client", false, "B sub failed");
         return;
     };
-    defer sub_b.deinit(allocator);
+    defer sub_b.deinit();
 
     io_a.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
@@ -188,14 +186,14 @@ pub fn testQueueGroupMultipleClients(allocator: std.mem.Allocator) void {
     var count_b: u32 = 0;
 
     for (0..20) |_| {
-        if (sub_a.nextWithTimeout(allocator, 100) catch null) |m| {
-            m.deinit(allocator);
+        if (sub_a.nextWithTimeout(100) catch null) |m| {
+            m.deinit();
             count_a += 1;
         }
     }
     for (0..20) |_| {
-        if (sub_b.nextWithTimeout(allocator, 100) catch null) |m| {
-            m.deinit(allocator);
+        if (sub_b.nextWithTimeout(100) catch null) |m| {
+            m.deinit();
             count_b += 1;
         }
     }
@@ -224,13 +222,13 @@ pub fn testQueueGroupSingleReceiver(allocator: std.mem.Allocator) void {
         reportResult("queue_single_recv", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribeQueue(allocator, "qsingle.test", "solo") catch {
+    const sub = client.subscribeQueue("qsingle.test", "solo") catch {
         reportResult("queue_single_recv", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     for (0..10) |_| {
         client.publish("qsingle.test", "msg") catch {};
@@ -238,9 +236,9 @@ pub fn testQueueGroupSingleReceiver(allocator: std.mem.Allocator) void {
 
     var count: u32 = 0;
     for (0..15) |_| {
-        const msg = sub.nextWithTimeout(allocator, 200) catch break;
+        const msg = sub.nextWithTimeout(200) catch break;
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
             count += 1;
         } else break;
     }
@@ -265,13 +263,13 @@ pub fn testQueueWithWildcard(allocator: std.mem.Allocator) void {
         reportResult("queue_wildcard", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribeQueue(allocator, "qw.>", "workers") catch {
+    const sub = client.subscribeQueue("qw.>", "workers") catch {
         reportResult("queue_wildcard", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish("qw.foo", "one") catch {};
     client.publish("qw.bar", "two") catch {};
@@ -279,9 +277,9 @@ pub fn testQueueWithWildcard(allocator: std.mem.Allocator) void {
 
     var count: u32 = 0;
     for (0..5) |_| {
-        const msg = sub.nextWithTimeout(allocator, 200) catch break;
+        const msg = sub.nextWithTimeout(200) catch break;
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
             count += 1;
         } else break;
     }
@@ -306,19 +304,19 @@ pub fn testMultipleQueueGroups(allocator: std.mem.Allocator) void {
         reportResult("multi_queue_groups", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub_a = client.subscribeQueue(allocator, "mqg.test", "group-A") catch {
+    const sub_a = client.subscribeQueue("mqg.test", "group-A") catch {
         reportResult("multi_queue_groups", false, "sub A failed");
         return;
     };
-    defer sub_a.deinit(allocator);
+    defer sub_a.deinit();
 
-    const sub_b = client.subscribeQueue(allocator, "mqg.test", "group-B") catch {
+    const sub_b = client.subscribeQueue("mqg.test", "group-B") catch {
         reportResult("multi_queue_groups", false, "sub B failed");
         return;
     };
-    defer sub_b.deinit(allocator);
+    defer sub_b.deinit();
 
     client.publish("mqg.test", "hello") catch {
         reportResult("multi_queue_groups", false, "publish failed");
@@ -326,12 +324,12 @@ pub fn testMultipleQueueGroups(allocator: std.mem.Allocator) void {
     };
 
     var count: u32 = 0;
-    if (sub_a.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub_a.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         count += 1;
     }
-    if (sub_b.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub_b.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         count += 1;
     }
 
@@ -356,7 +354,7 @@ pub fn testFourClientQueueGroup(allocator: std.mem.Allocator) void {
 
     var clients: [5]?*nats.Client = .{ null, null, null, null, null };
     defer for (&clients) |*c| {
-        if (c.*) |client| client.deinit(allocator);
+        if (c.*) |client| client.deinit();
     };
 
     for (&clients, 0..) |*c, i| {
@@ -368,12 +366,11 @@ pub fn testFourClientQueueGroup(allocator: std.mem.Allocator) void {
 
     var subs: [4]?*nats.Subscription = .{ null, null, null, null };
     defer for (&subs) |*s| {
-        if (s.*) |sub| sub.deinit(allocator);
+        if (s.*) |sub| sub.deinit();
     };
 
     for (0..4) |i| {
         subs[i] = clients[i].?.subscribeQueue(
-            allocator,
             "fourq.test",
             "workers",
         ) catch {
@@ -392,11 +389,10 @@ pub fn testFourClientQueueGroup(allocator: std.mem.Allocator) void {
     for (0..4) |i| {
         for (0..40) |_| {
             const msg = subs[i].?.nextWithTimeout(
-                allocator,
                 100,
             ) catch break;
             if (msg) |m| {
-                m.deinit(allocator);
+                m.deinit();
                 counts[i] += 1;
             } else break;
         }
@@ -427,23 +423,23 @@ pub fn testQueueMemberJoinsMidStream(allocator: std.mem.Allocator) void {
         reportResult("queue_join_midstream", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub1 = client.subscribeQueue(allocator, "qjoin.test", "workers") catch {
+    const sub1 = client.subscribeQueue("qjoin.test", "workers") catch {
         reportResult("queue_join_midstream", false, "sub1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
     for (0..10) |_| {
         client.publish("qjoin.test", "msg") catch {};
     }
 
-    const sub2 = client.subscribeQueue(allocator, "qjoin.test", "workers") catch {
+    const sub2 = client.subscribeQueue("qjoin.test", "workers") catch {
         reportResult("queue_join_midstream", false, "sub2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
     for (0..10) |_| {
         client.publish("qjoin.test", "msg") catch {};
@@ -453,14 +449,14 @@ pub fn testQueueMemberJoinsMidStream(allocator: std.mem.Allocator) void {
     var count2: u32 = 0;
 
     for (0..20) |_| {
-        if (sub1.nextWithTimeout(allocator, 100) catch null) |m| {
-            m.deinit(allocator);
+        if (sub1.nextWithTimeout(100) catch null) |m| {
+            m.deinit();
             count1 += 1;
         }
     }
     for (0..20) |_| {
-        if (sub2.nextWithTimeout(allocator, 100) catch null) |m| {
-            m.deinit(allocator);
+        if (sub2.nextWithTimeout(100) catch null) |m| {
+            m.deinit();
             count2 += 1;
         }
     }
@@ -493,19 +489,19 @@ pub fn testQueueMemberLeaves(allocator: std.mem.Allocator) void {
         reportResult("queue_member_leaves", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub1 = client.subscribeQueue(allocator, "qleave.test", "workers") catch {
+    const sub1 = client.subscribeQueue("qleave.test", "workers") catch {
         reportResult("queue_member_leaves", false, "sub1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
-    const sub2 = client.subscribeQueue(allocator, "qleave.test", "workers") catch {
+    const sub2 = client.subscribeQueue("qleave.test", "workers") catch {
         reportResult("queue_member_leaves", false, "sub2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
@@ -521,8 +517,8 @@ pub fn testQueueMemberLeaves(allocator: std.mem.Allocator) void {
 
     var count2: u32 = 0;
     for (0..25) |_| {
-        if (sub2.nextWithTimeout(allocator, 100) catch null) |m| {
-            m.deinit(allocator);
+        if (sub2.nextWithTimeout(100) catch null) |m| {
+            m.deinit();
             count2 += 1;
         }
     }
@@ -547,19 +543,18 @@ pub fn testLargeQueueGroup(allocator: std.mem.Allocator) void {
         reportResult("large_queue_group", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const NUM_SUBS = 20;
     var subs: [NUM_SUBS]?*nats.Subscription = [_]?*nats.Subscription{null} ** NUM_SUBS;
     var created: usize = 0;
 
     defer for (&subs) |*s| {
-        if (s.*) |sub| sub.deinit(allocator);
+        if (s.*) |sub| sub.deinit();
     };
 
     for (0..NUM_SUBS) |i| {
         subs[i] = client.subscribeQueue(
-            allocator,
             "lqg.test",
             "big-workers",
         ) catch {
@@ -586,8 +581,8 @@ pub fn testLargeQueueGroup(allocator: std.mem.Allocator) void {
     for (0..NUM_SUBS) |i| {
         if (subs[i]) |sub| {
             for (0..NUM_MSGS) |_| {
-                if (sub.nextWithTimeout(allocator, 50) catch null) |m| {
-                    m.deinit(allocator);
+                if (sub.nextWithTimeout(50) catch null) |m| {
+                    m.deinit();
                     total += 1;
                 } else break;
             }
@@ -614,25 +609,25 @@ pub fn testQueueGroupNameValidation(allocator: std.mem.Allocator) void {
         reportResult("queue_name_validation", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub1 = client.subscribeQueue(allocator, "qn.test1", "workers-1") catch {
+    const sub1 = client.subscribeQueue("qn.test1", "workers-1") catch {
         reportResult("queue_name_validation", false, "workers-1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
-    const sub2 = client.subscribeQueue(allocator, "qn.test2", "workers_2") catch {
+    const sub2 = client.subscribeQueue("qn.test2", "workers_2") catch {
         reportResult("queue_name_validation", false, "workers_2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
-    const sub3 = client.subscribeQueue(allocator, "qn.test3", "WorkersABC") catch {
+    const sub3 = client.subscribeQueue("qn.test3", "WorkersABC") catch {
         reportResult("queue_name_validation", false, "WorkersABC failed");
         return;
     };
-    defer sub3.deinit(allocator);
+    defer sub3.deinit();
 
     if (client.isConnected()) {
         reportResult("queue_name_validation", true, "");
@@ -652,17 +647,17 @@ pub fn testQueueGroupFairness(allocator: std.mem.Allocator) void {
         reportResult("queue_fairness", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const NUM_SUBS = 5;
     var subs: [NUM_SUBS]?*nats.Subscription = [_]?*nats.Subscription{null} ** NUM_SUBS;
 
     defer for (&subs) |*s| {
-        if (s.*) |sub| sub.deinit(allocator);
+        if (s.*) |sub| sub.deinit();
     };
 
     for (0..NUM_SUBS) |i| {
-        subs[i] = client.subscribeQueue(allocator, "qfair.test", "fairness") catch {
+        subs[i] = client.subscribeQueue("qfair.test", "fairness") catch {
             reportResult("queue_fairness", false, "subscribe failed");
             return;
         };
@@ -679,8 +674,8 @@ pub fn testQueueGroupFairness(allocator: std.mem.Allocator) void {
     for (0..NUM_SUBS) |i| {
         if (subs[i]) |sub| {
             for (0..NUM_MSGS) |_| {
-                if (sub.nextWithTimeout(allocator, 50) catch null) |m| {
-                    m.deinit(allocator);
+                if (sub.nextWithTimeout(50) catch null) |m| {
+                    m.deinit();
                     counts[i] += 1;
                 } else break;
             }

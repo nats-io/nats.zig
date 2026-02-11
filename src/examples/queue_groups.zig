@@ -15,15 +15,14 @@ const std = @import("std");
 const nats = @import("nats");
 
 const Io = std.Io;
-const Allocator = std.mem.Allocator;
 
 const WorkerResult = struct {
     worker_id: u8,
     data: []const u8,
     msg: nats.Message,
 
-    fn deinit(self: WorkerResult, allocator: Allocator) void {
-        self.msg.deinit(allocator);
+    fn deinit(self: WorkerResult) void {
+        self.msg.deinit();
     }
 };
 
@@ -31,31 +30,25 @@ fn workerTask(
     io: Io,
     worker_id: u8,
     sub: *nats.Client.Sub,
-    allocator: Allocator,
     queue: *Io.Queue(WorkerResult),
     done: *std.atomic.Value(bool),
 ) void {
     while (!done.load(.acquire)) {
-        const msg = sub.nextWithTimeout(allocator, 100) catch return orelse continue;
+        const msg = sub.nextWithTimeout(100) catch return orelse continue;
         queue.putOne(io, .{
             .worker_id = worker_id,
             .data = msg.data,
             .msg = msg,
         }) catch {
-            msg.deinit(allocator);
+            msg.deinit();
             return;
         };
     }
 }
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     const client = try nats.Client.connect(
         allocator,
@@ -63,19 +56,19 @@ pub fn main() !void {
         "nats://localhost:4222",
         .{ .name = "queue-groups-example" },
     );
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     std.debug.print("Connected to NATS!\n", .{});
 
     // Create 3 workers in queue group
-    const worker1 = try client.subscribeQueue(allocator, "tasks", "workers");
-    defer worker1.deinit(allocator);
+    const worker1 = try client.subscribeQueue("tasks", "workers");
+    defer worker1.deinit();
 
-    const worker2 = try client.subscribeQueue(allocator, "tasks", "workers");
-    defer worker2.deinit(allocator);
+    const worker2 = try client.subscribeQueue("tasks", "workers");
+    defer worker2.deinit();
 
-    const worker3 = try client.subscribeQueue(allocator, "tasks", "workers");
-    defer worker3.deinit(allocator);
+    const worker3 = try client.subscribeQueue("tasks", "workers");
+    defer worker3.deinit();
 
     std.debug.print("Created 3 workers in queue group 'workers'\n", .{});
 
@@ -86,17 +79,17 @@ pub fn main() !void {
 
     // Launch workers in TRUE parallel threads (return void, so no catch)
     var w1 = try io.concurrent(workerTask, .{
-        io, 1, worker1, allocator, &queue, &done,
+        io, 1, worker1, &queue, &done,
     });
     defer w1.cancel(io);
 
     var w2 = try io.concurrent(workerTask, .{
-        io, 2, worker2, allocator, &queue, &done,
+        io, 2, worker2, &queue, &done,
     });
     defer w2.cancel(io);
 
     var w3 = try io.concurrent(workerTask, .{
-        io, 3, worker3, allocator, &queue, &done,
+        io, 3, worker3, &queue, &done,
     });
     defer w3.cancel(io);
 
@@ -118,7 +111,7 @@ pub fn main() !void {
 
     while (total_received < message_count) {
         const result = queue.getOne(io) catch break;
-        defer result.deinit(allocator);
+        defer result.deinit();
         counts[result.worker_id - 1] += 1;
         total_received += 1;
         std.debug.print(

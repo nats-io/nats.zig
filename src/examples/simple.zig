@@ -14,11 +14,7 @@ const nats = @import("nats");
 /// Init provides: gpa (allocator), io (async I/O), arena, args, environ.
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
-
-    // Create async I/O runtime (same pattern as bench tools)
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = init.io;
 
     // Connect to NATS server
     const client = try nats.Client.connect(
@@ -27,20 +23,20 @@ pub fn main(init: std.process.Init) !void {
         "nats://localhost:4222",
         .{},
     );
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     std.debug.print("Connected to NATS!\n", .{});
 
     // Subscribe to a subject
-    const sub = try client.subscribe(allocator, "hello");
-    defer sub.deinit(allocator);
+    const sub = try client.subscribe("hello");
+    defer sub.deinit();
 
     // Publish a message
     try client.publish("hello", "Hello, NATS!");
 
     // Receive the message
-    if (try sub.nextWithTimeout(allocator, 1000)) |msg| {
-        defer msg.deinit(allocator);
+    if (try sub.nextWithTimeout(1000)) |msg| {
+        defer msg.deinit();
         std.debug.print("Received: {s}\n", .{msg.data});
     }
 

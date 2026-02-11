@@ -24,13 +24,7 @@ const nats = @import("nats");
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
-    // Initialize async I/O runtime
-    var threaded: std.Io.Threaded = .init(
-        allocator,
-        .{ .environ = .empty },
-    );
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = init.io;
 
     // Set up buffered stdout writer for output
     var stdout_buf: [4096]u8 = undefined;
@@ -47,7 +41,7 @@ pub fn main(init: std.process.Init) !void {
         "nats://localhost:4222",
         .{},
     );
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Publish a message BEFORE subscribing.
     // This message will be lost because NATS provides
@@ -58,13 +52,13 @@ pub fn main(init: std.process.Init) !void {
     // Subscribe using a wildcard subject. "greet.*" will
     // match any subject with exactly one token after "greet.",
     // for example: "greet.joe", "greet.pam", "greet.bob"
-    const sub = try client.subscribe(allocator, "greet.*");
-    defer sub.deinit(allocator);
+    const sub = try client.subscribe("greet.*");
+    defer sub.deinit();
 
     // Try to receive the message published before subscribing.
     // The short timeout (10ms) confirms no message is available -
     // it was published before our subscription existed.
-    const msg = try sub.nextWithTimeout(allocator, 10);
+    const msg = try sub.nextWithTimeout(10);
     try stdout.print("subscribed after a publish...\n", .{});
     try stdout.print("msg is null? {}\n", .{msg == null});
     try stdout.flush();
@@ -76,15 +70,15 @@ pub fn main(init: std.process.Init) !void {
 
     // Receive both messages. The wildcard subscription
     // matches both "greet.joe" and "greet.pam".
-    if (try sub.nextWithTimeout(allocator, 1000)) |m| {
-        defer m.deinit(allocator);
+    if (try sub.nextWithTimeout(1000)) |m| {
+        defer m.deinit();
         try stdout.print(
             "msg data: \"{s}\" on subject \"{s}\"\n",
             .{ m.data, m.subject },
         );
     }
-    if (try sub.nextWithTimeout(allocator, 1000)) |m| {
-        defer m.deinit(allocator);
+    if (try sub.nextWithTimeout(1000)) |m| {
+        defer m.deinit();
         try stdout.print(
             "msg data: \"{s}\" on subject \"{s}\"\n",
             .{ m.data, m.subject },
@@ -95,8 +89,8 @@ pub fn main(init: std.process.Init) !void {
     // matches our wildcard pattern.
     try client.publish("greet.bob", "hello");
 
-    if (try sub.nextWithTimeout(allocator, 1000)) |m| {
-        defer m.deinit(allocator);
+    if (try sub.nextWithTimeout(1000)) |m| {
+        defer m.deinit();
         try stdout.print(
             "msg data: \"{s}\" on subject \"{s}\"\n",
             .{ m.data, m.subject },

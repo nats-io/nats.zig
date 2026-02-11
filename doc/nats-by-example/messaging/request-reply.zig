@@ -24,12 +24,7 @@ const nats = @import("nats");
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
-    var threaded: std.Io.Threaded = .init(
-        allocator,
-        .{ .environ = .empty },
-    );
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = init.io;
 
     var stdout_buf: [4096]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(
@@ -45,20 +40,19 @@ pub fn main(init: std.process.Init) !void {
         "nats://localhost:4222",
         .{},
     );
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Subscribe to "greet.*" to handle incoming requests.
     // The handler extracts the name from the subject and
     // responds with a greeting.
-    const sub = try client.subscribe(allocator, "greet.*");
-    defer sub.deinit(allocator);
+    const sub = try client.subscribe("greet.*");
+    defer sub.deinit();
 
     // Run the request handler in a background async task.
     // It will process exactly 3 requests then exit.
     var handler = io.async(handleRequests, .{
         client,
         sub,
-        allocator,
     });
     defer handler.cancel(io);
 
@@ -68,12 +62,11 @@ pub fn main(init: std.process.Init) !void {
     // Send 3 requests - each will be handled by our
     // background task and we'll get a personalized greeting.
     if (try client.request(
-        allocator,
         "greet.joe",
         "",
         1000,
     )) |reply| {
-        defer reply.deinit(allocator);
+        defer reply.deinit();
         if (reply.isNoResponders()) {
             try stdout.print("no responders\n", .{});
         } else {
@@ -82,12 +75,11 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (try client.request(
-        allocator,
         "greet.sue",
         "",
         1000,
     )) |reply| {
-        defer reply.deinit(allocator);
+        defer reply.deinit();
         if (reply.isNoResponders()) {
             try stdout.print("no responders\n", .{});
         } else {
@@ -96,12 +88,11 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (try client.request(
-        allocator,
         "greet.bob",
         "",
         1000,
     )) |reply| {
-        defer reply.deinit(allocator);
+        defer reply.deinit();
         if (reply.isNoResponders()) {
             try stdout.print("no responders\n", .{});
         } else {
@@ -115,12 +106,11 @@ pub fn main(init: std.process.Init) !void {
     // This request will fail with "no responders" because
     // we just unsubscribed the only handler.
     if (try client.request(
-        allocator,
         "greet.joe",
         "",
         1000,
     )) |reply| {
-        defer reply.deinit(allocator);
+        defer reply.deinit();
         if (reply.isNoResponders()) {
             try stdout.print("no responders\n", .{});
         } else {
@@ -137,15 +127,13 @@ pub fn main(init: std.process.Init) !void {
 fn handleRequests(
     client: *nats.Client,
     sub: *nats.Client.Sub,
-    allocator: std.mem.Allocator,
 ) void {
     for (0..3) |_| {
         const req = sub.nextWithTimeout(
-            allocator,
             2000,
         ) catch return;
         if (req) |r| {
-            defer r.deinit(allocator);
+            defer r.deinit();
             // "greet.joe" -> "joe"
             const name = r.subject[6..];
             var buf: [64]u8 = undefined;

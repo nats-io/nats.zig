@@ -31,7 +31,7 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
         reportResult("concurrent_subscribe", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const NUM_SUBS = 10;
     var subs: [NUM_SUBS]?*nats.Subscription =
@@ -39,7 +39,7 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
     var created: u32 = 0;
 
     defer for (&subs) |*s| {
-        if (s.*) |sub| sub.deinit(allocator);
+        if (s.*) |sub| sub.deinit();
     };
 
     for (0..NUM_SUBS) |i| {
@@ -50,7 +50,7 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
             .{i},
         ) catch continue;
 
-        subs[i] = client.subscribe(allocator, subject) catch {
+        subs[i] = client.subscribe(subject) catch {
             continue;
         };
         created += 1;
@@ -107,13 +107,13 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
         reportResult("rapid_publish", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "rapid.publish") catch {
+    const sub = client.subscribe("rapid.publish") catch {
         reportResult("rapid_publish", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const NUM_MSGS = 100;
     var published: u32 = 0;
@@ -124,7 +124,7 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
         published += 1;
     }
 
-    client.flush(allocator, 500_000_000) catch {};
+    client.flush(500_000_000) catch {};
 
     if (published != NUM_MSGS) {
         var buf: [32]u8 = undefined;
@@ -139,8 +139,8 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..NUM_MSGS) |_| {
-        if (sub.nextWithTimeout(allocator, 100) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(100) catch null) |m| {
+            m.deinit();
             received += 1;
         } else break;
     }
@@ -174,7 +174,7 @@ pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
         reportResult("concurrent_sub_unsub", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const CYCLES = 20;
     var current_sub: ?*nats.Subscription = null;
@@ -182,7 +182,7 @@ pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
     for (0..CYCLES) |i| {
         if (current_sub) |sub| {
             sub.unsubscribe() catch {};
-            sub.deinit(allocator);
+            sub.deinit();
             current_sub = null;
         }
 
@@ -193,14 +193,14 @@ pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
             .{i},
         ) catch continue;
 
-        current_sub = client.subscribe(allocator, subject) catch {
+        current_sub = client.subscribe(subject) catch {
             reportResult("concurrent_sub_unsub", false, "subscribe failed");
             return;
         };
     }
 
     if (current_sub) |sub| {
-        sub.deinit(allocator);
+        sub.deinit();
     }
 
     if (client.isConnected()) {
@@ -226,7 +226,7 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
         reportResult("race_sub_delivery", false, "pub connect failed");
         return;
     };
-    defer publisher.deinit(allocator);
+    defer publisher.deinit();
 
     const subscriber = nats.Client.connect(
         allocator,
@@ -237,13 +237,13 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
         reportResult("race_sub_delivery", false, "sub connect failed");
         return;
     };
-    defer subscriber.deinit(allocator);
+    defer subscriber.deinit();
 
-    const sub = subscriber.subscribe(allocator, "race.delivery") catch {
+    const sub = subscriber.subscribe("race.delivery") catch {
         reportResult("race_sub_delivery", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     publisher.publish("race.delivery", "race-msg-1") catch {
         reportResult("race_sub_delivery", false, "publish1 failed");
@@ -258,8 +258,8 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..2) |_| {
-        if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(500) catch null) |m| {
+            m.deinit();
             received += 1;
         }
     }
@@ -285,13 +285,13 @@ pub fn testRaceUnsubscribeVsDelivery(allocator: std.mem.Allocator) void {
         reportResult("race_unsub_delivery", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "race.unsub") catch {
+    const sub = client.subscribe("race.unsub") catch {
         reportResult("race_unsub_delivery", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     for (0..50) |_| {
         client.publish("race.unsub", "msg") catch {};
@@ -326,7 +326,7 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
         reportResult("sid_allocation_recycle", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var seen_sids: [100]u64 = undefined;
     var seen_count: usize = 0;
@@ -339,7 +339,7 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
             .{i},
         ) catch continue;
 
-        const sub = client.subscribe(allocator, subject) catch {
+        const sub = client.subscribe(subject) catch {
             reportResult("sid_allocation_recycle", false, "subscribe failed");
             return;
         };
@@ -348,7 +348,7 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
             for (seen_sids[0..seen_count]) |prev_sid| {
                 if (prev_sid == sub.sid) {
                     reportResult("sid_allocation_recycle", false, "SID reused");
-                    sub.deinit(allocator);
+                    sub.deinit();
                     return;
                 }
             }
@@ -356,7 +356,7 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
             seen_count += 1;
         }
 
-        sub.deinit(allocator);
+        sub.deinit();
     }
 
     for (1..seen_count) |i| {
@@ -389,7 +389,7 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
         reportResult("multi_client_shared_io", false, "client1 failed");
         return;
     };
-    defer client1.deinit(allocator);
+    defer client1.deinit();
 
     const client2 = nats.Client.connect(
         allocator,
@@ -400,7 +400,7 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
         reportResult("multi_client_shared_io", false, "client2 failed");
         return;
     };
-    defer client2.deinit(allocator);
+    defer client2.deinit();
 
     const client3 = nats.Client.connect(
         allocator,
@@ -411,13 +411,13 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
         reportResult("multi_client_shared_io", false, "client3 failed");
         return;
     };
-    defer client3.deinit(allocator);
+    defer client3.deinit();
 
-    const sub = client1.subscribe(allocator, "shared.io.test") catch {
+    const sub = client1.subscribe("shared.io.test") catch {
         reportResult("multi_client_shared_io", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
@@ -432,8 +432,8 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..2) |_| {
-        if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(500) catch null) |m| {
+            m.deinit();
             received += 1;
         }
     }
@@ -463,46 +463,46 @@ pub fn testParallelReceive(allocator: std.mem.Allocator) void {
         reportResult("parallel_recv", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub1 = client.subscribe(allocator, "parallel.1") catch {
+    const sub1 = client.subscribe("parallel.1") catch {
         reportResult("parallel_recv", false, "sub1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
-    const sub2 = client.subscribe(allocator, "parallel.2") catch {
+    const sub2 = client.subscribe("parallel.2") catch {
         reportResult("parallel_recv", false, "sub2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
-    const sub3 = client.subscribe(allocator, "parallel.3") catch {
+    const sub3 = client.subscribe("parallel.3") catch {
         reportResult("parallel_recv", false, "sub3 failed");
         return;
     };
-    defer sub3.deinit(allocator);
+    defer sub3.deinit();
 
     client.publish("parallel.1", "msg1") catch {};
     client.publish("parallel.2", "msg2") catch {};
     client.publish("parallel.3", "msg3") catch {};
 
-    client.flush(allocator, 500_000_000) catch {};
+    client.flush(500_000_000) catch {};
 
     var received: u32 = 0;
 
-    if (sub1.nextWithTimeout(allocator, 1000) catch null) |m| {
-        m.deinit(allocator);
+    if (sub1.nextWithTimeout(1000) catch null) |m| {
+        m.deinit();
         received += 1;
     }
 
-    if (sub2.nextWithTimeout(allocator, 1000) catch null) |m| {
-        m.deinit(allocator);
+    if (sub2.nextWithTimeout(1000) catch null) |m| {
+        m.deinit();
         received += 1;
     }
 
-    if (sub3.nextWithTimeout(allocator, 1000) catch null) |m| {
-        m.deinit(allocator);
+    if (sub3.nextWithTimeout(1000) catch null) |m| {
+        m.deinit();
         received += 1;
     }
 
@@ -535,7 +535,7 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
         reportResult("rapid_flush", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var success: u32 = 0;
     for (0..50) |_| {
@@ -584,13 +584,13 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
         reportResult("stats_concurrency", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "stats.test") catch {
+    const sub = client.subscribe("stats.test") catch {
         reportResult("stats_concurrency", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const before = client.getStats();
 
@@ -599,11 +599,11 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
         client.publish("stats.test", "stat-msg") catch {};
     }
 
-    client.flush(allocator, 500_000_000) catch {};
+    client.flush(500_000_000) catch {};
 
     for (0..NUM_MSGS) |_| {
-        if (sub.nextWithTimeout(allocator, 100) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(100) catch null) |m| {
+            m.deinit();
         } else break;
     }
 

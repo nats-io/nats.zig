@@ -22,13 +22,7 @@ const std = @import("std");
 const nats = @import("nats");
 
 pub fn main(init: std.process.Init) !void {
-    // Initialize async I/O runtime (needed for key generation)
-    var threaded: std.Io.Threaded = .init(
-        init.gpa,
-        .{ .environ = .empty },
-    );
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = init.io;
 
     // Set up buffered stdout writer
     var stdout_buf: [8192]u8 = undefined;
@@ -38,7 +32,6 @@ pub fn main(init: std.process.Init) !void {
     );
     const stdout = &stdout_writer.interface;
 
-    // --- Operator ---
     // The operator is the top-level entity that manages
     // accounts. It signs account JWTs.
     try stdout.print(
@@ -63,7 +56,6 @@ pub fn main(init: std.process.Init) !void {
         .{op_seed},
     );
 
-    // --- Account ---
     // An account groups users and defines resource limits.
     // The operator signs account JWTs.
     try stdout.print(
@@ -109,7 +101,6 @@ pub fn main(init: std.process.Init) !void {
         .{acct_jwt},
     );
 
-    // --- User ---
     // A user belongs to an account. The account signs
     // user JWTs with publish/subscribe permissions.
     try stdout.print(
@@ -152,7 +143,6 @@ pub fn main(init: std.process.Init) !void {
         .{user_jwt},
     );
 
-    // --- Credentials File ---
     // Format a .creds file containing the user JWT and seed.
     // This file is what a NATS client uses to authenticate.
     try stdout.print(

@@ -43,13 +43,12 @@ pub fn testCallbackMsgHandler(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var count: u32 = 0;
     var handler = CountHandler{ .count = &count };
 
     const sub = client.subscribeWithCallback(
-        allocator,
         "cb.handler.test",
         nats.MsgHandler.init(CountHandler, &handler),
     ) catch {
@@ -60,7 +59,7 @@ pub fn testCallbackMsgHandler(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     for (0..5) |_| {
         client.publish("cb.handler.test", "x") catch {
@@ -127,10 +126,9 @@ pub fn testCallbackPlainFn(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const sub = client.subscribeWithCallbackFn(
-        allocator,
         "cb.plainfn.test",
         plainCallback,
     ) catch {
@@ -141,7 +139,7 @@ pub fn testCallbackPlainFn(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     for (0..3) |_| {
         client.publish("cb.plainfn.test", "y") catch {
@@ -207,7 +205,7 @@ pub fn testCallbackQueueGroup(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var count1: u32 = 0;
     var count2: u32 = 0;
@@ -215,7 +213,6 @@ pub fn testCallbackQueueGroup(
     var h2 = QueueHandler{ .count = &count2 };
 
     const sub1 = client.subscribeWithCallbackQueue(
-        allocator,
         "cb.queue.test",
         "workers",
         nats.MsgHandler.init(QueueHandler, &h1),
@@ -227,10 +224,9 @@ pub fn testCallbackQueueGroup(
         );
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
     const sub2 = client.subscribeWithCallbackQueue(
-        allocator,
         "cb.queue.test",
         "workers",
         nats.MsgHandler.init(QueueHandler, &h2),
@@ -242,7 +238,7 @@ pub fn testCallbackQueueGroup(
         );
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
     for (0..10) |_| {
         client.publish("cb.queue.test", "z") catch {
@@ -301,13 +297,12 @@ pub fn testCallbackDeinitCleanup(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var count: u32 = 0;
     var handler = CountHandler{ .count = &count };
 
     const sub = client.subscribeWithCallback(
-        allocator,
         "cb.deinit.test",
         nats.MsgHandler.init(CountHandler, &handler),
     ) catch {
@@ -319,7 +314,7 @@ pub fn testCallbackDeinitCleanup(
         return;
     };
     // Immediately deinit -- must not hang
-    sub.deinit(allocator);
+    sub.deinit();
 
     reportResult("callback_deinit_cleanup", true, "");
 }
@@ -351,11 +346,10 @@ pub fn testCallbackModeField(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Manual sub should have .manual mode
     const manual_sub = client.subscribe(
-        allocator,
         "cb.mode.manual",
     ) catch {
         reportResult(
@@ -365,14 +359,13 @@ pub fn testCallbackModeField(
         );
         return;
     };
-    defer manual_sub.deinit(allocator);
+    defer manual_sub.deinit();
 
     var count: u32 = 0;
     var handler = CountHandler{ .count = &count };
 
     // Callback sub should have .callback mode
     const cb_sub = client.subscribeWithCallback(
-        allocator,
         "cb.mode.callback",
         nats.MsgHandler.init(CountHandler, &handler),
     ) catch {
@@ -383,7 +376,7 @@ pub fn testCallbackModeField(
         );
         return;
     };
-    defer cb_sub.deinit(allocator);
+    defer cb_sub.deinit();
 
     if (manual_sub.mode != .manual) {
         reportResult(
@@ -433,13 +426,12 @@ pub fn testCallbackHighVolume(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var count: u32 = 0;
     var handler = CountHandler{ .count = &count };
 
     const sub = client.subscribeWithCallback(
-        allocator,
         "cb.volume.test",
         nats.MsgHandler.init(CountHandler, &handler),
     ) catch {
@@ -450,7 +442,7 @@ pub fn testCallbackHighVolume(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     for (0..100) |_| {
         client.publish("cb.volume.test", "payload") catch {
@@ -533,7 +525,7 @@ pub fn testCallbackDataIntegrity(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var seen: [100]bool = .{false} ** 100;
     var count: u32 = 0;
@@ -543,7 +535,6 @@ pub fn testCallbackDataIntegrity(
     };
 
     const sub = client.subscribeWithCallback(
-        allocator,
         "cb.integrity.test",
         nats.MsgHandler.init(
             IntegrityHandler,
@@ -557,7 +548,7 @@ pub fn testCallbackDataIntegrity(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     var pbuf: [8]u8 = undefined;
     for (0..100) |i| {
@@ -646,14 +637,13 @@ pub fn testCallbackMixedModes(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Callback sub on one subject
     var cb_count: u32 = 0;
     var handler = CountHandler{ .count = &cb_count };
 
     const cb_sub = client.subscribeWithCallback(
-        allocator,
         "cb.mixed.auto",
         nats.MsgHandler.init(CountHandler, &handler),
     ) catch {
@@ -664,11 +654,10 @@ pub fn testCallbackMixedModes(
         );
         return;
     };
-    defer cb_sub.deinit(allocator);
+    defer cb_sub.deinit();
 
     // Manual sub on different subject
     const man_sub = client.subscribe(
-        allocator,
         "cb.mixed.manual",
     ) catch {
         reportResult(
@@ -678,7 +667,7 @@ pub fn testCallbackMixedModes(
         );
         return;
     };
-    defer man_sub.deinit(allocator);
+    defer man_sub.deinit();
 
     // Publish to both subjects
     for (0..5) |_| {
@@ -769,7 +758,7 @@ pub fn testCallbackRequestReply(
         );
         return;
     };
-    defer svc_client.deinit(allocator);
+    defer svc_client.deinit();
 
     const req_client = nats.Client.connect(
         allocator,
@@ -784,7 +773,7 @@ pub fn testCallbackRequestReply(
         );
         return;
     };
-    defer req_client.deinit(allocator);
+    defer req_client.deinit();
 
     var handled: u32 = 0;
     var handler = EchoHandler{
@@ -793,7 +782,6 @@ pub fn testCallbackRequestReply(
     };
 
     const sub = svc_client.subscribeWithCallback(
-        allocator,
         "cb.echo.test",
         nats.MsgHandler.init(EchoHandler, &handler),
     ) catch {
@@ -804,7 +792,7 @@ pub fn testCallbackRequestReply(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Wait for sub to propagate
     io.io().sleep(
@@ -816,13 +804,12 @@ pub fn testCallbackRequestReply(
     const payloads = [_][]const u8{ "a", "b", "c" };
     for (payloads) |payload| {
         if (req_client.request(
-            allocator,
             "cb.echo.test",
             payload,
             1000,
         )) |maybe_reply| {
             if (maybe_reply) |reply| {
-                defer reply.deinit(allocator);
+                defer reply.deinit();
                 if (std.mem.eql(
                     u8,
                     reply.data,

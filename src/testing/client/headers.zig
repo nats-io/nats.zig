@@ -25,13 +25,13 @@ pub fn testHeadersPublishSingle(allocator: std.mem.Allocator) void {
         reportResult("headers_publish_single", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "test.headers.single") catch {
+    const sub = client.subscribe("test.headers.single") catch {
         reportResult("headers_publish_single", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -44,9 +44,9 @@ pub fn testHeadersPublishSingle(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.headers == null) {
@@ -87,13 +87,13 @@ pub fn testHeadersPublishMultiple(allocator: std.mem.Allocator) void {
         reportResult("headers_publish_multiple", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "test.headers.multi") catch {
+    const sub = client.subscribe("test.headers.multi") catch {
         reportResult("headers_publish_multiple", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -108,9 +108,9 @@ pub fn testHeadersPublishMultiple(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.headers == null) {
@@ -156,13 +156,13 @@ pub fn testHeadersPublishEmptyPayload(allocator: std.mem.Allocator) void {
         reportResult("headers_empty_payload", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "test.headers.empty") catch {
+    const sub = client.subscribe("test.headers.empty") catch {
         reportResult("headers_empty_payload", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -175,9 +175,9 @@ pub fn testHeadersPublishEmptyPayload(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.headers == null) {
@@ -210,13 +210,13 @@ pub fn testHeadersPublishRequest(allocator: std.mem.Allocator) void {
         reportResult("headers_publish_request", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "test.headers.req") catch {
+    const sub = client.subscribe("test.headers.req") catch {
         reportResult("headers_publish_request", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -234,9 +234,9 @@ pub fn testHeadersPublishRequest(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.headers == null) {
@@ -281,7 +281,7 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
         reportResult("headers_request_reply", false, "responder connect failed");
         return;
     };
-    defer responder.deinit(allocator);
+    defer responder.deinit();
 
     var io_req: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_req.deinit();
@@ -294,25 +294,22 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
         reportResult("headers_request_reply", false, "requester connect failed");
         return;
     };
-    defer requester.deinit(allocator);
+    defer requester.deinit();
 
-    const sub = responder.subscribe(allocator, "svc.headers") catch {
+    const sub = responder.subscribe("svc.headers") catch {
         reportResult("headers_request_reply", false, "responder sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const Handler = struct {
         fn handle(
             r: *nats.Client,
             s: *nats.Subscription,
-            a: std.mem.Allocator,
-            io: std.Io,
         ) void {
-            _ = io;
-            if (s.nextWithTimeout(a, 2000) catch null) |req| {
-                defer req.deinit(a);
+            if (s.nextWithTimeout(2000) catch null) |req| {
+                defer req.deinit();
                 if (req.reply_to) |reply_inbox| {
                     // Verify headers received
                     if (req.headers != null) {
@@ -328,8 +325,6 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
     var handler = io_r.io().async(Handler.handle, .{
         responder,
         sub,
-        allocator,
-        io_r.io(),
     });
     defer _ = handler.cancel(io_r.io());
 
@@ -337,7 +332,6 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
         .{ .key = "X-Request-Id", .value = "test-123" },
     };
     const reply = requester.requestWithHeaders(
-        allocator,
         "svc.headers",
         &hdrs,
         "ping",
@@ -348,7 +342,7 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
     };
 
     if (reply) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         if (std.mem.eql(u8, msg.data, "headers-received")) {
             reportResult("headers_request_reply", true, "");
             return;
@@ -374,7 +368,7 @@ pub fn testHeadersRequestTimeout(allocator: std.mem.Allocator) void {
         reportResult("headers_request_timeout", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const hdrs = [_]headers.Entry{
         .{ .key = "X-Test", .value = "timeout" },
@@ -383,7 +377,6 @@ pub fn testHeadersRequestTimeout(allocator: std.mem.Allocator) void {
     const start = std.Io.Timestamp.now(io.io(), .awake);
 
     const result = client.requestWithHeaders(
-        allocator,
         "nonexistent.headers.service",
         &hdrs,
         "ping",
@@ -403,7 +396,7 @@ pub fn testHeadersRequestTimeout(allocator: std.mem.Allocator) void {
     const elapsed_ms = elapsed_ns / std.time.ns_per_ms;
 
     if (result) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
     }
 
     if (elapsed_ms < 5000) {
@@ -434,7 +427,7 @@ pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
         reportResult("headers_cross_client", false, "A connect failed");
         return;
     };
-    defer client_a.deinit(allocator);
+    defer client_a.deinit();
 
     var io_b: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_b.deinit();
@@ -447,13 +440,13 @@ pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
         reportResult("headers_cross_client", false, "B connect failed");
         return;
     };
-    defer client_b.deinit(allocator);
+    defer client_b.deinit();
 
-    const sub = client_b.subscribe(allocator, "cross.headers") catch {
+    const sub = client_b.subscribe("cross.headers") catch {
         reportResult("headers_cross_client", false, "B sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io_b.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -465,8 +458,8 @@ pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 2000) catch null) |msg| {
-        defer msg.deinit(allocator);
+    if (sub.nextWithTimeout(2000) catch null) |msg| {
+        defer msg.deinit();
         if (msg.headers == null) {
             reportResult("headers_cross_client", false, "no headers");
             return;
@@ -510,13 +503,13 @@ pub fn testHeadersManyEntries(allocator: std.mem.Allocator) void {
         reportResult("headers_many_entries", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "test.headers.many") catch {
+    const sub = client.subscribe("test.headers.many") catch {
         reportResult("headers_many_entries", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -548,9 +541,9 @@ pub fn testHeadersManyEntries(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.headers == null) {
@@ -605,13 +598,13 @@ pub fn testHeadersLargeValues(allocator: std.mem.Allocator) void {
         reportResult("headers_large_values", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "test.headers.large") catch {
+    const sub = client.subscribe("test.headers.large") catch {
         reportResult("headers_large_values", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     var large_value: [200]u8 = undefined;
@@ -627,9 +620,9 @@ pub fn testHeadersLargeValues(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.headers == null) {
@@ -670,13 +663,13 @@ pub fn testHeadersSpecialChars(allocator: std.mem.Allocator) void {
         reportResult("headers_special_chars", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "test.headers.special") catch {
+    const sub = client.subscribe("test.headers.special") catch {
         reportResult("headers_special_chars", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -690,9 +683,9 @@ pub fn testHeadersSpecialChars(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.headers == null) {
@@ -741,13 +734,13 @@ pub fn testHeadersBinaryPayload(allocator: std.mem.Allocator) void {
         reportResult("headers_binary_payload", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "test.headers.binary") catch {
+    const sub = client.subscribe("test.headers.binary") catch {
         reportResult("headers_binary_payload", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const binary_payload = [_]u8{ 0x00, 0x01, 0xFF, 0xFE, 0x7F, 0x80, 0x00, 0xFF };
@@ -766,9 +759,9 @@ pub fn testHeadersBinaryPayload(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.headers == null) {
@@ -805,13 +798,13 @@ pub fn testHeadersWellKnown(allocator: std.mem.Allocator) void {
         reportResult("headers_well_known", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "test.headers.wellknown") catch {
+    const sub = client.subscribe("test.headers.wellknown") catch {
         reportResult("headers_well_known", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -824,9 +817,9 @@ pub fn testHeadersWellKnown(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.headers == null) {
@@ -867,13 +860,13 @@ pub fn testHeadersCaseInsensitive(allocator: std.mem.Allocator) void {
         reportResult("headers_case_insensitive", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "test.headers.case") catch {
+    const sub = client.subscribe("test.headers.case") catch {
         reportResult("headers_case_insensitive", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
 
     const hdrs = [_]headers.Entry{
@@ -886,9 +879,9 @@ pub fn testHeadersCaseInsensitive(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.headers == null) {

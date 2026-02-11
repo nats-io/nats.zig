@@ -47,30 +47,24 @@ b.installArtifact(exe);
 const std = @import("std");
 const nats = @import("nats");
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    // Setup Io
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     // Connect
     const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{});
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Subscribe
-    const sub = try client.subscribe(allocator, "greet.*");
-    defer sub.deinit(allocator);
+    const sub = try client.subscribe("greet.*");
+    defer sub.deinit();
 
     // Publish (auto-flushed to network)
     try client.publish("greet.hello", "Hello, NATS!");
 
     // Receive message
-    const msg = try sub.next(allocator, io);
-    defer msg.deinit(allocator);
+    const msg = try sub.next();
+    defer msg.deinit();
     std.debug.print("Received: {s}\n", .{msg.data});
 }
 ```
@@ -116,8 +110,8 @@ Messages returned by `next()`, `tryNext()`, and `nextWithTimeout()` are **owned*
 You **must** call `deinit()` to free memory:
 
 ```zig
-const msg = try sub.next(allocator, io);
-defer msg.deinit(allocator);
+const msg = try sub.next();
+defer msg.deinit();
 
 // Access message fields (valid until deinit)
 std.debug.print("Subject: {s}\n", .{msg.subject});
@@ -164,7 +158,7 @@ use `flush()`. It sends PING and waits for PONG (matches Go/C client behavior):
 
 ```zig
 try client.publish("events.important", data);
-try client.flush(allocator, 5_000_000_000); // 5 second timeout
+try client.flush(5_000_000_000); // 5 second timeout
 // Server has confirmed receipt of all buffered messages
 ```
 
@@ -193,8 +187,8 @@ try client.flush(allocator, 5_000_000_000); // 5 second timeout
 ### Simple Subscription
 
 ```zig
-const sub = try client.subscribe(allocator, "events.>");
-defer sub.deinit(allocator);
+const sub = try client.subscribe("events.>");
+defer sub.deinit();
 
 // Wildcards:
 // * matches single token: "events.*" matches "events.click" but not "events.user.login"
@@ -208,11 +202,11 @@ If you need to ensure the subscription is fully registered before publishing (es
 with separate publisher/subscriber clients), call `flush()` after subscribing:
 
 ```zig
-const sub = try client.subscribe(allocator, "events.>");
-defer sub.deinit(allocator);
+const sub = try client.subscribe("events.>");
+defer sub.deinit();
 
 // Ensure subscription is registered on server before publishing
-try client.flush(allocator, 5_000_000_000);  // 5 second timeout
+try client.flush(5_000_000_000);  // 5 second timeout
 
 // Now safe to publish from another client
 ```
@@ -232,10 +226,10 @@ Distribute messages across workers - only one subscriber in the group receives e
 
 ```zig
 // Worker 1
-const sub1 = try client.subscribeQueue(allocator, "tasks.*", "workers");
+const sub1 = try client.subscribeQueue("tasks.*", "workers");
 
 // Worker 2 (different process)
-const sub2 = try client.subscribeQueue(allocator, "tasks.*", "workers");
+const sub2 = try client.subscribeQueue("tasks.*", "workers");
 
 // Message goes to either sub1 OR sub2, not both
 ```
@@ -259,10 +253,10 @@ const MyHandler = struct {
 var count: u32 = 0;
 var handler = MyHandler{ .counter = &count };
 const sub = try client.subscribeWithCallback(
-    allocator, "events.>",
+    "events.>",
     nats.MsgHandler.init(MyHandler, &handler),
 );
-defer sub.deinit(allocator);
+defer sub.deinit();
 ```
 
 **Plain function** (no state needed):
@@ -273,16 +267,19 @@ fn onAlert(msg: *const nats.Message) void {
 }
 
 const sub = try client.subscribeWithCallbackFn(
-    allocator, "alerts.>", onAlert,
+    "alerts.>",
+    onAlert,
 );
-defer sub.deinit(allocator);
+defer sub.deinit();
 ```
 
 **Queue group** variant:
 
 ```zig
 const sub = try client.subscribeWithCallbackQueue(
-    allocator, "tasks.*", "workers", handler,
+    "tasks.*",
+    "workers",
+    handler,
 );
 ```
 
@@ -302,8 +299,8 @@ const sub = try client.subscribeWithCallbackQueue(
 internally and handles errors gracefully:
 
 ```zig
-const sub = try client.subscribe(allocator, "events.>");
-defer sub.deinit(allocator);  // Unsubscribes + frees memory
+const sub = try client.subscribe("events.>");
+defer sub.deinit();  // Unsubscribes + frees memory
 
 // ... use subscription ...
 ```
@@ -312,7 +309,7 @@ defer sub.deinit(allocator);  // Unsubscribes + frees memory
 received the UNSUB command, call `unsubscribe()` directly:
 
 ```zig
-const sub = try client.subscribe(allocator, "events.>");
+const sub = try client.subscribe("events.>");
 
 // ... use subscription ...
 
@@ -320,13 +317,13 @@ const sub = try client.subscribe(allocator, "events.>");
 sub.unsubscribe() catch |err| {
     std.log.warn("Unsubscribe failed: {}", .{err});
 };
-sub.deinit(allocator);  // Still needed to free memory
+sub.deinit();  // Still needed to free memory
 ```
 
 | Method | Returns | Purpose |
 |--------|---------|---------|
 | `sub.unsubscribe()` | `!void` | Sends UNSUB to server, removes from tracking |
-| `sub.deinit(allocator)` | `void` | Calls unsubscribe (if needed) + frees memory |
+| `sub.deinit()` | `void` | Calls unsubscribe (if needed) + frees memory |
 
 **Note:** `unsubscribe()` is idempotent - calling it multiple times is safe.
 `deinit()` always succeeds (errors are logged, not returned) making it safe for
@@ -338,8 +335,8 @@ sub.deinit(allocator);  // Still needed to free memory
 
 ```zig
 while (true) {
-    const msg = try sub.next(allocator, io);
-    defer msg.deinit(allocator);  // ALWAYS defer deinit
+    const msg = try sub.next();
+    defer msg.deinit();  // ALWAYS defer deinit
 
     std.debug.print("Subject: {s}\n", .{msg.subject});
     std.debug.print("Data: {s}\n", .{msg.data});
@@ -354,7 +351,7 @@ while (true) {
 ```zig
 // Process all available messages without waiting
 while (sub.tryNext()) |msg| {
-    defer msg.deinit(allocator);
+    defer msg.deinit();
     processMessage(msg);
 }
 // No more messages - continue with other work
@@ -363,8 +360,8 @@ while (sub.tryNext()) |msg| {
 **With Timeout:** `nextWithTimeout()` returns `null` on timeout:
 
 ```zig
-if (try sub.nextWithTimeout(allocator, 5000)) |msg| {
-    defer msg.deinit(allocator);
+if (try sub.nextWithTimeout(5000)) |msg| {
+    defer msg.deinit();
     std.debug.print("Got: {s}\n", .{msg.data});
 } else {
     std.debug.print("No message within 5 seconds\n", .{});
@@ -379,14 +376,14 @@ var buf: [64]Message = undefined;
 // Blocking - waits for at least 1 message, returns up to 64
 const count = try sub.nextBatch(io, &buf);
 for (buf[0..count]) |*msg| {
-    defer msg.deinit(allocator);
+    defer msg.deinit();
     processMessage(msg.*);
 }
 
 // Non-blocking - returns immediately with available messages
 const available = sub.tryNextBatch(&buf);
 for (buf[0..available]) |*msg| {
-    defer msg.deinit(allocator);
+    defer msg.deinit();
     processMessage(msg.*);
 }
 ```
@@ -406,7 +403,7 @@ for (buf[0..available]) |*msg| {
 **Auto-Unsubscribe:** Automatically unsubscribe after receiving a specific number of messages:
 
 ```zig
-const sub = try client.subscribe(allocator, "events.>");
+const sub = try client.subscribe("events.>");
 
 // Auto-unsubscribe after 10 messages
 try sub.autoUnsubscribe(10);
@@ -414,7 +411,7 @@ try sub.autoUnsubscribe(10);
 // Process messages (subscription closes after 10th)
 while (sub.isValid()) {
     if (sub.tryNext()) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         processMessage(msg);
     }
 }
@@ -453,8 +450,8 @@ The simplest way - handles inbox creation, subscription, and timeout:
 
 ```zig
 // Returns null on timeout
-if (try client.request(allocator, "math.double", "21", 5000)) |reply| {
-    defer reply.deinit(allocator);
+if (try client.request("math.double", "21", 5000)) |reply| {
+    defer reply.deinit();
     std.debug.print("Result: {s}\n", .{reply.data});  // "42"
 } else {
     std.debug.print("Service did not respond\n", .{});
@@ -466,12 +463,12 @@ if (try client.request(allocator, "math.double", "21", 5000)) |reply| {
 Respond to requests by publishing to the `reply_to` subject:
 
 ```zig
-const service = try client.subscribe(allocator, "math.double");
-defer service.deinit(allocator);
+const service = try client.subscribe("math.double");
+defer service.deinit();
 
 while (true) {
-    const req = try service.next(allocator, io);
-    defer req.deinit(allocator);
+    const req = try service.next();
+    defer req.deinit();
 
     // Parse request
     const num = std.fmt.parseInt(i32, req.data, 10) catch 0;
@@ -492,8 +489,8 @@ while (true) {
 Convenience method for the request/reply pattern:
 
 ```zig
-const msg = try sub.next(allocator, io);
-defer msg.deinit(allocator);
+const msg = try sub.next();
+defer msg.deinit();
 
 // Respond using the message's reply_to (auto-flushed)
 msg.respond(client, "response data") catch |err| {
@@ -509,18 +506,18 @@ For more control, manage the inbox yourself:
 
 ```zig
 // Create inbox subscription
-const inbox = try nats.newInbox(allocator, io);
+const inbox = try client.newInbox();
 defer allocator.free(inbox);
 
-const reply_sub = try client.subscribe(allocator, inbox);
-defer reply_sub.deinit(allocator);
+const reply_sub = try client.subscribe(inbox);
+defer reply_sub.deinit();
 
 // Send request with reply-to (auto-flushed)
 try client.publishRequest("service", inbox, "request data");
 
 // Wait for response with timeout
-if (try reply_sub.nextWithTimeout(allocator, 5000)) |reply| {
-    defer reply.deinit(allocator);
+if (try reply_sub.nextWithTimeout(5000)) |reply| {
+    defer reply.deinit();
     // Process reply
 } else {
     // Timeout
@@ -532,9 +529,9 @@ if (try reply_sub.nextWithTimeout(allocator, 5000)) |reply| {
 Detect when a request has no available responders (status 503):
 
 ```zig
-const reply = try client.request(allocator, "service.endpoint", "data", 1000);
+const reply = try client.request("service.endpoint", "data", 1000);
 if (reply) |msg| {
-    defer msg.deinit(allocator);
+    defer msg.deinit();
 
     if (msg.isNoResponders()) {
         // No service available to handle request
@@ -592,8 +589,8 @@ const hdrs = [_]headers.Entry{
     .{ .key = headers.HeaderName.msg_id, .value = "unique-001" },
 };
 
-if (try client.requestWithHeaders(allocator, "service.api", &hdrs, "data", 5000)) |reply| {
-    defer reply.deinit(allocator);
+if (try client.requestWithHeaders("service.api", &hdrs, "data", 5000)) |reply| {
+    defer reply.deinit();
     std.debug.print("Response: {s}\n", .{reply.data});
 } else {
     std.debug.print("Timeout\n", .{});
@@ -603,8 +600,8 @@ if (try client.requestWithHeaders(allocator, "service.api", &hdrs, "data", 5000)
 ### Receiving and Parsing Headers
 
 ```zig
-const msg = try sub.next(allocator, io);
-defer msg.deinit(allocator);
+const msg = try sub.next();
+defer msg.deinit();
 
 if (msg.headers) |raw_headers| {
     var parsed = headers.parse(allocator, raw_headers);
@@ -720,7 +717,7 @@ fn sleepMs(io_ctx: std.Io, ms: i64) void {
     io_ctx.sleep(.fromMilliseconds(ms), .awake) catch {};
 }
 
-var recv_future = io.async(nats.Client.Sub.next, .{ sub, allocator, io });
+var recv_future = io.async(nats.Client.Sub.next, .{sub});
 var timeout_future = io.async(sleepMs, .{ io, 5000 });
 
 const result = io.select(.{
@@ -728,7 +725,7 @@ const result = io.select(.{
     .timeout = &timeout_future,
 }) catch |err| {
     timeout_future.cancel(io);
-    if (recv_future.cancel(io)) |m| m.deinit(allocator) else |_| {}
+    if (recv_future.cancel(io)) |m| m.deinit() else |_| {}
     return err;
 };
 
@@ -736,11 +733,11 @@ switch (result) {
     .message => |msg_result| {
         timeout_future.cancel(io);
         const msg = try msg_result;
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         std.debug.print("Received: {s}\n", .{msg.data});
     },
     .timeout => |_| {
-        if (recv_future.cancel(io)) |m| m.deinit(allocator) else |_| {}
+        if (recv_future.cancel(io)) |m| m.deinit() else |_| {}
         std.debug.print("Timeout!\n", .{});
     },
 }
@@ -751,8 +748,8 @@ switch (result) {
 When using `io.async()` to receive messages, handle ownership carefully:
 
 ```zig
-var future = io.async(nats.Client.Sub.next, .{ sub, allocator, io });
-defer if (future.cancel(io)) |m| m.deinit(allocator) else |_| {};
+var future = io.async(nats.Client.Sub.next, .{sub});
+defer if (future.cancel(io)) |m| m.deinit() else |_| {};
 
 if (future.await(io)) |msg| {
     // Message ownership transferred - use it here
@@ -778,8 +775,8 @@ const WorkResult = struct {
     worker_id: u8,
     msg: nats.Message,
 
-    fn deinit(self: WorkResult, allocator: Allocator) void {
-        self.msg.deinit(allocator);
+    fn deinit(self: WorkResult) void {
+        self.msg.deinit();
     }
 };
 
@@ -788,9 +785,9 @@ var queue_buf: [32]WorkResult = undefined;
 var queue: Io.Queue(WorkResult) = .init(&queue_buf);
 
 // Worker thread: push results
-fn worker(io: Io, sub: *Sub, alloc: Allocator, q: *Io.Queue(WorkResult)) void {
+fn worker(io: Io, sub: *Sub, q: *Io.Queue(WorkResult)) void {
     while (true) {
-        const msg = sub.next(alloc, io) catch return;
+        const msg = sub.next() catch return;
         q.putOne(io, .{ .worker_id = 1, .msg = msg }) catch return;
     }
 }
@@ -798,7 +795,7 @@ fn worker(io: Io, sub: *Sub, alloc: Allocator, q: *Io.Queue(WorkResult)) void {
 // Main thread: consume results
 while (true) {
     const result = queue.getOne(io) catch break;
-    defer result.deinit(allocator);
+    defer result.deinit();
     std.debug.print("Worker {d}: {s}\n", .{ result.worker_id, result.msg.data });
 }
 ```
@@ -1010,7 +1007,7 @@ std.debug.print("Reconnects: {d}\n", .{stats.reconnects});
 
 ```zig
 // Sends PING and waits for PONG (confirms server received messages)
-client.flush(allocator, 5_000_000_000) catch |err| {
+client.flush(5_000_000_000) catch |err| {
     if (err == error.Timeout) {
         std.debug.print("Flush timed out\n", .{});
     }
@@ -1027,7 +1024,7 @@ try client.forceReconnect();
 **Drain with Timeout:**
 
 ```zig
-const result = client.drainTimeout(allocator, 30_000_000_000) catch |err| {
+const result = client.drainTimeout(30_000_000_000) catch |err| {
     if (err == error.Timeout) {
         std.debug.print("Drain timed out\n", .{});
     }
@@ -1044,8 +1041,8 @@ When messages arrive faster than you process them, the queue fills up and messag
 
 ```zig
 while (true) {
-    const msg = try sub.next(allocator, io);
-    defer msg.deinit(allocator);
+    const msg = try sub.next();
+    defer msg.deinit();
 
     // Check for dropped messages periodically
     const dropped = sub.getDroppedCount();
@@ -1385,21 +1382,21 @@ if (client.getConnectedServerVersion()) |version| {
 | Publish message | `client.publish(subject, data)` | `!void` |
 | Publish with reply-to | `client.publishRequest(subject, reply_to, data)` | `!void` |
 | Flush buffer to socket | `client.flushBuffer()` | `!void` |
-| Subscribe | `client.subscribe(allocator, subject)` | `!*Sub` |
-| Queue subscribe | `client.subscribeQueue(allocator, subject, group)` | `!*Sub` |
-| Callback subscribe | `client.subscribeWithCallback(allocator, subject, handler)` | `!*Sub` |
-| Callback queue sub | `client.subscribeWithCallbackQueue(allocator, subject, group, handler)` | `!*Sub` |
-| Callback fn sub | `client.subscribeWithCallbackFn(allocator, subject, fn)` | `!*Sub` |
-| Callback fn queue sub | `client.subscribeWithCallbackFnQueue(allocator, subject, group, fn)` | `!*Sub` |
+| Subscribe | `client.subscribe(subject)` | `!*Sub` |
+| Queue subscribe | `client.subscribeQueue(subject, group)` | `!*Sub` |
+| Callback subscribe | `client.subscribeWithCallback(subject, handler)` | `!*Sub` |
+| Callback queue sub | `client.subscribeWithCallbackQueue(subject, group, handler)` | `!*Sub` |
+| Callback fn sub | `client.subscribeWithCallbackFn(subject, fn)` | `!*Sub` |
+| Callback fn queue sub | `client.subscribeWithCallbackFnQueue(subject, group, fn)` | `!*Sub` |
 | Unsubscribe | `sub.unsubscribe()` | `!void` |
-| Free subscription | `sub.deinit(allocator)` | `void` |
-| Request/reply | `client.request(allocator, subject, data, timeout_ms)` | `!?Message` |
+| Free subscription | `sub.deinit()` | `void` |
+| Request/reply | `client.request(subject, data, timeout_ms)` | `!?Message` |
 | Publish with headers | `client.publishWithHeaders(subject, hdrs, data)` | `!void` |
 | Publish+reply+headers | `client.publishRequestWithHeaders(subject, reply, hdrs, data)` | `!void` |
-| Request with headers | `client.requestWithHeaders(allocator, subject, hdrs, data, timeout_ms)` | `!?Message` |
-| Receive (blocking) | `sub.next(allocator, io)` | `!Message` |
+| Request with headers | `client.requestWithHeaders(subject, hdrs, data, timeout_ms)` | `!?Message` |
+| Receive (blocking) | `sub.next()` | `!Message` |
 | Receive (non-blocking) | `sub.tryNext()` | `?Message` |
-| Receive (with timeout) | `sub.nextWithTimeout(allocator, timeout_ms)` | `!?Message` |
+| Receive (with timeout) | `sub.nextWithTimeout(timeout_ms)` | `!?Message` |
 | Batch receive | `sub.nextBatch(io, buf)` | `!usize` |
 | Check drops | `sub.getDroppedCount()` | `u64` |
 | Auto-unsubscribe | `sub.autoUnsubscribe(max_msgs)` | `!void` |
@@ -1418,13 +1415,13 @@ if (client.getConnectedServerVersion()) |version| {
 | Message size | `msg.size()` | `usize` |
 | No-responders check | `msg.isNoResponders()` | `bool` |
 | Status code | `msg.getStatus()` | `?u16` |
-| Create inbox | `client.newInbox(allocator)` | `![]u8` |
+| Create inbox | `client.newInbox()` | `![]u8` |
 | Connection status | `client.getStatus()` | `State` |
 | Connection stats | `client.getStats()` | `Stats` |
 | Server RTT | `client.getRtt()` | `!u64` |
 | Server URL | `client.getConnectedUrl()` | `?[]const u8` |
 | Server ID | `client.getConnectedServerId()` | `?[]const u8` |
-| Flush confirmed | `client.flush(alloc, timeout_ns)` | `!void` |
+| Flush confirmed | `client.flush(timeout_ns)` | `!void` |
 | Force reconnect | `client.forceReconnect()` | `!void` |
 | Generate NKey keypair | `auth.KeyPair.generate(io, key_type)` | `KeyPair` |
 | Encode NKey seed | `kp.encodeSeed(&buf)` | `[]const u8` |

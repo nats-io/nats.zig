@@ -28,7 +28,7 @@ pub fn testLastErrorInitialNull(allocator: std.mem.Allocator) void {
         reportResult("last_error_initial", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Initially should be null
     const err = client.getLastError();
@@ -57,7 +57,7 @@ pub fn testClearLastError(allocator: std.mem.Allocator) void {
         reportResult("clear_last_error", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Clear and verify null
     client.clearLastError();
@@ -102,19 +102,17 @@ pub fn testDrainingEvent(allocator: std.mem.Allocator) void {
         reportResult("draining_event", false, "connect failed");
         return;
     };
+    defer client.deinit();
 
     // Subscribe to something
-    const sub = client.subscribe(allocator, "drain.test") catch {
-        client.deinit(allocator);
+    const sub = client.subscribe("drain.test") catch {
         reportResult("draining_event", false, "subscribe failed");
         return;
     };
+    defer sub.deinit();
 
     // Drain (this also cleans up subscriptions internally)
-    _ = client.drain(allocator) catch {};
-
-    // Subscription was cleaned up by drain(), but we still need to free memory
-    sub.deinit(allocator);
+    _ = client.drain() catch {};
 
     // Give callback task time to process events
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
@@ -124,8 +122,6 @@ pub fn testDrainingEvent(allocator: std.mem.Allocator) void {
     } else {
         reportResult("draining_event", false, "no draining event");
     }
-
-    client.deinit(allocator);
 }
 
 /// Test subscription_complete event when auto-unsub limit is reached.
@@ -162,14 +158,14 @@ pub fn testSubscriptionCompleteEvent(allocator: std.mem.Allocator) void {
         reportResult("sub_complete_event", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Subscribe with auto-unsub after 3 messages
-    const sub = client.subscribe(allocator, "complete.test") catch {
+    const sub = client.subscribe("complete.test") catch {
         reportResult("sub_complete_event", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     sub.autoUnsubscribe(3) catch {
         reportResult("sub_complete_event", false, "auto-unsub failed");
@@ -183,9 +179,9 @@ pub fn testSubscriptionCompleteEvent(allocator: std.mem.Allocator) void {
 
     // Receive messages to trigger the delivered count
     for (0..3) |_| {
-        const msg = sub.nextWithTimeout(allocator, 500) catch break;
+        const msg = sub.nextWithTimeout(500) catch break;
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
         }
     }
 

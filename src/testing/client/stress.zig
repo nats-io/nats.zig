@@ -28,7 +28,7 @@ pub fn testStress500Messages(allocator: std.mem.Allocator) void {
         reportResult("stress_500", false, "pub connect failed");
         return;
     };
-    defer publisher.deinit(allocator);
+    defer publisher.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .sub_queue_size = 512,
@@ -37,13 +37,13 @@ pub fn testStress500Messages(allocator: std.mem.Allocator) void {
         reportResult("stress_500", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "stress500") catch {
+    const sub = client.subscribe("stress500") catch {
         reportResult("stress_500", false, "sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
@@ -59,9 +59,9 @@ pub fn testStress500Messages(allocator: std.mem.Allocator) void {
     for (0..NUM_MSGS) |_| {
         var future = io.io().async(
             nats.Client.Sub.next,
-            .{ sub, allocator, io.io() },
+            .{sub},
         );
-        defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+        defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
         if (future.await(io.io())) |_| {
             received += 1;
@@ -94,13 +94,13 @@ pub fn testStress1000Messages(allocator: std.mem.Allocator) void {
         reportResult("stress_1000", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "stress1k") catch {
+    const sub = client.subscribe("stress1k") catch {
         reportResult("stress_1000", false, "sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const NUM_MSGS = 1000;
     for (0..NUM_MSGS) |_| {
@@ -112,8 +112,8 @@ pub fn testStress1000Messages(allocator: std.mem.Allocator) void {
 
     var received: usize = 0;
     for (0..NUM_MSGS) |_| {
-        if (sub.nextWithTimeout(allocator, 100) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(100) catch null) |m| {
+            m.deinit();
             received += 1;
         } else break;
     }
@@ -142,13 +142,13 @@ pub fn testStress2000Messages(allocator: std.mem.Allocator) void {
         reportResult("stress_2000", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "stress2k") catch {
+    const sub = client.subscribe("stress2k") catch {
         reportResult("stress_2000", false, "sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const NUM_MSGS = 2000;
     for (0..20) |_| {
@@ -162,8 +162,8 @@ pub fn testStress2000Messages(allocator: std.mem.Allocator) void {
 
     var received: usize = 0;
     for (0..NUM_MSGS) |_| {
-        if (sub.nextWithTimeout(allocator, 100) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(100) catch null) |m| {
+            m.deinit();
             received += 1;
         } else break;
     }
@@ -194,13 +194,13 @@ pub fn testPayload30KB(allocator: std.mem.Allocator) void {
         reportResult("payload_30kb", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "stress.30kb") catch {
+    const sub = client.subscribe("stress.30kb") catch {
         reportResult("payload_30kb", false, "sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const payload = allocator.alloc(u8, 30 * 1024) catch {
         reportResult("payload_30kb", false, "alloc failed");
@@ -214,8 +214,8 @@ pub fn testPayload30KB(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 3000) catch null) |m| {
-        defer m.deinit(allocator);
+    if (sub.nextWithTimeout(3000) catch null) |m| {
+        defer m.deinit();
         if (m.data.len == 30 * 1024) {
             reportResult("payload_30kb", true, "");
         } else {
@@ -242,13 +242,13 @@ pub fn testManySubscriptions(allocator: std.mem.Allocator) void {
         reportResult("many_subscriptions", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var subs: [50]?*nats.Subscription = undefined;
     @memset(&subs, null);
 
     defer for (&subs) |*s| {
-        if (s.*) |sub| sub.deinit(allocator);
+        if (s.*) |sub| sub.deinit();
     };
 
     var created: usize = 0;
@@ -258,7 +258,7 @@ pub fn testManySubscriptions(allocator: std.mem.Allocator) void {
             std.fmt.bufPrint(&subject_buf, "manysub.{d}", .{i}) catch {
                 continue;
             };
-        subs[i] = client.subscribe(allocator, subject) catch {
+        subs[i] = client.subscribe(subject) catch {
             break;
         };
         created += 1;
@@ -290,13 +290,13 @@ pub fn testPayloadBoundary(allocator: std.mem.Allocator) void {
         reportResult("payload_boundary", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "boundary.test") catch {
+    const sub = client.subscribe("boundary.test") catch {
         reportResult("payload_boundary", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const sizes = [_]usize{ 1024, 4096, 8192, 15360 };
     var all_passed = true;
@@ -314,14 +314,14 @@ pub fn testPayloadBoundary(allocator: std.mem.Allocator) void {
             break;
         };
 
-        const msg = sub.nextWithTimeout(allocator, 2000) catch {
+        const msg = sub.nextWithTimeout(2000) catch {
             all_passed = false;
             break;
         };
 
         if (msg) |m| {
             if (m.data.len != size) all_passed = false;
-            m.deinit(allocator);
+            m.deinit();
         } else {
             all_passed = false;
             break;
@@ -346,7 +346,7 @@ pub fn testFiveConcurrentClients(allocator: std.mem.Allocator) void {
     defer {
         for (0..count) |i| {
             if (clients[i]) |c| {
-                c.deinit(allocator);
+                c.deinit();
             }
             ios[i].deinit();
         }

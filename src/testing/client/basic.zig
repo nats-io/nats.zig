@@ -33,18 +33,18 @@ pub fn testClientBasic(allocator: std.mem.Allocator) void {
         reportResult("client_basic", false, msg);
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (!client.isConnected()) {
         reportResult("client_basic", false, "not connected");
         return;
     }
 
-    const sub = client.subscribe(allocator, "basic") catch {
+    const sub = client.subscribe("basic") catch {
         reportResult("client_basic", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     reportResult("client_basic", true, "");
 }
@@ -65,13 +65,13 @@ pub fn testClientTryNext(allocator: std.mem.Allocator) void {
         reportResult("client_try_next", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "trynext") catch {
+    const sub = client.subscribe("trynext") catch {
         reportResult("client_try_next", false, "sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     if (sub.tryNext() != null) {
         reportResult("client_try_next", false, "expected null");
@@ -97,7 +97,7 @@ pub fn testClientServerInfo(allocator: std.mem.Allocator) void {
         reportResult("client_server_info", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.getServerInfo()) |info| {
         if (info.port == test_port) {
@@ -124,23 +124,23 @@ pub fn testClientRapidSubUnsub(allocator: std.mem.Allocator) void {
         reportResult("client_rapid_sub", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     for (0..20) |i| {
         var buf: [32]u8 = undefined;
         const subj = std.fmt.bufPrint(&buf, "rapid.{d}", .{i}) catch "e";
-        const sub = client.subscribe(allocator, subj) catch {
+        const sub = client.subscribe(subj) catch {
             reportResult("client_rapid_sub", false, "sub failed");
             return;
         };
-        sub.deinit(allocator);
+        sub.deinit();
     }
 
-    const sub = client.subscribe(allocator, "rapid.final") catch {
+    const sub = client.subscribe("rapid.final") catch {
         reportResult("client_rapid_sub", false, "final sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     if (client.isConnected()) {
         reportResult("client_rapid_sub", true, "");
@@ -163,7 +163,7 @@ pub fn testClientName(allocator: std.mem.Allocator) void {
         reportResult("client_name_opt", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.isConnected()) {
         reportResult("client_name_opt", true, "");
@@ -186,7 +186,7 @@ pub fn testClientVerbose(allocator: std.mem.Allocator) void {
         reportResult("client_verbose", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     client.publish("verbose.test", "data") catch {
         reportResult("client_verbose", false, "publish failed");
@@ -212,7 +212,7 @@ pub fn testMultipleConnectDisconnect(allocator: std.mem.Allocator) void {
             reportResult("multi_connect_disconnect", false, "connect failed");
             return;
         };
-        client.deinit(allocator);
+        client.deinit();
         io.deinit();
     }
 

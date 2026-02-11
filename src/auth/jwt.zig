@@ -439,8 +439,6 @@ fn writeOperatorJson(
     return result;
 }
 
-// --- Tests ---
-
 test "encode account JWT structure" {
     const test_seed = [_]u8{10} ** 32;
     const op_kp_inner =

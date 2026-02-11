@@ -26,12 +26,7 @@ const TOTAL_MSGS = NUM_MSGS_PER_CATEGORY * 3;
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
-    var threaded: Io.Threaded = .init(
-        allocator,
-        .{ .environ = .empty },
-    );
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = init.io;
 
     var stdout_buf: [8192]u8 = undefined;
     var stdout_writer = Io.File.stdout().writer(
@@ -46,27 +41,18 @@ pub fn main(init: std.process.Init) !void {
         "nats://localhost:4222",
         .{},
     );
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Create three separate subscriptions. We use ">"
     // (multi-level wildcard) to match all sub-subjects.
-    const sub_cars = try client.subscribe(
-        allocator,
-        "cars.>",
-    );
-    defer sub_cars.deinit(allocator);
+    const sub_cars = try client.subscribe("cars.>");
+    defer sub_cars.deinit();
 
-    const sub_planes = try client.subscribe(
-        allocator,
-        "planes.>",
-    );
-    defer sub_planes.deinit(allocator);
+    const sub_planes = try client.subscribe("planes.>");
+    defer sub_planes.deinit();
 
-    const sub_ships = try client.subscribe(
-        allocator,
-        "ships.>",
-    );
-    defer sub_ships.deinit(allocator);
+    const sub_ships = try client.subscribe("ships.>");
+    defer sub_ships.deinit();
 
     // Publish 10 messages to each category
     for (0..NUM_MSGS_PER_CATEGORY) |i| {
@@ -128,7 +114,7 @@ pub fn main(init: std.process.Init) !void {
 
     while (total < TOTAL_MSGS) {
         if (subs[idx].tryNext()) |msg| {
-            defer msg.deinit(allocator);
+            defer msg.deinit();
             total += 1;
             empty_cycles = 0;
             try stdout.print(
