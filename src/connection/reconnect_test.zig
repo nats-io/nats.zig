@@ -92,7 +92,7 @@ test "SubBackup max SID value" {
 // These test the backoff calculation formula:
 // exp_wait = base << attempt (capped at 10)
 // capped = min(exp_wait, max_wait)
-// jitter = ±(capped * jitter_percent / 100)
+// jitter = +/-(capped * jitter_percent / 100)
 
 test "backoff base case" {
     const base_ms: u64 = 2000;

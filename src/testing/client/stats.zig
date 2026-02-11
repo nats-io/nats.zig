@@ -378,6 +378,9 @@ pub fn testMaxPending(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit(allocator);
 
+    // Activate flow control so max_pending_msgs watermark is tracked
+    sub.setPendingLimits(1000);
+
     // Publish messages to create high water mark
     for (0..20) |_| {
         client.publish("max.pending", "payload") catch {};

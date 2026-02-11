@@ -985,6 +985,29 @@ fn printTable2Details(
         }
     }
     med_printer.printBottom();
+
+    const zig_med = calcMedianStats(
+        old_results[1][0..num_runs],
+    );
+    const go_med = calcMedianStats(
+        old_results[2][0..num_runs],
+    );
+    if (zig_med) |zm| {
+        if (go_med) |gm| {
+            if (gm.msgs_per_sec > 0) {
+                var factor_buf: [16]u8 = undefined;
+                const factor_str = std.fmt.bufPrint(
+                    &factor_buf,
+                    "{d:.2}x",
+                    .{zm.msgs_per_sec / gm.msgs_per_sec},
+                ) catch "-";
+                ui.print("\n  ");
+                ui.writeGreen("Zig Factor: ");
+                ui.writeGreen(factor_str);
+                ui.print("\n");
+            }
+        }
+    }
 }
 
 fn runTable3(
@@ -1201,6 +1224,29 @@ fn printTable3Details(
         );
     }
     med_printer.printBottom();
+
+    const zig_med = calcMedianPubSub(
+        results[1][0..num_runs],
+    );
+    const go_med = calcMedianPubSub(
+        results[2][0..num_runs],
+    );
+    if (zig_med.sub_stats) |zs| {
+        if (go_med.sub_stats) |gs| {
+            if (gs.msgs_per_sec > 0) {
+                var factor_buf: [16]u8 = undefined;
+                const factor_str = std.fmt.bufPrint(
+                    &factor_buf,
+                    "{d:.2}x",
+                    .{zs.msgs_per_sec / gs.msgs_per_sec},
+                ) catch "-";
+                ui.print("\n  ");
+                ui.writeGreen("Zig Factor: ");
+                ui.writeGreen(factor_str);
+                ui.print("\n");
+            }
+        }
+    }
 }
 
 fn fmtRate(buf: []u8, rate: f64) []const u8 {

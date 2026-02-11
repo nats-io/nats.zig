@@ -108,7 +108,7 @@ pub fn run(client: *Client, allocator: Allocator) void {
         while (made_progress) {
             made_progress = false;
 
-            if (client.return_queue.len() > 0) drainReturnQueue(client);
+            drainReturnQueue(client);
 
             const route_result = tryRouteBufferedMessages(client, allocator);
             if (route_result == .progress) {
@@ -150,18 +150,19 @@ pub fn run(client: *Client, allocator: Allocator) void {
 
         // Auto-flush: check if publish() requested a flush
         // Only flush if still connected (avoid BADF on closed socket)
-        if (client.flush_requested.swap(false, .acquire)) {
-            // Atomic check before acquiring mutex
-            if (State.atomicLoad(&client.state) == .connected) {
-                client.write_mutex.lock(client.io) catch continue :outer;
-                defer client.write_mutex.unlock(client.io);
-                // Double-check after mutex (state may have changed)
+        if (client.flush_requested.load(.monotonic)) {
+            if (client.flush_requested.swap(false, .acquire)) {
+                // Atomic check before acquiring mutex
                 if (State.atomicLoad(&client.state) == .connected) {
-                    client.active_writer.flush() catch {};
-                    // TLS: active_writer.flush() only encrypts to TCP buffer.
-                    // Must also flush underlying TCP writer to send to network.
-                    if (client.use_tls) {
-                        client.writer.interface.flush() catch {};
+                    client.write_mutex.lock(client.io) catch continue :outer;
+                    defer client.write_mutex.unlock(client.io);
+                    // Double-check after mutex
+                    if (State.atomicLoad(&client.state) == .connected) {
+                        client.active_writer.flush() catch {};
+                        // TLS: flush underlying TCP writer too
+                        if (client.use_tls) {
+                            client.writer.interface.flush() catch {};
+                        }
                     }
                 }
             }
@@ -307,7 +308,7 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
     // Atomic read: race with deinit closing socket before fillMore()
     if (State.atomicLoad(&client.state) == .closed) return .canceled;
 
-    // Socket has data → fillMore() will return immediately
+    // Socket has data -> fillMore() will return immediately
     reader.fillMore() catch |err| {
         if (err == error.Canceled) return .canceled;
         if (err == error.EndOfStream or
@@ -329,7 +330,7 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
 }
 
 /// Route buffered messages (no I/O, buffer processing only).
-/// Handles: MSG → route to queue, PING → write PONG.
+/// Handles: MSG -> route to queue, PING -> write PONG.
 /// Uses lock-free SpscQueue - no yields needed.
 inline fn tryRouteBufferedMessages(
     client: *Client,

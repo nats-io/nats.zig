@@ -843,7 +843,7 @@ test "FixedSubscription subject with emoji bytes" {
     var client = TestClient{};
     var sub = TestSub.initEmpty();
 
-    // UTF-8 encoded emoji: 🚀 (rocket)
+    // UTF-8 encoded emoji:  (rocket)
     const emoji_subject = "\xf0\x9f\x9a\x80.launch";
     try sub.activate(&client, 1, emoji_subject, null);
     try testing.expectEqualStrings(emoji_subject, sub.subject());

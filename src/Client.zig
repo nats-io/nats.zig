@@ -1905,14 +1905,18 @@ fn waitForPongHelper(self: *Client, old_pong_ns: u64) !void {
 pub fn forceReconnect(self: *Client) !void {
     const state = State.atomicLoad(&self.state);
     if (state == .closed) return error.ConnectionClosed;
-    if (state == .reconnecting) return; // Already reconnecting
+    if (state == .reconnecting) return;
     if (state != .connected) return error.NotConnected;
 
     assert(self.next_sid >= 1);
 
-    // Close the socket - io_task will detect and start reconnection
-    self.stream.close(self.io);
+    // State first: canSend() returns false, no new writes
     State.atomicStore(&self.state, .reconnecting);
+    // Shutdown read only -- in-flight writes stay safe.
+    // io_task sees EndOfStream, enters handleDisconnect
+    // which calls cleanupForReconnect for full close
+    // with write_mutex.
+    self.stream.shutdown(self.io, .recv) catch {};
 }
 
 /// Gracefully drains with a timeout.
@@ -2250,11 +2254,19 @@ pub fn drain(self: *Client, alloc: Allocator) !DrainResult {
     writer.flush() catch {
         result.flush_failed = true;
     };
-    self.state = .draining;
+    State.atomicStore(&self.state, .draining);
     self.pushEvent(.{ .draining = {} });
 
+    State.atomicStore(&self.state, .closed);
+    // Shutdown read to unblock io_task
+    self.stream.shutdown(self.io, .recv) catch {};
+    // Wait for io_task to exit
+    if (self.io_task_future) |*future| {
+        _ = future.cancel(self.io);
+        self.io_task_future = null;
+    }
+    // Full close -- io_task exited
     self.stream.close(self.io);
-    self.state = .closed;
 
     if (self.server_info) |*info| {
         info.deinit(alloc);
@@ -2782,6 +2794,10 @@ fn sendPong(self: *Client) !void {
 /// Sends PING for health check.
 fn sendPing(self: *Client) !void {
     assert(self.state == .connected);
+    self.write_mutex.lock(self.io) catch {
+        return error.WriteFailed;
+    };
+    defer self.write_mutex.unlock(self.io);
     const writer = self.active_writer;
     writer.writeAll("PING\r\n") catch {
         return error.WriteFailed;
@@ -2789,9 +2805,11 @@ fn sendPing(self: *Client) !void {
     writer.flush() catch {
         return error.WriteFailed;
     };
-    const now = getNowNs() catch self.last_ping_sent_ns.load(.monotonic);
+    const now = getNowNs() catch
+        self.last_ping_sent_ns.load(.monotonic);
     self.last_ping_sent_ns.store(now, .monotonic);
-    const new_outstanding = self.pings_outstanding.fetchAdd(1, .monotonic) + 1;
+    const new_outstanding =
+        self.pings_outstanding.fetchAdd(1, .monotonic) + 1;
     dbg.pingPong("PING_SENT", new_outstanding);
 }
 
@@ -2858,32 +2876,37 @@ pub fn closeAllQueues(self: *Client) void {
 ///     alloc: Allocator used at connect() time
 ///
 /// Closes connection, stops io_task, frees buffers.
-/// Uses close-then-cancel pattern for reliable shutdown.
+/// Uses shutdown-recv-then-close pattern for reliable shutdown.
 /// Safe to call multiple times.
 pub fn deinit(self: *Client, alloc: Allocator) void {
     assert(self.next_sid >= 1);
 
-    // CLOSE-THEN-CANCEL PATTERN (see zig-0.16 skill ASYNC.md)
-    // Signal-based cancel has race condition with network I/O.
-    // Close socket first to unblock fillMore(), then cancel completes quickly.
+    // SHUTDOWN-RECV-THEN-CLOSE PATTERN
+    // shutdown(.recv) unblocks fillMore() (returns EndOfStream)
+    // while keeping write fd valid for in-flight writes.
 
-    // 1. Save state and mark as closed (prevents reconnection attempts)
-    const was_open = self.state != .closed;
-    self.state = .closed;
+    // 1. Atomic state transition
+    const was_open = State.atomicLoad(&self.state) != .closed;
+    State.atomicStore(&self.state, .closed);
 
-    // 2. Close stream if still open - unblocks any pending fillMore()
-    //    io_task will see error, check state == .closed, exit cleanly
+    // 2. Shutdown read side only -- unblocks fillMore()
+    //    Write fd stays valid for in-flight writes
     if (was_open) {
-        self.stream.close(self.io);
+        self.stream.shutdown(self.io, .recv) catch {};
     }
 
-    // 3. Now cancel completes quickly (io_task already exiting or exited)
+    // 3. Wait for io_task to exit (no concurrent writers after)
     if (self.io_task_future) |*future| {
         _ = future.cancel(self.io);
         self.io_task_future = null;
     }
 
-    // 4. Cancel callback task and free event queue
+    // 4. Full close -- io_task exited, no concurrent writers
+    if (was_open) {
+        self.stream.close(self.io);
+    }
+
+    // 5. Cancel callback task and free event queue
     // SAFETY: Set event_queue = null BEFORE canceling to signal callback_task
     // to exit. This prevents use-after-free if callback_task is mid-loop.
     const eq = self.event_queue;
@@ -2905,7 +2928,7 @@ pub fn deinit(self: *Client, alloc: Allocator) void {
         self.event_queue_buf = null;
     }
 
-    // 5. Cleanup subscriptions (io_task is now gone)
+    // 6. Cleanup subscriptions (io_task is now gone)
     self.closeAllQueues();
     for (self.sub_ptrs) |maybe_sub| {
         if (maybe_sub) |sub| {
@@ -3111,14 +3134,17 @@ fn flushPendingBuffer(self: *Client) !void {
 fn cleanupForReconnect(self: *Client) void {
     dbg.stateChange("connected", "reconnecting");
 
-    // Close old stream
+    // Wait for in-flight main-thread writes.
+    // State is already .disconnected -- no new
+    // writes will start (canSend() returns false).
+    self.write_mutex.lock(self.io) catch {
+        self.stream.close(self.io);
+        self.tls_client = null;
+        return;
+    };
     self.stream.close(self.io);
-
-    // Reset TLS state (reuse buffers and CA bundle)
     self.tls_client = null;
-
-    // Clear server info (will be refreshed on reconnect)
-    // Don't free - server sends new info on reconnect
+    self.write_mutex.unlock(self.io);
 }
 
 /// Attempt connection to a single server.
@@ -3274,7 +3300,7 @@ pub fn reconnect(self: *Client, allocator: Allocator) !void {
         // Error event already pushed by backupSubscriptions
     };
     self.cleanupForReconnect();
-    self.state = .reconnecting;
+    State.atomicStore(&self.state, .reconnecting);
 
     const max = self.options.max_reconnect_attempts;
     const infinite = max == 0;
@@ -3322,7 +3348,7 @@ pub fn reconnect(self: *Client, allocator: Allocator) !void {
                 );
             };
 
-            self.state = .connected;
+            State.atomicStore(&self.state, .connected);
             self.reconnect_attempt = 0;
             self.stats.reconnects += 1;
             self.server_pool.resetFailures();
@@ -3828,50 +3854,61 @@ pub const Subscription = struct {
 
     /// Push message to queue (called by io_task).
     /// Lock-free, never blocks.
-    /// ⚠️ HOT PATH: called for every message. Keep minimal.
+    /// HOT PATH: called for every message. Keep minimal.
     pub fn pushMessage(self: *Subscription, msg: Message) !void {
-        const queue_len = self.queue.len();
-
-        // Check pending message limit if set (flow control)
-        if (self.pending_limit > 0 and queue_len >= self.pending_limit) {
-            return error.QueueFull;
-        }
-
-        // Use backing_buf.len (always set for io_task messages) - avoids
-        // 4 field accesses in msg.size()
-        const msg_size = if (msg.backing_buf) |buf| buf.len else msg.size();
-
-        // Check pending bytes limit if set (flow control)
-        if (self.pending_bytes_limit > 0 and
-            self.pending_bytes + msg_size > self.pending_bytes_limit)
+        if (self.pending_limit > 0 or
+            self.pending_bytes_limit > 0)
         {
-            return error.QueueFull;
+            // Slow path: flow control active
+            const queue_len = self.queue.len();
+            if (self.pending_limit > 0 and
+                queue_len >= self.pending_limit)
+                return error.QueueFull;
+            const msg_size =
+                if (msg.backing_buf) |buf|
+                    buf.len
+                else
+                    msg.size();
+            if (self.pending_bytes_limit > 0 and
+                self.pending_bytes + msg_size >
+                    self.pending_bytes_limit)
+            {
+                return error.QueueFull;
+            }
+            if (!self.queue.push(msg))
+                return error.QueueFull;
+            self.pending_bytes += msg_size;
+            // Watermarks (reuse queue_len)
+            const new_len = queue_len + 1;
+            if (new_len > self.max_pending_msgs)
+                self.max_pending_msgs = new_len;
+            if (self.pending_bytes > self.max_pending_bytes)
+                self.max_pending_bytes = self.pending_bytes;
+        } else {
+            // Fast path: no flow control (3 atomic ops)
+            if (!self.queue.push(msg))
+                return error.QueueFull;
+            const msg_size =
+                if (msg.backing_buf) |buf|
+                    buf.len
+                else
+                    msg.size();
+            self.pending_bytes += msg_size;
+            if (self.pending_bytes > self.max_pending_bytes)
+                self.max_pending_bytes = self.pending_bytes;
         }
 
-        if (!self.queue.push(msg)) return error.QueueFull;
-
-        self.pending_bytes += msg_size;
-
-        // High watermarks (queue_len + 1 = new length after push)
-        const new_len = queue_len + 1;
-        if (new_len > self.max_pending_msgs) {
-            self.max_pending_msgs = new_len;
-        }
-        if (self.pending_bytes > self.max_pending_bytes) {
-            self.max_pending_bytes = self.pending_bytes;
-        }
-
-        // Track delivered count for auto-unsubscribe (opt-in, only if max set)
+        // Auto-unsubscribe (only when max_msgs set)
         if (self.max_msgs != null) {
             self.delivered_count += 1;
-            // Check if limit reached - fire subscription_complete event
             if (self.delivered_count >= self.max_msgs.? and
                 !self.auto_unsub_triggered)
             {
                 self.auto_unsub_triggered = true;
-                // Notify via event callback that subscription reached its limit
                 self.client.pushEvent(.{
-                    .subscription_complete = .{ .sid = self.sid },
+                    .subscription_complete = .{
+                        .sid = self.sid,
+                    },
                 });
             }
         }

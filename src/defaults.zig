@@ -127,7 +127,7 @@ pub const Spin = struct {
     /// Loop iterations between health check timestamp reads in io_task.
     /// With 1ms poll timeout, 100 iterations = ~100ms between timestamp checks.
     /// This aligns with health_check_interval_ns (100ms) in io_task.
-    pub const health_check_iterations: u32 = 100000;
+    pub const health_check_iterations: u32 = 1000000;
     /// Loop iterations between timeout checks in nextWithTimeout().
     /// Reduces syscalls while maintaining reasonable timeout granularity.
     pub const timeout_check_iterations: u32 = 10000;
@@ -141,7 +141,7 @@ pub const Poll = struct {
     /// 1000 = 1ms, balanced (default)
     /// Values < 1000 require ppoll() on Linux for sub-ms precision.
     /// poll() rounds up to 1ms minimum.
-    pub const timeout_us: i32 = 500;
+    pub const timeout_us: i32 = 1000;
 };
 
 /// Protocol limits for subjects and queue groups.

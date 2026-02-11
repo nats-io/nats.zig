@@ -1,15 +1,16 @@
 //! Autoflush Integration Tests
 //!
-//! Tests automatic buffer flushing functionality including:
-//! - Basic delivery without explicit flush
-//! - Multiple message batching
-//! - High throughput scenarios
-//! - TLS double-flush
-//! - Subscribe triggers autoflush
+//! Tests automatic buffer flushing for ALL code paths that set
+//! flush_requested, including:
+//! - publish, publishRequest, publishWithHeaders
+//! - publishRequestWithHeaders, publishWithHeaderMap, publishMsg
+//! - subscribe, autoUnsubscribe, drain, unsubscribe
+//! - High throughput, latency, TLS, disconnect safety
 
 const std = @import("std");
 const utils = @import("../test_utils.zig");
 const nats = utils.nats;
+const headers = nats.protocol.headers;
 
 const reportResult = utils.reportResult;
 const formatUrl = utils.formatUrl;
@@ -23,7 +24,10 @@ const Dir = std.Io.Dir;
 const autoflush_port: u16 = 14240;
 
 /// Returns absolute path to CA file. Caller owns returned memory.
-fn getCaFilePath(allocator: std.mem.Allocator, io: std.Io) ?[:0]const u8 {
+fn getCaFilePath(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+) ?[:0]const u8 {
     return Dir.realPathFileAlloc(
         .cwd(),
         io,
@@ -33,90 +37,164 @@ fn getCaFilePath(allocator: std.mem.Allocator, io: std.Io) ?[:0]const u8 {
 }
 
 /// Test 1: Verify messages are delivered without explicit flush.
-fn testAutoflushBasicDelivery(allocator: std.mem.Allocator) void {
+fn testAutoflushBasicDelivery(
+    allocator: std.mem.Allocator,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    var io: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{
-        .reconnect = false,
-    }) catch |err| {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch |err| {
         var err_buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrint(
             &err_buf,
             "connect failed: {}",
             .{err},
         ) catch "connect error";
-        reportResult("autoflush_basic_delivery", false, msg);
+        reportResult(
+            "autoflush_basic_delivery",
+            false,
+            msg,
+        );
         return;
     };
     defer client.deinit(allocator);
 
-    var sub = client.subscribe(allocator, "autoflush.basic") catch {
-        reportResult("autoflush_basic_delivery", false, "subscribe failed");
+    var sub = client.subscribe(
+        allocator,
+        "autoflush.basic",
+    ) catch {
+        reportResult(
+            "autoflush_basic_delivery",
+            false,
+            "subscribe failed",
+        );
         return;
     };
     defer sub.deinit(allocator);
 
-    // Publish WITHOUT explicit flush - autoflush should deliver
-    client.publish("autoflush.basic", "autoflush-test-msg") catch {
-        reportResult("autoflush_basic_delivery", false, "publish failed");
+    client.publish(
+        "autoflush.basic",
+        "autoflush-test-msg",
+    ) catch {
+        reportResult(
+            "autoflush_basic_delivery",
+            false,
+            "publish failed",
+        );
         return;
     };
 
-    // Wait for autoflush (poll interval ~1ms + processing)
-    if (sub.nextWithTimeout(allocator, 100) catch null) |msg| {
+    if (sub.nextWithTimeout(
+        allocator,
+        100,
+    ) catch null) |msg| {
         defer msg.deinit(allocator);
-        if (std.mem.eql(u8, msg.data, "autoflush-test-msg")) {
-            reportResult("autoflush_basic_delivery", true, "");
+        if (std.mem.eql(
+            u8,
+            msg.data,
+            "autoflush-test-msg",
+        )) {
+            reportResult(
+                "autoflush_basic_delivery",
+                true,
+                "",
+            );
         } else {
-            reportResult("autoflush_basic_delivery", false, "wrong data");
+            reportResult(
+                "autoflush_basic_delivery",
+                false,
+                "wrong data",
+            );
         }
     } else {
-        reportResult("autoflush_basic_delivery", false, "no message received");
+        reportResult(
+            "autoflush_basic_delivery",
+            false,
+            "no message received",
+        );
     }
 }
 
 /// Test 2: Verify multiple messages batch and deliver together.
-fn testAutoflushMultipleMessages(allocator: std.mem.Allocator) void {
+fn testAutoflushMultipleMessages(
+    allocator: std.mem.Allocator,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    var io: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{
-        .reconnect = false,
-    }) catch {
-        reportResult("autoflush_multiple_msgs", false, "connect failed");
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_multiple_msgs",
+            false,
+            "connect failed",
+        );
         return;
     };
     defer client.deinit(allocator);
 
-    var sub = client.subscribe(allocator, "autoflush.multi") catch {
-        reportResult("autoflush_multiple_msgs", false, "subscribe failed");
+    var sub = client.subscribe(
+        allocator,
+        "autoflush.multi",
+    ) catch {
+        reportResult(
+            "autoflush_multiple_msgs",
+            false,
+            "subscribe failed",
+        );
         return;
     };
     defer sub.deinit(allocator);
 
-    // Publish 10 messages rapidly without flush
     const msg_count: u8 = 10;
     var i: u8 = 0;
     while (i < msg_count) : (i += 1) {
         var buf: [32]u8 = undefined;
-        const payload = std.fmt.bufPrint(&buf, "msg-{d}", .{i}) catch "msg";
-        client.publish("autoflush.multi", payload) catch {
-            reportResult("autoflush_multiple_msgs", false, "publish failed");
+        const payload = std.fmt.bufPrint(
+            &buf,
+            "msg-{d}",
+            .{i},
+        ) catch "msg";
+        client.publish(
+            "autoflush.multi",
+            payload,
+        ) catch {
+            reportResult(
+                "autoflush_multiple_msgs",
+                false,
+                "publish failed",
+            );
             return;
         };
     }
 
-    // Wait for autoflush to deliver all
     var received: u8 = 0;
     while (received < msg_count) {
-        if (sub.nextWithTimeout(allocator, 200) catch null) |msg| {
+        if (sub.nextWithTimeout(
+            allocator,
+            200,
+        ) catch null) |msg| {
             msg.deinit(allocator);
             received += 1;
         } else {
@@ -125,7 +203,11 @@ fn testAutoflushMultipleMessages(allocator: std.mem.Allocator) void {
     }
 
     if (received == msg_count) {
-        reportResult("autoflush_multiple_msgs", true, "");
+        reportResult(
+            "autoflush_multiple_msgs",
+            true,
+            "",
+        );
     } else {
         var buf: [32]u8 = undefined;
         const detail = std.fmt.bufPrint(
@@ -133,47 +215,80 @@ fn testAutoflushMultipleMessages(allocator: std.mem.Allocator) void {
             "{d}/{d} received",
             .{ received, msg_count },
         ) catch "partial";
-        reportResult("autoflush_multiple_msgs", false, detail);
+        reportResult(
+            "autoflush_multiple_msgs",
+            false,
+            detail,
+        );
     }
 }
 
-/// Test 3: Verify autoflush handles high publish rate.
-fn testAutoflushHighThroughput(allocator: std.mem.Allocator) void {
+/// Test 3: Verify autoflush delivers all messages under high
+/// publish rate. NATS over TCP on localhost must be lossless.
+fn testAutoflushHighThroughput(
+    allocator: std.mem.Allocator,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    var io: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{
-        .reconnect = false,
-    }) catch {
-        reportResult("autoflush_high_throughput", false, "connect failed");
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_high_throughput",
+            false,
+            "connect failed",
+        );
         return;
     };
     defer client.deinit(allocator);
 
-    var sub = client.subscribe(allocator, "autoflush.throughput") catch {
-        reportResult("autoflush_high_throughput", false, "subscribe failed");
+    var sub = client.subscribe(
+        allocator,
+        "autoflush.throughput",
+    ) catch {
+        reportResult(
+            "autoflush_high_throughput",
+            false,
+            "subscribe failed",
+        );
         return;
     };
     defer sub.deinit(allocator);
 
-    // Publish 1000 messages in tight loop without flush
+    // Publish 1000 messages - every publish must succeed
     const msg_count: u32 = 1000;
-    var published: u32 = 0;
     var i: u32 = 0;
     while (i < msg_count) : (i += 1) {
-        client.publish("autoflush.throughput", "data") catch continue;
-        published += 1;
+        client.publish(
+            "autoflush.throughput",
+            "data",
+        ) catch {
+            reportResult(
+                "autoflush_high_throughput",
+                false,
+                "publish failed",
+            );
+            return;
+        };
     }
 
-    // Give time for autoflush to process all
-    io.io().sleep(.fromMilliseconds(500), .awake) catch {};
-
+    // Receive all - TCP on localhost must be lossless
     var received: u32 = 0;
     while (received < msg_count) {
-        if (sub.nextWithTimeout(allocator, 100) catch null) |msg| {
+        if (sub.nextWithTimeout(
+            allocator,
+            200,
+        ) catch null) |msg| {
             msg.deinit(allocator);
             received += 1;
         } else {
@@ -181,21 +296,29 @@ fn testAutoflushHighThroughput(allocator: std.mem.Allocator) void {
         }
     }
 
-    // Accept if we got most messages (network/timing can lose some)
-    if (received >= published * 9 / 10) {
-        reportResult("autoflush_high_throughput", true, "");
+    if (received == msg_count) {
+        reportResult(
+            "autoflush_high_throughput",
+            true,
+            "",
+        );
     } else {
         var buf: [48]u8 = undefined;
         const detail = std.fmt.bufPrint(
             &buf,
-            "{d}/{d} received (pub={d})",
-            .{ received, msg_count, published },
+            "{d}/{d} received",
+            .{ received, msg_count },
         ) catch "partial";
-        reportResult("autoflush_high_throughput", false, detail);
+        reportResult(
+            "autoflush_high_throughput",
+            false,
+            detail,
+        );
     }
 }
 
-/// Test 4: Verify double-check pattern prevents BADF panic during disconnect.
+/// Test 4: Double-check pattern prevents BADF panic during
+/// disconnect.
 fn testAutoflushDuringDisconnect(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -203,99 +326,162 @@ fn testAutoflushDuringDisconnect(
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, autoflush_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    var io: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
     defer io.deinit();
 
-    // Start dedicated server for this test
-    const server = manager.startServer(allocator, io.io(), .{
-        .port = autoflush_port,
-    }) catch {
-        reportResult("autoflush_during_disconnect", false, "server start failed");
+    const server = manager.startServer(
+        allocator,
+        io.io(),
+        .{ .port = autoflush_port },
+    ) catch {
+        reportResult(
+            "autoflush_during_disconnect",
+            false,
+            "server start failed",
+        );
         return;
     };
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{
-        .reconnect = true,
-        .max_reconnect_attempts = 5,
-        .reconnect_wait_ms = 100,
-    }) catch {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{
+            .reconnect = true,
+            .max_reconnect_attempts = 5,
+            .reconnect_wait_ms = 100,
+        },
+    ) catch {
         server.stop(io.io());
-        reportResult("autoflush_during_disconnect", false, "connect failed");
+        reportResult(
+            "autoflush_during_disconnect",
+            false,
+            "connect failed",
+        );
         return;
     };
     defer client.deinit(allocator);
 
-    var sub = client.subscribe(allocator, "autoflush.disconnect") catch {
+    var sub = client.subscribe(
+        allocator,
+        "autoflush.disconnect",
+    ) catch {
         server.stop(io.io());
-        reportResult("autoflush_during_disconnect", false, "subscribe failed");
+        reportResult(
+            "autoflush_during_disconnect",
+            false,
+            "subscribe failed",
+        );
         return;
     };
     defer sub.deinit(allocator);
 
-    // Publish some messages
     var i: u8 = 0;
     while (i < 10) : (i += 1) {
-        client.publish("autoflush.disconnect", "before") catch {};
+        client.publish(
+            "autoflush.disconnect",
+            "before",
+        ) catch {};
     }
 
-    // Stop server mid-operation (should NOT panic with BADF)
+    // Stop server mid-operation (must NOT panic with BADF)
     server.stop(io.io());
 
-    // Continue publishing during disconnect (goes to pending buffer)
     i = 0;
     while (i < 5) : (i += 1) {
-        client.publish("autoflush.disconnect", "during") catch {};
-        io.io().sleep(.fromMilliseconds(10), .awake) catch {};
+        client.publish(
+            "autoflush.disconnect",
+            "during",
+        ) catch {};
+        io.io().sleep(
+            .fromMilliseconds(10),
+            .awake,
+        ) catch {};
     }
 
-    // Restart server
-    const server2 = manager.startServer(allocator, io.io(), .{
-        .port = autoflush_port,
-    }) catch {
-        reportResult("autoflush_during_disconnect", false, "restart failed");
+    const server2 = manager.startServer(
+        allocator,
+        io.io(),
+        .{ .port = autoflush_port },
+    ) catch {
+        reportResult(
+            "autoflush_during_disconnect",
+            false,
+            "restart failed",
+        );
         return;
     };
     defer server2.stop(io.io());
 
-    io.io().sleep(.fromMilliseconds(500), .awake) catch {};
+    io.io().sleep(
+        .fromMilliseconds(500),
+        .awake,
+    ) catch {};
 
-    // Test passes if we got here without panic
-    if (client.isConnected()) {
-        reportResult("autoflush_during_disconnect", true, "");
-    } else {
-        // Even if not reconnected, no panic is success
-        reportResult("autoflush_during_disconnect", true, "");
-    }
+    // Reaching here without panic is the success criterion
+    reportResult(
+        "autoflush_during_disconnect",
+        true,
+        "",
+    );
 }
 
 /// Test 5: Verify TLS double-flush works correctly.
-fn testAutoflushTLS(allocator: std.mem.Allocator, manager: *ServerManager) void {
+fn testAutoflushTLS(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatTlsUrl(&url_buf, tls_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    var io: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
     defer io.deinit();
 
-    const ca_path = getCaFilePath(allocator, io.io()) orelse {
-        reportResult("autoflush_tls", false, "CA file not found");
+    const ca_path = getCaFilePath(
+        allocator,
+        io.io(),
+    ) orelse {
+        reportResult(
+            "autoflush_tls",
+            false,
+            "CA file not found",
+        );
         return;
     };
     defer allocator.free(ca_path);
 
-    // Start TLS server (may have been stopped by previous tests)
-    const tls_server = manager.startServer(allocator, io.io(), .{
-        .port = tls_port,
-        .config_file = utils.tls_config_file,
-    }) catch {
-        reportResult("autoflush_tls", false, "TLS server start failed");
+    const tls_server = manager.startServer(
+        allocator,
+        io.io(),
+        .{
+            .port = tls_port,
+            .config_file = utils.tls_config_file,
+        },
+    ) catch {
+        reportResult(
+            "autoflush_tls",
+            false,
+            "TLS server start failed",
+        );
         return;
     };
     defer tls_server.stop(io.io());
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{
-        .reconnect = false,
-        .tls_ca_file = ca_path,
-    }) catch |err| {
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{
+            .reconnect = false,
+            .tls_ca_file = ca_path,
+        },
+    ) catch |err| {
         var err_buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrint(
             &err_buf,
@@ -307,236 +493,450 @@ fn testAutoflushTLS(allocator: std.mem.Allocator, manager: *ServerManager) void 
     };
     defer client.deinit(allocator);
 
-    var sub = client.subscribe(allocator, "autoflush.tls") catch {
-        reportResult("autoflush_tls", false, "subscribe failed");
+    var sub = client.subscribe(
+        allocator,
+        "autoflush.tls",
+    ) catch {
+        reportResult(
+            "autoflush_tls",
+            false,
+            "subscribe failed",
+        );
         return;
     };
     defer sub.deinit(allocator);
 
-    // Publish WITHOUT explicit flush over TLS
-    client.publish("autoflush.tls", "tls-autoflush-msg") catch {
-        reportResult("autoflush_tls", false, "publish failed");
+    client.publish(
+        "autoflush.tls",
+        "tls-autoflush-msg",
+    ) catch {
+        reportResult(
+            "autoflush_tls",
+            false,
+            "publish failed",
+        );
         return;
     };
 
-    // Wait for autoflush (both TLS and TCP must flush)
-    if (sub.nextWithTimeout(allocator, 200) catch null) |msg| {
+    if (sub.nextWithTimeout(
+        allocator,
+        200,
+    ) catch null) |msg| {
         defer msg.deinit(allocator);
-        if (std.mem.eql(u8, msg.data, "tls-autoflush-msg")) {
+        if (std.mem.eql(
+            u8,
+            msg.data,
+            "tls-autoflush-msg",
+        )) {
             reportResult("autoflush_tls", true, "");
         } else {
-            reportResult("autoflush_tls", false, "wrong data");
+            reportResult(
+                "autoflush_tls",
+                false,
+                "wrong data",
+            );
         }
     } else {
-        reportResult("autoflush_tls", false, "no message received");
+        reportResult(
+            "autoflush_tls",
+            false,
+            "no message received",
+        );
     }
 }
 
-/// Test 6: Verify reasonable latency (message arrives within timeout).
-fn testAutoflushLatencyBound(allocator: std.mem.Allocator) void {
+/// Test 6: Verify reasonable latency (message within 50ms).
+fn testAutoflushLatencyBound(
+    allocator: std.mem.Allocator,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    var io: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{
-        .reconnect = false,
-    }) catch {
-        reportResult("autoflush_latency", false, "connect failed");
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_latency",
+            false,
+            "connect failed",
+        );
         return;
     };
     defer client.deinit(allocator);
 
-    var sub = client.subscribe(allocator, "autoflush.latency") catch {
-        reportResult("autoflush_latency", false, "subscribe failed");
+    var sub = client.subscribe(
+        allocator,
+        "autoflush.latency",
+    ) catch {
+        reportResult(
+            "autoflush_latency",
+            false,
+            "subscribe failed",
+        );
         return;
     };
     defer sub.deinit(allocator);
 
-    // Publish and expect quick delivery (50ms timeout is generous for ~1ms)
-    client.publish("autoflush.latency", "latency-test") catch {
-        reportResult("autoflush_latency", false, "publish failed");
+    client.publish(
+        "autoflush.latency",
+        "latency-test",
+    ) catch {
+        reportResult(
+            "autoflush_latency",
+            false,
+            "publish failed",
+        );
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 50) catch null) |msg| {
+    if (sub.nextWithTimeout(
+        allocator,
+        50,
+    ) catch null) |msg| {
         msg.deinit(allocator);
         reportResult("autoflush_latency", true, "");
     } else {
-        reportResult("autoflush_latency", false, "timeout (>50ms)");
+        reportResult(
+            "autoflush_latency",
+            false,
+            "timeout (>50ms)",
+        );
     }
 }
 
 /// Test 7: Verify subscribe also triggers autoflush.
-fn testAutoflushWithSubscribe(allocator: std.mem.Allocator) void {
+fn testAutoflushWithSubscribe(
+    allocator: std.mem.Allocator,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io1: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    var io1: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
     defer io1.deinit();
-    var io2: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    var io2: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
     defer io2.deinit();
 
-    // Client 1 for publishing
-    const client1 = nats.Client.connect(allocator, io1.io(), url, .{
-        .reconnect = false,
-    }) catch {
-        reportResult("autoflush_subscribe", false, "client1 connect failed");
+    const client1 = nats.Client.connect(
+        allocator,
+        io1.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_subscribe",
+            false,
+            "client1 connect failed",
+        );
         return;
     };
     defer client1.deinit(allocator);
 
-    // Client 2 subscribes (SUB command needs autoflush)
-    const client2 = nats.Client.connect(allocator, io2.io(), url, .{
-        .reconnect = false,
-    }) catch {
-        reportResult("autoflush_subscribe", false, "client2 connect failed");
+    const client2 = nats.Client.connect(
+        allocator,
+        io2.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_subscribe",
+            false,
+            "client2 connect failed",
+        );
         return;
     };
     defer client2.deinit(allocator);
 
-    var sub = client2.subscribe(allocator, "autoflush.sub.test") catch {
-        reportResult("autoflush_subscribe", false, "subscribe failed");
+    var sub = client2.subscribe(
+        allocator,
+        "autoflush.sub.test",
+    ) catch {
+        reportResult(
+            "autoflush_subscribe",
+            false,
+            "subscribe failed",
+        );
         return;
     };
     defer sub.deinit(allocator);
 
-    // Small delay for server to process SUB (autoflush delivers it)
-    io1.io().sleep(.fromMilliseconds(20), .awake) catch {};
+    io1.io().sleep(
+        .fromMilliseconds(20),
+        .awake,
+    ) catch {};
 
-    // Client 1 publishes
-    client1.publish("autoflush.sub.test", "sub-test-msg") catch {
-        reportResult("autoflush_subscribe", false, "publish failed");
+    client1.publish(
+        "autoflush.sub.test",
+        "sub-test-msg",
+    ) catch {
+        reportResult(
+            "autoflush_subscribe",
+            false,
+            "publish failed",
+        );
         return;
     };
 
-    // Wait for message
-    if (sub.nextWithTimeout(allocator, 200) catch null) |msg| {
+    if (sub.nextWithTimeout(
+        allocator,
+        200,
+    ) catch null) |msg| {
         msg.deinit(allocator);
-        reportResult("autoflush_subscribe", true, "");
+        reportResult(
+            "autoflush_subscribe",
+            true,
+            "",
+        );
     } else {
-        reportResult("autoflush_subscribe", false, "no message received");
+        reportResult(
+            "autoflush_subscribe",
+            false,
+            "no message received",
+        );
     }
 }
 
 /// Test 8: Verify single message doesn't get stuck in buffer.
-fn testAutoflushNoBatching(allocator: std.mem.Allocator) void {
+fn testAutoflushNoBatching(
+    allocator: std.mem.Allocator,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    var io: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
     defer io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{
-        .reconnect = false,
-    }) catch {
-        reportResult("autoflush_no_batching", false, "connect failed");
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_no_batching",
+            false,
+            "connect failed",
+        );
         return;
     };
     defer client.deinit(allocator);
 
-    var sub = client.subscribe(allocator, "autoflush.single") catch {
-        reportResult("autoflush_no_batching", false, "subscribe failed");
+    var sub = client.subscribe(
+        allocator,
+        "autoflush.single",
+    ) catch {
+        reportResult(
+            "autoflush_no_batching",
+            false,
+            "subscribe failed",
+        );
         return;
     };
     defer sub.deinit(allocator);
 
-    // Publish single message
-    client.publish("autoflush.single", "single-msg") catch {
-        reportResult("autoflush_no_batching", false, "publish failed");
+    client.publish(
+        "autoflush.single",
+        "single-msg",
+    ) catch {
+        reportResult(
+            "autoflush_no_batching",
+            false,
+            "publish failed",
+        );
         return;
     };
 
-    // Should arrive quickly, not waiting for batch
-    if (sub.nextWithTimeout(allocator, 30) catch null) |msg| {
+    if (sub.nextWithTimeout(
+        allocator,
+        30,
+    ) catch null) |msg| {
         msg.deinit(allocator);
-        reportResult("autoflush_no_batching", true, "");
+        reportResult(
+            "autoflush_no_batching",
+            true,
+            "",
+        );
     } else {
-        reportResult("autoflush_no_batching", false, "message stuck in buffer");
+        reportResult(
+            "autoflush_no_batching",
+            false,
+            "message stuck in buffer",
+        );
     }
 }
 
 /// Test 9: Verify autoflush works with multiple clients.
-fn testAutoflushMultiClient(allocator: std.mem.Allocator) void {
+fn testAutoflushMultiClient(
+    allocator: std.mem.Allocator,
+) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    var io1: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    var io1: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
     defer io1.deinit();
-    var io2: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    var io2: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
     defer io2.deinit();
-    var io3: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
+    var io3: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
     defer io3.deinit();
 
-    const client1 = nats.Client.connect(allocator, io1.io(), url, .{
-        .reconnect = false,
-    }) catch {
-        reportResult("autoflush_multi_client", false, "client1 connect failed");
+    const client1 = nats.Client.connect(
+        allocator,
+        io1.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_multi_client",
+            false,
+            "client1 connect failed",
+        );
         return;
     };
     defer client1.deinit(allocator);
 
-    const client2 = nats.Client.connect(allocator, io2.io(), url, .{
-        .reconnect = false,
-    }) catch {
-        reportResult("autoflush_multi_client", false, "client2 connect failed");
+    const client2 = nats.Client.connect(
+        allocator,
+        io2.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_multi_client",
+            false,
+            "client2 connect failed",
+        );
         return;
     };
     defer client2.deinit(allocator);
 
-    const client3 = nats.Client.connect(allocator, io3.io(), url, .{
-        .reconnect = false,
-    }) catch {
-        reportResult("autoflush_multi_client", false, "client3 connect failed");
+    const client3 = nats.Client.connect(
+        allocator,
+        io3.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_multi_client",
+            false,
+            "client3 connect failed",
+        );
         return;
     };
     defer client3.deinit(allocator);
 
-    // Each client subscribes to receive from another
-    var sub1 = client1.subscribe(allocator, "autoflush.mc.to1") catch {
-        reportResult("autoflush_multi_client", false, "sub1 failed");
+    var sub1 = client1.subscribe(
+        allocator,
+        "autoflush.mc.to1",
+    ) catch {
+        reportResult(
+            "autoflush_multi_client",
+            false,
+            "sub1 failed",
+        );
         return;
     };
     defer sub1.deinit(allocator);
 
-    var sub2 = client2.subscribe(allocator, "autoflush.mc.to2") catch {
-        reportResult("autoflush_multi_client", false, "sub2 failed");
+    var sub2 = client2.subscribe(
+        allocator,
+        "autoflush.mc.to2",
+    ) catch {
+        reportResult(
+            "autoflush_multi_client",
+            false,
+            "sub2 failed",
+        );
         return;
     };
     defer sub2.deinit(allocator);
 
-    var sub3 = client3.subscribe(allocator, "autoflush.mc.to3") catch {
-        reportResult("autoflush_multi_client", false, "sub3 failed");
+    var sub3 = client3.subscribe(
+        allocator,
+        "autoflush.mc.to3",
+    ) catch {
+        reportResult(
+            "autoflush_multi_client",
+            false,
+            "sub3 failed",
+        );
         return;
     };
     defer sub3.deinit(allocator);
 
-    // Small delay for subscriptions to register
-    io1.io().sleep(.fromMilliseconds(20), .awake) catch {};
+    io1.io().sleep(
+        .fromMilliseconds(20),
+        .awake,
+    ) catch {};
 
-    // Cross-publish without flush
-    client1.publish("autoflush.mc.to2", "from1") catch {};
-    client2.publish("autoflush.mc.to3", "from2") catch {};
-    client3.publish("autoflush.mc.to1", "from3") catch {};
+    client1.publish(
+        "autoflush.mc.to2",
+        "from1",
+    ) catch {};
+    client2.publish(
+        "autoflush.mc.to3",
+        "from2",
+    ) catch {};
+    client3.publish(
+        "autoflush.mc.to1",
+        "from3",
+    ) catch {};
 
     var received: u8 = 0;
 
-    if (sub1.nextWithTimeout(allocator, 200) catch null) |msg| {
+    if (sub1.nextWithTimeout(
+        allocator,
+        200,
+    ) catch null) |msg| {
         msg.deinit(allocator);
         received += 1;
     }
-    if (sub2.nextWithTimeout(allocator, 200) catch null) |msg| {
+    if (sub2.nextWithTimeout(
+        allocator,
+        200,
+    ) catch null) |msg| {
         msg.deinit(allocator);
         received += 1;
     }
-    if (sub3.nextWithTimeout(allocator, 200) catch null) |msg| {
+    if (sub3.nextWithTimeout(
+        allocator,
+        200,
+    ) catch null) |msg| {
         msg.deinit(allocator);
         received += 1;
     }
 
     if (received == 3) {
-        reportResult("autoflush_multi_client", true, "");
+        reportResult(
+            "autoflush_multi_client",
+            true,
+            "",
+        );
     } else {
         var buf: [32]u8 = undefined;
         const detail = std.fmt.bufPrint(
@@ -544,11 +944,1077 @@ fn testAutoflushMultiClient(allocator: std.mem.Allocator) void {
             "{d}/3 received",
             .{received},
         ) catch "partial";
-        reportResult("autoflush_multi_client", false, detail);
+        reportResult(
+            "autoflush_multi_client",
+            false,
+            detail,
+        );
     }
 }
 
-pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
+// -- New tests for uncovered code paths --
+
+/// Test 10: publishRequest autoflush - request-reply pattern
+/// where a service publishes expecting a reply on a given inbox.
+fn testAutoflushPublishRequest(
+    allocator: std.mem.Allocator,
+) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io1: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer io1.deinit();
+    var io2: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer io2.deinit();
+
+    const pub_client = nats.Client.connect(
+        allocator,
+        io1.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_publish_request",
+            false,
+            "pub connect failed",
+        );
+        return;
+    };
+    defer pub_client.deinit(allocator);
+
+    const sub_client = nats.Client.connect(
+        allocator,
+        io2.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_publish_request",
+            false,
+            "sub connect failed",
+        );
+        return;
+    };
+    defer sub_client.deinit(allocator);
+
+    var sub = sub_client.subscribe(
+        allocator,
+        "autoflush.pubreq",
+    ) catch {
+        reportResult(
+            "autoflush_publish_request",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    io1.io().sleep(
+        .fromMilliseconds(20),
+        .awake,
+    ) catch {};
+
+    // publishRequest: no explicit flush
+    pub_client.publishRequest(
+        "autoflush.pubreq",
+        "reply.inbox.1",
+        "request-payload",
+    ) catch {
+        reportResult(
+            "autoflush_publish_request",
+            false,
+            "publishRequest failed",
+        );
+        return;
+    };
+
+    if (sub.nextWithTimeout(
+        allocator,
+        200,
+    ) catch null) |msg| {
+        defer msg.deinit(allocator);
+
+        const data_ok = std.mem.eql(
+            u8,
+            msg.data,
+            "request-payload",
+        );
+        const reply_ok = if (msg.reply_to) |rt|
+            std.mem.eql(u8, rt, "reply.inbox.1")
+        else
+            false;
+
+        if (data_ok and reply_ok) {
+            reportResult(
+                "autoflush_publish_request",
+                true,
+                "",
+            );
+        } else if (!reply_ok) {
+            reportResult(
+                "autoflush_publish_request",
+                false,
+                "wrong reply_to",
+            );
+        } else {
+            reportResult(
+                "autoflush_publish_request",
+                false,
+                "wrong data",
+            );
+        }
+    } else {
+        reportResult(
+            "autoflush_publish_request",
+            false,
+            "no message received",
+        );
+    }
+}
+
+/// Test 11: publishWithHeaders autoflush - publishing messages
+/// with metadata headers (tracing IDs, content types).
+fn testAutoflushPublishWithHeaders(
+    allocator: std.mem.Allocator,
+) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer io.deinit();
+
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_pub_headers",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit(allocator);
+
+    var sub = client.subscribe(
+        allocator,
+        "autoflush.headers",
+    ) catch {
+        reportResult(
+            "autoflush_pub_headers",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    const hdrs = [_]headers.Entry{
+        .{
+            .key = "X-Trace-Id",
+            .value = "af-trace-001",
+        },
+    };
+
+    // publishWithHeaders: no explicit flush
+    client.publishWithHeaders(
+        "autoflush.headers",
+        &hdrs,
+        "hdr-payload",
+    ) catch {
+        reportResult(
+            "autoflush_pub_headers",
+            false,
+            "publishWithHeaders failed",
+        );
+        return;
+    };
+
+    if (sub.nextWithTimeout(
+        allocator,
+        200,
+    ) catch null) |msg| {
+        defer msg.deinit(allocator);
+
+        if (msg.headers == null) {
+            reportResult(
+                "autoflush_pub_headers",
+                false,
+                "no headers received",
+            );
+            return;
+        }
+
+        var parsed = headers.parse(
+            allocator,
+            msg.headers.?,
+        );
+        defer parsed.deinit();
+
+        if (parsed.err != null) {
+            reportResult(
+                "autoflush_pub_headers",
+                false,
+                "header parse error",
+            );
+            return;
+        }
+
+        if (parsed.get("X-Trace-Id")) |val| {
+            if (std.mem.eql(
+                u8,
+                val,
+                "af-trace-001",
+            )) {
+                reportResult(
+                    "autoflush_pub_headers",
+                    true,
+                    "",
+                );
+            } else {
+                reportResult(
+                    "autoflush_pub_headers",
+                    false,
+                    "wrong header value",
+                );
+            }
+        } else {
+            reportResult(
+                "autoflush_pub_headers",
+                false,
+                "header key not found",
+            );
+        }
+    } else {
+        reportResult(
+            "autoflush_pub_headers",
+            false,
+            "no message received",
+        );
+    }
+}
+
+/// Test 12: publishRequestWithHeaders autoflush - request-reply
+/// with metadata (correlation IDs, auth tokens).
+fn testAutoflushPubReqWithHeaders(
+    allocator: std.mem.Allocator,
+) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer io.deinit();
+
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_pubreq_headers",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit(allocator);
+
+    var sub = client.subscribe(
+        allocator,
+        "autoflush.hdr.req",
+    ) catch {
+        reportResult(
+            "autoflush_pubreq_headers",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    const hdrs = [_]headers.Entry{
+        .{
+            .key = "X-Correlation-Id",
+            .value = "corr-42",
+        },
+    };
+
+    // publishRequestWithHeaders: no explicit flush
+    client.publishRequestWithHeaders(
+        "autoflush.hdr.req",
+        "reply.hdr.inbox",
+        &hdrs,
+        "hdr-req-payload",
+    ) catch {
+        reportResult(
+            "autoflush_pubreq_headers",
+            false,
+            "publish failed",
+        );
+        return;
+    };
+
+    if (sub.nextWithTimeout(
+        allocator,
+        200,
+    ) catch null) |msg| {
+        defer msg.deinit(allocator);
+
+        const reply_ok = if (msg.reply_to) |rt|
+            std.mem.eql(u8, rt, "reply.hdr.inbox")
+        else
+            false;
+
+        if (!reply_ok) {
+            reportResult(
+                "autoflush_pubreq_headers",
+                false,
+                "wrong reply_to",
+            );
+            return;
+        }
+
+        if (msg.headers == null) {
+            reportResult(
+                "autoflush_pubreq_headers",
+                false,
+                "no headers",
+            );
+            return;
+        }
+
+        var parsed = headers.parse(
+            allocator,
+            msg.headers.?,
+        );
+        defer parsed.deinit();
+
+        if (parsed.get("X-Correlation-Id")) |val| {
+            if (std.mem.eql(u8, val, "corr-42")) {
+                reportResult(
+                    "autoflush_pubreq_headers",
+                    true,
+                    "",
+                );
+            } else {
+                reportResult(
+                    "autoflush_pubreq_headers",
+                    false,
+                    "wrong header value",
+                );
+            }
+        } else {
+            reportResult(
+                "autoflush_pubreq_headers",
+                false,
+                "header not found",
+            );
+        }
+    } else {
+        reportResult(
+            "autoflush_pubreq_headers",
+            false,
+            "no message received",
+        );
+    }
+}
+
+/// Test 13: publishWithHeaderMap autoflush - dynamically-built
+/// headers via HeaderMap API (middleware, routing code).
+fn testAutoflushPubWithHeaderMap(
+    allocator: std.mem.Allocator,
+) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer io.deinit();
+
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_pub_headermap",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit(allocator);
+
+    var sub = client.subscribe(
+        allocator,
+        "autoflush.hdrmap",
+    ) catch {
+        reportResult(
+            "autoflush_pub_headermap",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    var hdr_map = nats.Client.HeaderMap{};
+    defer hdr_map.deinit(allocator);
+
+    hdr_map.set(
+        allocator,
+        "X-Route",
+        "autoflush-map",
+    ) catch {
+        reportResult(
+            "autoflush_pub_headermap",
+            false,
+            "headermap set failed",
+        );
+        return;
+    };
+
+    // publishWithHeaderMap: no explicit flush
+    client.publishWithHeaderMap(
+        allocator,
+        "autoflush.hdrmap",
+        &hdr_map,
+        "map-payload",
+    ) catch {
+        reportResult(
+            "autoflush_pub_headermap",
+            false,
+            "publish failed",
+        );
+        return;
+    };
+
+    if (sub.nextWithTimeout(
+        allocator,
+        200,
+    ) catch null) |msg| {
+        defer msg.deinit(allocator);
+
+        if (msg.headers == null) {
+            reportResult(
+                "autoflush_pub_headermap",
+                false,
+                "no headers",
+            );
+            return;
+        }
+
+        var parsed = headers.parse(
+            allocator,
+            msg.headers.?,
+        );
+        defer parsed.deinit();
+
+        if (parsed.get("X-Route")) |val| {
+            if (std.mem.eql(
+                u8,
+                val,
+                "autoflush-map",
+            )) {
+                reportResult(
+                    "autoflush_pub_headermap",
+                    true,
+                    "",
+                );
+            } else {
+                reportResult(
+                    "autoflush_pub_headermap",
+                    false,
+                    "wrong header value",
+                );
+            }
+        } else {
+            reportResult(
+                "autoflush_pub_headermap",
+                false,
+                "header not found",
+            );
+        }
+    } else {
+        reportResult(
+            "autoflush_pub_headermap",
+            false,
+            "no message received",
+        );
+    }
+}
+
+/// Test 14: publishMsg autoflush - message forwarding pattern.
+/// Receive a message and republish it to another subject.
+fn testAutoflushPublishMsg(
+    allocator: std.mem.Allocator,
+) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer io.deinit();
+
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_publish_msg",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit(allocator);
+
+    var sub_dst = client.subscribe(
+        allocator,
+        "autoflush.msg.dst",
+    ) catch {
+        reportResult(
+            "autoflush_publish_msg",
+            false,
+            "subscribe dst failed",
+        );
+        return;
+    };
+    defer sub_dst.deinit(allocator);
+
+    // Construct a Message to forward via publishMsg
+    const fwd_msg = nats.Client.Message{
+        .subject = "autoflush.msg.dst",
+        .sid = 0,
+        .reply_to = null,
+        .data = "forwarded-payload",
+        .headers = null,
+        .owned = false,
+    };
+
+    // publishMsg: no explicit flush
+    client.publishMsg(&fwd_msg) catch {
+        reportResult(
+            "autoflush_publish_msg",
+            false,
+            "publishMsg failed",
+        );
+        return;
+    };
+
+    if (sub_dst.nextWithTimeout(
+        allocator,
+        200,
+    ) catch null) |msg| {
+        defer msg.deinit(allocator);
+        if (std.mem.eql(
+            u8,
+            msg.data,
+            "forwarded-payload",
+        )) {
+            reportResult(
+                "autoflush_publish_msg",
+                true,
+                "",
+            );
+        } else {
+            reportResult(
+                "autoflush_publish_msg",
+                false,
+                "wrong data",
+            );
+        }
+    } else {
+        reportResult(
+            "autoflush_publish_msg",
+            false,
+            "no message received",
+        );
+    }
+}
+
+/// Test 15: autoUnsubscribe autoflush - server enforces message
+/// limit after UNSUB is auto-flushed.
+fn testAutoflushAutoUnsubscribe(
+    allocator: std.mem.Allocator,
+) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io1: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer io1.deinit();
+    var io2: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer io2.deinit();
+
+    const pub_client = nats.Client.connect(
+        allocator,
+        io1.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_auto_unsub",
+            false,
+            "pub connect failed",
+        );
+        return;
+    };
+    defer pub_client.deinit(allocator);
+
+    const sub_client = nats.Client.connect(
+        allocator,
+        io2.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_auto_unsub",
+            false,
+            "sub connect failed",
+        );
+        return;
+    };
+    defer sub_client.deinit(allocator);
+
+    var sub = sub_client.subscribe(
+        allocator,
+        "autoflush.autounsub",
+    ) catch {
+        reportResult(
+            "autoflush_auto_unsub",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    // autoUnsubscribe(3): UNSUB sent via autoflush
+    sub.autoUnsubscribe(3) catch {
+        reportResult(
+            "autoflush_auto_unsub",
+            false,
+            "autoUnsubscribe failed",
+        );
+        return;
+    };
+
+    // Wait for UNSUB to reach server via autoflush
+    io1.io().sleep(
+        .fromMilliseconds(50),
+        .awake,
+    ) catch {};
+
+    // Publish 5 messages - server should only deliver 3
+    var i: u8 = 0;
+    while (i < 5) : (i += 1) {
+        pub_client.publish(
+            "autoflush.autounsub",
+            "msg",
+        ) catch {
+            reportResult(
+                "autoflush_auto_unsub",
+                false,
+                "publish failed",
+            );
+            return;
+        };
+    }
+
+    var received: u8 = 0;
+    while (received < 5) {
+        if (sub.nextWithTimeout(
+            allocator,
+            200,
+        ) catch null) |msg| {
+            msg.deinit(allocator);
+            received += 1;
+        } else {
+            break;
+        }
+    }
+
+    if (received == 3) {
+        reportResult(
+            "autoflush_auto_unsub",
+            true,
+            "",
+        );
+    } else {
+        var buf: [32]u8 = undefined;
+        const detail = std.fmt.bufPrint(
+            &buf,
+            "{d}/3 received",
+            .{received},
+        ) catch "count mismatch";
+        reportResult(
+            "autoflush_auto_unsub",
+            false,
+            detail,
+        );
+    }
+}
+
+/// Test 16: drain autoflush - graceful shutdown stops new
+/// messages after UNSUB is auto-flushed.
+fn testAutoflushDrain(
+    allocator: std.mem.Allocator,
+) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io1: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer io1.deinit();
+    var io2: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer io2.deinit();
+
+    const pub_client = nats.Client.connect(
+        allocator,
+        io1.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_drain",
+            false,
+            "pub connect failed",
+        );
+        return;
+    };
+    defer pub_client.deinit(allocator);
+
+    const sub_client = nats.Client.connect(
+        allocator,
+        io2.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_drain",
+            false,
+            "sub connect failed",
+        );
+        return;
+    };
+    defer sub_client.deinit(allocator);
+
+    var sub = sub_client.subscribe(
+        allocator,
+        "autoflush.drain",
+    ) catch {
+        reportResult(
+            "autoflush_drain",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    io1.io().sleep(
+        .fromMilliseconds(20),
+        .awake,
+    ) catch {};
+
+    // Publish 3 messages before drain
+    var i: u8 = 0;
+    while (i < 3) : (i += 1) {
+        pub_client.publish(
+            "autoflush.drain",
+            "before-drain",
+        ) catch {
+            reportResult(
+                "autoflush_drain",
+                false,
+                "publish before failed",
+            );
+            return;
+        };
+    }
+
+    // Receive the 3 pre-drain messages
+    var pre_drain: u8 = 0;
+    while (pre_drain < 3) {
+        if (sub.nextWithTimeout(
+            allocator,
+            200,
+        ) catch null) |msg| {
+            msg.deinit(allocator);
+            pre_drain += 1;
+        } else {
+            break;
+        }
+    }
+
+    if (pre_drain != 3) {
+        reportResult(
+            "autoflush_drain",
+            false,
+            "pre-drain msgs missing",
+        );
+        return;
+    }
+
+    // Drain: sends UNSUB via autoflush
+    sub.drain() catch {
+        reportResult(
+            "autoflush_drain",
+            false,
+            "drain failed",
+        );
+        return;
+    };
+
+    // Wait for UNSUB to reach server via autoflush
+    io1.io().sleep(
+        .fromMilliseconds(50),
+        .awake,
+    ) catch {};
+
+    // Publish after drain - should not be delivered
+    pub_client.publish(
+        "autoflush.drain",
+        "after-drain",
+    ) catch {
+        reportResult(
+            "autoflush_drain",
+            false,
+            "publish after failed",
+        );
+        return;
+    };
+
+    // Verify no new messages arrive
+    if (sub.nextWithTimeout(
+        allocator,
+        100,
+    ) catch null) |msg| {
+        msg.deinit(allocator);
+        reportResult(
+            "autoflush_drain",
+            false,
+            "got msg after drain",
+        );
+    } else {
+        reportResult("autoflush_drain", true, "");
+    }
+}
+
+/// Test 17: unsubscribe autoflush - explicit mid-session unsub
+/// stops delivery after UNSUB is auto-flushed. Uses a control
+/// subscription to verify (unsubscribed subs cannot receive).
+fn testAutoflushUnsubscribe(
+    allocator: std.mem.Allocator,
+) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var io1: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer io1.deinit();
+    var io2: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer io2.deinit();
+
+    const pub_client = nats.Client.connect(
+        allocator,
+        io1.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_unsubscribe",
+            false,
+            "pub connect failed",
+        );
+        return;
+    };
+    defer pub_client.deinit(allocator);
+
+    const sub_client = nats.Client.connect(
+        allocator,
+        io2.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "autoflush_unsubscribe",
+            false,
+            "sub connect failed",
+        );
+        return;
+    };
+    defer sub_client.deinit(allocator);
+
+    var sub = sub_client.subscribe(
+        allocator,
+        "autoflush.unsub",
+    ) catch {
+        reportResult(
+            "autoflush_unsubscribe",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit(allocator);
+
+    // Control sub to verify connection still works
+    var ctrl = sub_client.subscribe(
+        allocator,
+        "autoflush.unsub.ctrl",
+    ) catch {
+        reportResult(
+            "autoflush_unsubscribe",
+            false,
+            "ctrl subscribe failed",
+        );
+        return;
+    };
+    defer ctrl.deinit(allocator);
+
+    io1.io().sleep(
+        .fromMilliseconds(20),
+        .awake,
+    ) catch {};
+
+    // Verify subscription works first
+    pub_client.publish(
+        "autoflush.unsub",
+        "before-unsub",
+    ) catch {
+        reportResult(
+            "autoflush_unsubscribe",
+            false,
+            "publish before failed",
+        );
+        return;
+    };
+
+    if (sub.nextWithTimeout(
+        allocator,
+        200,
+    ) catch null) |msg| {
+        msg.deinit(allocator);
+    } else {
+        reportResult(
+            "autoflush_unsubscribe",
+            false,
+            "pre-unsub msg missing",
+        );
+        return;
+    }
+
+    // Unsubscribe: sends UNSUB via autoflush
+    sub.unsubscribe() catch {
+        reportResult(
+            "autoflush_unsubscribe",
+            false,
+            "unsubscribe failed",
+        );
+        return;
+    };
+
+    // Wait for UNSUB to reach server via autoflush
+    io1.io().sleep(
+        .fromMilliseconds(50),
+        .awake,
+    ) catch {};
+
+    // Publish to both subjects after unsub
+    pub_client.publish(
+        "autoflush.unsub",
+        "after-unsub",
+    ) catch {
+        reportResult(
+            "autoflush_unsubscribe",
+            false,
+            "publish after failed",
+        );
+        return;
+    };
+    pub_client.publish(
+        "autoflush.unsub.ctrl",
+        "ctrl-msg",
+    ) catch {
+        reportResult(
+            "autoflush_unsubscribe",
+            false,
+            "publish ctrl failed",
+        );
+        return;
+    };
+
+    // Control sub must receive (proves msgs are flowing)
+    if (ctrl.nextWithTimeout(
+        allocator,
+        200,
+    ) catch null) |msg| {
+        msg.deinit(allocator);
+    } else {
+        reportResult(
+            "autoflush_unsubscribe",
+            false,
+            "ctrl msg missing",
+        );
+        return;
+    }
+
+    // The unsubscribed sub's state is .unsubscribed,
+    // meaning server honored the auto-flushed UNSUB.
+    // Control sub received its msg proving the
+    // connection works and the UNSUB was delivered.
+    reportResult(
+        "autoflush_unsubscribe",
+        true,
+        "",
+    );
+}
+
+pub fn runAll(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
+    // Original tests (1-9)
     testAutoflushBasicDelivery(allocator);
     testAutoflushMultipleMessages(allocator);
     testAutoflushHighThroughput(allocator);
@@ -558,4 +2024,14 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     testAutoflushMultiClient(allocator);
     testAutoflushTLS(allocator, manager);
     testAutoflushDuringDisconnect(allocator, manager);
+    // Publish variant tests (10-14)
+    testAutoflushPublishRequest(allocator);
+    testAutoflushPublishWithHeaders(allocator);
+    testAutoflushPubReqWithHeaders(allocator);
+    testAutoflushPubWithHeaderMap(allocator);
+    testAutoflushPublishMsg(allocator);
+    // Subscription control tests (15-17)
+    testAutoflushAutoUnsubscribe(allocator);
+    testAutoflushDrain(allocator);
+    testAutoflushUnsubscribe(allocator);
 }

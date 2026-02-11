@@ -57,7 +57,6 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     nkey.runAll(allocator);
     jwt.runAll(allocator);
     tls.runAll(allocator, manager);
-    reconnect.runAll(allocator, manager);
     error_handling.runAll(allocator);
     headers.runAll(allocator);
     state_notifications.runAll(allocator);
@@ -65,4 +64,5 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     flush_confirmed.runAll(allocator);
     autoflush.runAll(allocator, manager);
     async_patterns.runAll(allocator, manager);
+    reconnect.runAll(allocator, manager);
 }
