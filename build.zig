@@ -349,6 +349,32 @@ pub fn build(b: *std.Build) void {
     run_nbe_multisub.dependOn(&nbe_multisub_cmd.step);
     nbe_multisub_cmd.step.dependOn(b.getInstallStep());
 
+    // NATS by Example: NKeys and JWTs (auth)
+    const nbe_nkeys_jwts_exe = b.addExecutable(.{
+        .name = "nbe-auth-nkeys-jwts",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(
+                "doc/nats-by-example/auth/nkeys-jwts.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(nbe_nkeys_jwts_exe);
+
+    const run_nbe_nkeys_jwts = b.step(
+        "run-nbe-auth-nkeys-jwts",
+        "Run NATS by Example: NKeys and JWTs",
+    );
+    const nbe_nkeys_jwts_cmd = b.addRunArtifact(
+        nbe_nkeys_jwts_exe,
+    );
+    run_nbe_nkeys_jwts.dependOn(&nbe_nkeys_jwts_cmd.step);
+    nbe_nkeys_jwts_cmd.step.dependOn(b.getInstallStep());
+
     const fmt = b.addFmt(.{
         .paths = &.{ "src", "doc", "build.zig" },
         .check = false,

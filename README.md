@@ -119,6 +119,21 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 
 Source: `src/examples/`
 
+### NATS by Example
+
+Ports of [natsbyexample.com](https://natsbyexample.com) examples.
+
+| Example | Run | Server? |
+|---------|-----|---------|
+| [Pub-Sub](doc/nats-by-example/messaging/pub-sub.zig) | `run-nbe-messaging-pub-sub` | Yes |
+| [Request-Reply](doc/nats-by-example/messaging/request-reply.zig) | `run-nbe-messaging-request-reply` | Yes |
+| [JSON](doc/nats-by-example/messaging/json.zig) | `run-nbe-messaging-json` | Yes |
+| [Concurrent](doc/nats-by-example/messaging/concurrent.zig) | `run-nbe-messaging-concurrent` | Yes |
+| [Multiple Subscriptions](doc/nats-by-example/messaging/iterating-multiple-subscriptions.zig) | `run-nbe-messaging-iterating-multiple-subscriptions` | Yes |
+| [NKeys & JWTs](doc/nats-by-example/auth/nkeys-jwts.zig) | `run-nbe-auth-nkeys-jwts` | No |
+
+Source: `doc/nats-by-example/`
+
 ---
 
 ## Publishing
@@ -1079,6 +1094,105 @@ const client = try nats.Client.connect(allocator, io, url, .{
 });
 ```
 
+### NKey Generation & JWT Encoding
+
+Generate NKey keypairs, encode JWTs, and format credentials files
+programmatically. No allocator needed - all operations use
+caller-provided stack buffers.
+
+**Generate Keypairs:**
+
+```zig
+const nats = @import("nats");
+
+// Generate operator, account, and user keypairs
+var op_kp = nats.auth.KeyPair.generate(io, .operator);
+defer op_kp.wipe();
+
+var acct_kp = nats.auth.KeyPair.generate(io, .account);
+defer acct_kp.wipe();
+
+var user_kp = nats.auth.KeyPair.generate(io, .user);
+defer user_kp.wipe();
+
+// Get public key (base32-encoded, 56 chars)
+var pk_buf: [56]u8 = undefined;
+const pub_key = op_kp.publicKey(&pk_buf);  // "O..."
+
+// Encode seed (base32-encoded, 58 chars)
+var seed_buf: [58]u8 = undefined;
+const seed = op_kp.encodeSeed(&seed_buf);  // "SO..."
+```
+
+**Encode JWTs:**
+
+```zig
+// Account JWT (signed by operator)
+var acct_jwt_buf: [2048]u8 = undefined;
+const acct_jwt = try nats.auth.jwt.encodeAccountClaims(
+    &acct_jwt_buf,
+    acct_pub,       // account public key (subject)
+    "my-account",   // account name
+    op_kp,          // operator keypair (signer)
+    iat,            // issued-at (unix seconds)
+    .{},            // AccountOptions (defaults: unlimited)
+);
+
+// User JWT with permissions (signed by account)
+var user_jwt_buf: [2048]u8 = undefined;
+const user_jwt = try nats.auth.jwt.encodeUserClaims(
+    &user_jwt_buf,
+    user_pub,       // user public key (subject)
+    "my-user",      // user name
+    acct_kp,        // account keypair (signer)
+    iat,            // issued-at (unix seconds)
+    .{
+        .pub_allow = &.{"app.>"},
+        .sub_allow = &.{ "app.>", "_INBOX.>" },
+    },
+);
+```
+
+**Format Credentials File:**
+
+```zig
+var creds_buf: [4096]u8 = undefined;
+const creds = nats.auth.creds.format(
+    &creds_buf,
+    user_jwt,   // JWT string
+    user_seed,  // NKey seed string
+);
+// creds contains the full .creds file content
+```
+
+**Account Options (limits):**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `subs` | `-1` | Max subscriptions (-1 = unlimited) |
+| `conn` | `-1` | Max connections |
+| `data` | `-1` | Max data bytes |
+| `payload` | `-1` | Max message payload |
+| `imports` | `-1` | Max imports |
+| `exports` | `-1` | Max exports |
+| `leaf` | `-1` | Max leaf node connections |
+| `mem_storage` | `-1` | Max memory storage |
+| `disk_storage` | `-1` | Max disk storage |
+| `wildcards` | `true` | Allow wildcard subscriptions |
+
+**User Options (permissions):**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `pub_allow` | `&.{}` | Subjects allowed to publish |
+| `sub_allow` | `&.{}` | Subjects allowed to subscribe |
+| `subs` | `-1` | Max subscriptions (-1 = unlimited) |
+| `data` | `-1` | Max data bytes |
+| `payload` | `-1` | Max message payload |
+
+See the [NKeys & JWTs example](doc/nats-by-example/auth/nkeys-jwts.zig)
+for a complete working example.
+
 ### TLS
 
 **Enabling TLS:**
@@ -1250,6 +1364,15 @@ if (client.getConnectedServerVersion()) |version| {
 | Server ID | `client.getConnectedServerId()` | `?[]const u8` |
 | Flush confirmed | `client.flush(alloc, timeout_ns)` | `!void` |
 | Force reconnect | `client.forceReconnect()` | `!void` |
+| Generate NKey keypair | `auth.KeyPair.generate(io, key_type)` | `KeyPair` |
+| Encode NKey seed | `kp.encodeSeed(&buf)` | `[]const u8` |
+| Parse NKey seed | `auth.KeyPair.fromSeed(seed)` | `!KeyPair` |
+| Get public key | `kp.publicKey(&buf)` | `[]const u8` |
+| Wipe keypair | `kp.wipe()` | `void` |
+| Encode account JWT | `auth.jwt.encodeAccountClaims(buf, sub, name, signer, iat, opts)` | `![]const u8` |
+| Encode user JWT | `auth.jwt.encodeUserClaims(buf, sub, name, signer, iat, opts)` | `![]const u8` |
+| Format credentials | `auth.creds.format(buf, jwt, seed)` | `[]const u8` |
+| Parse credentials | `auth.creds.parse(content)` | `!Credentials` |
 
 ---
 

@@ -1,7 +1,7 @@
 //! NKey authentication for NATS.
 //!
-//! Parses NKey seeds and signs server nonces for authentication.
-//! NKeys use Ed25519 signatures with base32-encoded public keys.
+//! Generates, parses, and encodes NKey seeds. Signs server nonces
+//! for authentication. NKeys use Ed25519 with base32-encoded keys.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -43,10 +43,46 @@ pub const KeyType = enum(u8) {
 /// Seed prefix byte value (S = 18 << 3 = 144).
 const SEED_PREFIX: u8 = 144;
 
-/// NKey keypair for signing nonces.
+/// NKey keypair for signing and verification.
 pub const KeyPair = struct {
     kp: Ed25519.KeyPair,
     key_type: KeyType,
+
+    /// Generates a random Ed25519 keypair for the given type.
+    pub fn generate(io: std.Io, key_type: KeyType) KeyPair {
+        assert(KeyType.fromByte(@intFromEnum(key_type)) != null);
+        const kp = Ed25519.KeyPair.generate(io);
+        return .{ .kp = kp, .key_type = key_type };
+    }
+
+    /// Encodes the keypair's seed in NKey format (base32).
+    ///
+    /// Reverse of `fromSeed`. Packs prefix + seed + CRC16,
+    /// then base32-encodes to 58-character string.
+    pub fn encodeSeed(
+        self: KeyPair,
+        out: *[58]u8,
+    ) []const u8 {
+        assert(KeyType.fromByte(
+            @intFromEnum(self.key_type),
+        ) != null);
+
+        var raw: [36]u8 = undefined;
+        const kt = @intFromEnum(self.key_type);
+        raw[0] = (SEED_PREFIX & 0xF8) | ((kt >> 5) & 0x07);
+        raw[1] = (kt & 0x1F) << 3;
+        raw[2..34].* = self.kp.secret_key.seed();
+
+        const crc = crc16.compute(raw[0..34]);
+        std.mem.writeInt(u16, raw[34..36], crc, .little);
+
+        defer std.crypto.secureZero(
+            u8,
+            @volatileCast(&raw),
+        );
+
+        return base32.encode(out, &raw) catch unreachable;
+    }
 
     /// Parses an NKey seed and derives the Ed25519 keypair.
     ///
@@ -217,4 +253,193 @@ test "invalid seed - bad characters" {
     // Contains invalid base32 char '!'
     const bad = "SUAMK2FG4MI6UE3ACF3FK3OIQBCEIEZV7NSWFFEW63UXMRLFM2XLAXK4!Y";
     try std.testing.expectError(error.InvalidSeed, KeyPair.fromSeed(bad));
+}
+
+test "encodeSeed roundtrip with known seed" {
+    const seed =
+        "SUAMK2FG4MI6UE3ACF3FK3OIQBCEIEZV" ++
+        "7NSWFFEW63UXMRLFM2XLAXK4GY";
+    var kp = try KeyPair.fromSeed(seed);
+    defer kp.wipe();
+
+    var buf: [58]u8 = undefined;
+    const encoded = kp.encodeSeed(&buf);
+    try std.testing.expectEqualStrings(seed, encoded);
+}
+
+test "encodeSeed roundtrip with deterministic key" {
+    const test_seed = [_]u8{1} ** 32;
+    const ed_kp = Ed25519.KeyPair.generateDeterministic(
+        test_seed,
+    ) catch unreachable;
+    const kp = KeyPair{ .kp = ed_kp, .key_type = .user };
+
+    var seed_buf: [58]u8 = undefined;
+    const encoded_seed = kp.encodeSeed(&seed_buf);
+
+    var kp2 = try KeyPair.fromSeed(encoded_seed);
+    defer kp2.wipe();
+
+    var pk1: [56]u8 = undefined;
+    var pk2: [56]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        kp.publicKey(&pk1),
+        kp2.publicKey(&pk2),
+    );
+}
+
+test "seed prefix chars per key type" {
+    const test_seed = [_]u8{42} ** 32;
+    const ed_kp = Ed25519.KeyPair.generateDeterministic(
+        test_seed,
+    ) catch unreachable;
+    var buf: [58]u8 = undefined;
+
+    // User seed starts with SU
+    const user_kp = KeyPair{
+        .kp = ed_kp,
+        .key_type = .user,
+    };
+    const user_enc = user_kp.encodeSeed(&buf);
+    try std.testing.expectEqual(@as(u8, 'S'), user_enc[0]);
+    try std.testing.expectEqual(@as(u8, 'U'), user_enc[1]);
+
+    // Account seed starts with SA
+    const acct_kp = KeyPair{
+        .kp = ed_kp,
+        .key_type = .account,
+    };
+    const acct_enc = acct_kp.encodeSeed(&buf);
+    try std.testing.expectEqual(@as(u8, 'S'), acct_enc[0]);
+    try std.testing.expectEqual(@as(u8, 'A'), acct_enc[1]);
+
+    // Operator seed starts with SO
+    const op_kp = KeyPair{
+        .kp = ed_kp,
+        .key_type = .operator,
+    };
+    const op_enc = op_kp.encodeSeed(&buf);
+    try std.testing.expectEqual(@as(u8, 'S'), op_enc[0]);
+    try std.testing.expectEqual(@as(u8, 'O'), op_enc[1]);
+}
+
+test "server and cluster seed prefix roundtrip" {
+    const test_seed = [_]u8{99} ** 32;
+    const ed_kp = Ed25519.KeyPair.generateDeterministic(
+        test_seed,
+    ) catch unreachable;
+    var buf: [58]u8 = undefined;
+
+    // Server seed starts with SN
+    const srv_kp = KeyPair{
+        .kp = ed_kp,
+        .key_type = .server,
+    };
+    const srv_enc = srv_kp.encodeSeed(&buf);
+    try std.testing.expectEqual(@as(u8, 'S'), srv_enc[0]);
+    try std.testing.expectEqual(@as(u8, 'N'), srv_enc[1]);
+    var srv_kp2 = try KeyPair.fromSeed(srv_enc);
+    defer srv_kp2.wipe();
+    try std.testing.expectEqual(
+        KeyType.server,
+        srv_kp2.key_type,
+    );
+
+    // Cluster seed starts with SC
+    const cls_kp = KeyPair{
+        .kp = ed_kp,
+        .key_type = .cluster,
+    };
+    const cls_enc = cls_kp.encodeSeed(&buf);
+    try std.testing.expectEqual(@as(u8, 'S'), cls_enc[0]);
+    try std.testing.expectEqual(@as(u8, 'C'), cls_enc[1]);
+    var cls_kp2 = try KeyPair.fromSeed(cls_enc);
+    defer cls_kp2.wipe();
+    try std.testing.expectEqual(
+        KeyType.cluster,
+        cls_kp2.key_type,
+    );
+}
+
+test "public key prefix for all key types" {
+    const test_seed = [_]u8{77} ** 32;
+    const ed_kp = Ed25519.KeyPair.generateDeterministic(
+        test_seed,
+    ) catch unreachable;
+    var pk_buf: [56]u8 = undefined;
+
+    const Expected = struct { kt: KeyType, ch: u8 };
+    const cases = [_]Expected{
+        .{ .kt = .user, .ch = 'U' },
+        .{ .kt = .account, .ch = 'A' },
+        .{ .kt = .operator, .ch = 'O' },
+        .{ .kt = .server, .ch = 'N' },
+        .{ .kt = .cluster, .ch = 'C' },
+    };
+
+    for (cases) |c| {
+        const kp = KeyPair{
+            .kp = ed_kp,
+            .key_type = c.kt,
+        };
+        const pk = kp.publicKey(&pk_buf);
+        try std.testing.expectEqual(c.ch, pk[0]);
+    }
+}
+
+test "full crypto chain: encode parse sign verify" {
+    const test_seed = [_]u8{55} ** 32;
+    const ed_kp = Ed25519.KeyPair.generateDeterministic(
+        test_seed,
+    ) catch unreachable;
+    const kp = KeyPair{
+        .kp = ed_kp,
+        .key_type = .user,
+    };
+
+    // Encode seed
+    var seed_buf: [58]u8 = undefined;
+    const encoded_seed = kp.encodeSeed(&seed_buf);
+
+    // Parse back
+    var kp2 = try KeyPair.fromSeed(encoded_seed);
+    defer kp2.wipe();
+
+    // Public keys must match
+    var pk1: [56]u8 = undefined;
+    var pk2: [56]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        kp.publicKey(&pk1),
+        kp2.publicKey(&pk2),
+    );
+
+    // Sign with parsed keypair, verify with original
+    const data = "test payload for signing";
+    const sig_bytes = kp2.sign(data);
+    const sig = Ed25519.Signature.fromBytes(sig_bytes);
+    try sig.verify(data, kp.kp.public_key);
+}
+
+test "CRC16 corruption detection" {
+    const test_seed = [_]u8{88} ** 32;
+    const ed_kp = Ed25519.KeyPair.generateDeterministic(
+        test_seed,
+    ) catch unreachable;
+    const kp = KeyPair{
+        .kp = ed_kp,
+        .key_type = .user,
+    };
+
+    var seed_buf: [58]u8 = undefined;
+    const encoded = kp.encodeSeed(&seed_buf);
+
+    // Copy and corrupt one byte in the middle
+    var corrupt: [58]u8 = undefined;
+    @memcpy(corrupt[0..encoded.len], encoded);
+    corrupt[20] = if (corrupt[20] == 'A') 'B' else 'A';
+
+    try std.testing.expectError(
+        error.InvalidChecksum,
+        KeyPair.fromSeed(corrupt[0..encoded.len]),
+    );
 }

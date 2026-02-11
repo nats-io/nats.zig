@@ -20,6 +20,9 @@ pub const test_creds_file = "src/testing/configs/TestUser.creds";
 pub const test_jwt_seed =
     "SUACH75SWCM5D2JMJM6EKLR2WDARVGZT4QC6LX3AGHSWOMVAKERABBBRWM";
 
+// Dynamic JWT test constants
+pub const dynamic_jwt_port: u16 = 14228;
+
 // TLS test constants
 pub const tls_port: u16 = 14226;
 pub const tls_config_file = "src/testing/configs/tls.conf";

@@ -1,6 +1,6 @@
-//! Credentials file parser for NATS JWT authentication.
+//! Credentials file parser and formatter for NATS JWT authentication.
 //!
-//! Parses .creds files containing JWT and NKey seed.
+//! Parses and formats .creds files containing JWT and NKey seed.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -92,6 +92,47 @@ fn trimWhitespace(s: []const u8) []const u8 {
     }
 
     return s[start..end];
+}
+
+const WARN_TEXT =
+    "\n\n" ++
+    "************************* IMPORTANT ****" ++
+    "*********************\n" ++
+    "  NKEY Seed printed below can be used to" ++
+    " sign and prove identity.\n" ++
+    "  NKEYs are sensitive and should be treat" ++
+    "ed as secrets.\n\n" ++
+    "  *************************************" ++
+    "************************\n\n";
+
+/// Formats a credentials file from JWT and seed strings.
+/// Writes into caller-provided buffer, returns slice.
+pub fn format(
+    buf: []u8,
+    jwt_str: []const u8,
+    seed_str: []const u8,
+) []const u8 {
+    assert(jwt_str.len > 0);
+    assert(seed_str.len > 0);
+    assert(buf.len >= jwt_str.len + seed_str.len + 256);
+
+    var w = Io.Writer.fixed(buf);
+    w.writeAll(JWT_BEGIN) catch unreachable;
+    w.writeAll("\n") catch unreachable;
+    w.writeAll(jwt_str) catch unreachable;
+    w.writeAll("\n") catch unreachable;
+    w.writeAll(JWT_END) catch unreachable;
+    w.writeAll(WARN_TEXT) catch unreachable;
+    w.writeAll(SEED_BEGIN) catch unreachable;
+    w.writeAll("\n") catch unreachable;
+    w.writeAll(seed_str) catch unreachable;
+    w.writeAll("\n") catch unreachable;
+    w.writeAll(SEED_END) catch unreachable;
+    w.writeAll("\n") catch unreachable;
+
+    const result = w.buffered();
+    assert(result.len > 0);
+    return result;
 }
 
 /// Loads and parses credentials from file path.
@@ -222,4 +263,93 @@ test "trimWhitespace" {
     try std.testing.expectEqualStrings("hello", trimWhitespace("\n\thello\r\n"));
     try std.testing.expectEqualStrings("", trimWhitespace("   "));
     try std.testing.expectEqualStrings("", trimWhitespace(""));
+}
+
+test "format and parse roundtrip" {
+    const jwt_str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5In0.test";
+    const seed_str =
+        "SUAMK2FG4MI6UE3ACF3FK3OIQBCEIEZV" ++
+        "7NSWFFEW63UXMRLFM2XLAXK4GY";
+
+    var buf: [2048]u8 = undefined;
+    const formatted = format(&buf, jwt_str, seed_str);
+
+    const creds = try parse(formatted);
+    try std.testing.expectEqualStrings(jwt_str, creds.jwt);
+    try std.testing.expectEqualStrings(
+        seed_str,
+        creds.seed,
+    );
+}
+
+test "realistic generated content roundtrip" {
+    const nkey = @import("nkey.zig");
+    const jwt = @import("jwt.zig");
+    const Ed25519 = std.crypto.sign.Ed25519;
+
+    // Deterministic account keypair
+    const acct_seed = [_]u8{30} ** 32;
+    const acct_ed = Ed25519.KeyPair.generateDeterministic(
+        acct_seed,
+    ) catch unreachable;
+    const acct_kp = nkey.KeyPair{
+        .kp = acct_ed,
+        .key_type = .account,
+    };
+
+    // Deterministic user keypair
+    const user_seed = [_]u8{40} ** 32;
+    const user_ed = Ed25519.KeyPair.generateDeterministic(
+        user_seed,
+    ) catch unreachable;
+    const user_kp = nkey.KeyPair{
+        .kp = user_ed,
+        .key_type = .user,
+    };
+
+    // Encode user JWT
+    var pk_buf: [56]u8 = undefined;
+    const user_pub = user_kp.publicKey(&pk_buf);
+
+    var jwt_buf: [2048]u8 = undefined;
+    const jwt_str = try jwt.encodeUserClaims(
+        &jwt_buf,
+        user_pub,
+        "roundtrip-user",
+        acct_kp,
+        1700000000,
+        .{ .pub_allow = &.{">"} },
+    );
+
+    // Encode user seed
+    var seed_buf: [58]u8 = undefined;
+    const seed_str = user_kp.encodeSeed(&seed_buf);
+
+    // Format credentials
+    var creds_buf: [4096]u8 = undefined;
+    const formatted = format(
+        &creds_buf,
+        jwt_str,
+        seed_str,
+    );
+
+    // Parse back
+    const parsed = try parse(formatted);
+    try std.testing.expectEqualStrings(
+        jwt_str,
+        parsed.jwt,
+    );
+    try std.testing.expectEqualStrings(
+        seed_str,
+        parsed.seed,
+    );
+
+    // Verify parsed seed creates valid keypair
+    var kp = try nkey.KeyPair.fromSeed(parsed.seed);
+    defer kp.wipe();
+    var pk2: [56]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        user_pub,
+        kp.publicKey(&pk2),
+    );
 }

@@ -3847,7 +3847,6 @@ pub const Subscription = struct {
 
     /// Push message to queue (called by io_task).
     /// Lock-free, never blocks.
-    /// HOT PATH: called for every message. Keep minimal.
     pub fn pushMessage(self: *Subscription, msg: Message) !void {
         if (self.pending_limit > 0 or
             self.pending_bytes_limit > 0)
