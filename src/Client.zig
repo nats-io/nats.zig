@@ -46,12 +46,10 @@ const creds_auth = nkey_auth.creds;
 
 const Client = @This();
 
-/// Gets current time in nanoseconds
-fn getNowNs() error{TimerUnavailable}!u64 {
-    const instant = std.time.Instant.now() catch return error.TimerUnavailable;
-    const secs: u64 = @intCast(instant.timestamp.sec);
-    const nsecs: u64 = @intCast(instant.timestamp.nsec);
-    return secs * std.time.ns_per_s + nsecs;
+/// Gets current monotonic time in nanoseconds.
+fn getNowNs(io: Io) u64 {
+    const ts = Io.Timestamp.now(io, .awake);
+    return @intCast(ts.nanoseconds);
 }
 
 /// Message received on a subscription. Call deinit() to free.
@@ -764,7 +762,7 @@ pub fn connect(
 
     try client.initPendingBuffer(allocator);
 
-    const now_ns = getNowNs() catch 0;
+    const now_ns = getNowNs(io);
     client.last_ping_sent_ns.store(now_ns, .monotonic);
     client.last_pong_received_ns.store(now_ns, .monotonic);
 
@@ -960,7 +958,7 @@ fn upgradeTls(
         if (self.ca_bundle == null) {
             self.ca_bundle = .{};
         }
-        const now = try Io.Clock.real.now(self.io);
+        const now = Io.Clock.real.now(self.io);
         if (opts.tls_ca_file) |ca_path| {
             // Load custom CA bundle from file (propagates file system errors)
             try self.ca_bundle.?.addCertsFromFilePathAbsolute(
@@ -982,7 +980,7 @@ fn upgradeTls(
     };
 
     // Get current timestamp for certificate validation
-    const now = try Io.Clock.real.now(self.io);
+    const now = Io.Clock.real.now(self.io);
 
     // Build TLS options with inline unions
     const tls_opts: tls.Client.Options = .{
@@ -1856,7 +1854,7 @@ pub fn flush(
     // Using direct polling avoids io.async()+io.select() which can deadlock
     // when multiple clients share the same Io.Threaded instance.
     const old_pong_ns = self.last_pong_received_ns.load(.acquire);
-    const deadline_ns = (getNowNs() catch 0) +| timeout_ns;
+    const deadline_ns = getNowNs(self.io) +| timeout_ns;
     var iteration: u32 = 0;
 
     dbg.print("flush: waiting for PONG, old_pong_ns={d}", .{old_pong_ns});
@@ -1870,7 +1868,7 @@ pub fn flush(
         }
 
         // Check timeout
-        const now = getNowNs() catch 0;
+        const now = getNowNs(self.io);
         if (now >= deadline_ns) return error.Timeout;
 
         // Yield periodically to allow io_task to process incoming PONG
@@ -2681,7 +2679,7 @@ pub fn getRtt(self: *Client) !u64 {
     assert(self.next_sid >= 1);
 
     // Record start time
-    const start_ns = getNowNs() catch return error.TimerUnavailable;
+    const start_ns = getNowNs(self.io);
 
     // Send PING
     try self.write_mutex.lock(self.io);
@@ -2711,7 +2709,7 @@ pub fn getRtt(self: *Client) !u64 {
         const current_pong_ns = self.last_pong_received_ns.load(.acquire);
         if (current_pong_ns > old_pong_ns) {
             // PONG received - calculate RTT
-            const end_ns = getNowNs() catch return error.TimerUnavailable;
+            const end_ns = getNowNs(self.io);
             return end_ns - start_ns;
         }
 
@@ -2719,7 +2717,7 @@ pub fn getRtt(self: *Client) !u64 {
         check_counter +%= 1;
         if (check_counter >= defaults.Spin.timeout_check_iterations) {
             check_counter = 0;
-            const now_ns = getNowNs() catch return error.TimerUnavailable;
+            const now_ns = getNowNs(self.io);
             if (now_ns - start_ns >= timeout_ns) {
                 return error.Timeout;
             }
@@ -2805,8 +2803,7 @@ fn sendPing(self: *Client) !void {
     writer.flush() catch {
         return error.WriteFailed;
     };
-    const now = getNowNs() catch
-        self.last_ping_sent_ns.load(.monotonic);
+    const now = getNowNs(self.io);
     self.last_ping_sent_ns.store(now, .monotonic);
     const new_outstanding =
         self.pings_outstanding.fetchAdd(1, .monotonic) + 1;
@@ -2815,7 +2812,7 @@ fn sendPing(self: *Client) !void {
 
 /// Handles PONG response from server.
 fn handlePong(self: *Client) void {
-    const now = getNowNs() catch self.last_pong_received_ns.load(.monotonic);
+    const now = getNowNs(self.io);
     self.last_pong_received_ns.store(now, .release);
     self.pings_outstanding.store(0, .monotonic);
     dbg.pingPong("PONG_RECEIVED", 0);
@@ -2828,7 +2825,7 @@ pub fn checkHealthAndDetectStale(self: *Client) bool {
     if (self.options.ping_interval_ms == 0) return false;
     if (self.state != .connected) return false;
 
-    const now_ns = getNowNs() catch return false;
+    const now_ns = getNowNs(self.io);
     const interval_ns: u64 =
         @as(u64, self.options.ping_interval_ms) * 1_000_000;
 
@@ -3227,7 +3224,7 @@ pub fn tryConnect(
     try self.handshake(allocator, self.options, parsed);
 
     // Initialize health check timestamps (atomics)
-    const now_ns = getNowNs() catch 0;
+    const now_ns = getNowNs(self.io);
     self.last_ping_sent_ns.store(now_ns, .monotonic);
     self.last_pong_received_ns.store(now_ns, .monotonic);
     self.pings_outstanding.store(0, .monotonic);
@@ -3312,7 +3309,7 @@ pub fn reconnect(self: *Client, allocator: Allocator) !void {
 
     while (infinite or self.reconnect_attempt < max) {
         // Get next server
-        const now_ns = getNowNs() catch 0;
+        const now_ns = getNowNs(self.io);
         const server = self.server_pool.nextServer(now_ns) orelse {
             dbg.print("All servers on cooldown, waiting...", .{});
             self.waitBackoff();
@@ -3563,38 +3560,36 @@ pub const Subscription = struct {
         assert(self.state == .active or self.state == .draining);
         assert(timeout_ms > 0);
 
-        // Use Instant for timeout check - but only check every N iterations
-        // to avoid syscall overhead
-        const start = std.time.Instant.now() catch {
-            // Fallback to spin-only if timer unavailable
-            if (self.queue.pop()) |msg| {
-                const msg_size =
-                    if (msg.backing_buf) |buf| buf.len else msg.size();
-                self.pending_bytes -|= msg_size;
-                return msg;
-            }
-            return null;
-        };
-        const timeout_ns: u64 = @as(u64, timeout_ms) * std.time.ns_per_ms;
+        const io = self.client.io;
+        const start = getNowNs(io);
+        const timeout_ns: u64 =
+            @as(u64, timeout_ms) * std.time.ns_per_ms;
         var check_counter: u32 = 0;
 
         while (true) {
             if (self.queue.pop()) |msg| {
                 const msg_size =
-                    if (msg.backing_buf) |buf| buf.len else msg.size();
+                    if (msg.backing_buf) |buf|
+                        buf.len
+                    else
+                        msg.size();
                 self.pending_bytes -|= msg_size;
                 return msg;
             }
-            if (self.state != .active and self.state != .draining) {
+            if (self.state != .active and
+                self.state != .draining)
+            {
                 return error.Closed;
             }
 
-            // Check timeout only periodically to reduce syscalls
             check_counter +%= 1;
-            if (check_counter >= defaults.Spin.timeout_check_iterations) {
+            if (check_counter >=
+                defaults.Spin.timeout_check_iterations)
+            {
                 check_counter = 0;
-                const now = std.time.Instant.now() catch return null;
-                if (now.since(start) >= timeout_ns) return null;
+                const now = getNowNs(io);
+                if (now -| start >= timeout_ns)
+                    return null;
             }
 
             std.atomic.spinLoopHint();
@@ -3701,14 +3696,10 @@ pub const Subscription = struct {
             return;
         }
 
-        const start = std.time.Instant.now() catch {
-            // Timer unavailable - single check only
-            if (self.queue.len() == 0) {
-                return;
-            }
-            return error.Timeout;
-        };
-        const timeout_ns: u64 = @as(u64, timeout_ms) * std.time.ns_per_ms;
+        const io = self.client.io;
+        const start = getNowNs(io);
+        const timeout_ns: u64 =
+            @as(u64, timeout_ms) * std.time.ns_per_ms;
         var check_counter: u32 = 0;
 
         while (true) {
@@ -3716,12 +3707,14 @@ pub const Subscription = struct {
                 return;
             }
 
-            // Check timeout periodically to reduce syscalls
             check_counter +%= 1;
-            if (check_counter >= defaults.Spin.timeout_check_iterations) {
+            if (check_counter >=
+                defaults.Spin.timeout_check_iterations)
+            {
                 check_counter = 0;
-                const now = std.time.Instant.now() catch return error.Timeout;
-                if (now.since(start) >= timeout_ns) return error.Timeout;
+                const now = getNowNs(io);
+                if (now -| start >= timeout_ns)
+                    return error.Timeout;
             }
 
             std.atomic.spinLoopHint();

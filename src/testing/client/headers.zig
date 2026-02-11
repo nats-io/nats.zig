@@ -380,10 +380,7 @@ pub fn testHeadersRequestTimeout(allocator: std.mem.Allocator) void {
         .{ .key = "X-Test", .value = "timeout" },
     };
 
-    const start = std.time.Instant.now() catch {
-        reportResult("headers_request_timeout", false, "timer failed");
-        return;
-    };
+    const start = std.Io.Timestamp.now(io.io(), .awake);
 
     const result = client.requestWithHeaders(
         allocator,
@@ -392,15 +389,18 @@ pub fn testHeadersRequestTimeout(allocator: std.mem.Allocator) void {
         "ping",
         200,
     ) catch {
-        reportResult("headers_request_timeout", false, "request error");
+        reportResult(
+            "headers_request_timeout",
+            false,
+            "request error",
+        );
         return;
     };
 
-    const end = std.time.Instant.now() catch {
-        reportResult("headers_request_timeout", false, "timer failed");
-        return;
-    };
-    const elapsed_ms = end.since(start) / std.time.ns_per_ms;
+    const end = std.Io.Timestamp.now(io.io(), .awake);
+    const elapsed = start.durationTo(end);
+    const elapsed_ns: u64 = @intCast(elapsed.nanoseconds);
+    const elapsed_ms = elapsed_ns / std.time.ns_per_ms;
 
     if (result) |msg| {
         msg.deinit(allocator);

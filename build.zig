@@ -224,15 +224,140 @@ pub fn build(b: *std.Build) void {
     run_events.dependOn(&events_cmd.step);
     events_cmd.step.dependOn(b.getInstallStep());
 
+    // NATS by Example: Pub-Sub messaging
+    const nbe_pubsub_exe = b.addExecutable(.{
+        .name = "nbe-messaging-pub-sub",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(
+                "doc/nats-by-example/messaging/pub-sub.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(nbe_pubsub_exe);
+
+    const run_nbe_pubsub = b.step(
+        "run-nbe-messaging-pub-sub",
+        "Run NATS by Example: Pub-Sub messaging",
+    );
+    const nbe_pubsub_cmd = b.addRunArtifact(nbe_pubsub_exe);
+    run_nbe_pubsub.dependOn(&nbe_pubsub_cmd.step);
+    nbe_pubsub_cmd.step.dependOn(b.getInstallStep());
+
+    // NATS by Example: Request-Reply
+    const nbe_reqrep_exe = b.addExecutable(.{
+        .name = "nbe-messaging-request-reply",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(
+                "doc/nats-by-example/messaging/request-reply.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(nbe_reqrep_exe);
+
+    const run_nbe_reqrep = b.step(
+        "run-nbe-messaging-request-reply",
+        "Run NATS by Example: Request-Reply",
+    );
+    const nbe_reqrep_cmd = b.addRunArtifact(nbe_reqrep_exe);
+    run_nbe_reqrep.dependOn(&nbe_reqrep_cmd.step);
+    nbe_reqrep_cmd.step.dependOn(b.getInstallStep());
+
+    // NATS by Example: JSON payloads
+    const nbe_json_exe = b.addExecutable(.{
+        .name = "nbe-messaging-json",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(
+                "doc/nats-by-example/messaging/json.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(nbe_json_exe);
+
+    const run_nbe_json = b.step(
+        "run-nbe-messaging-json",
+        "Run NATS by Example: JSON payloads",
+    );
+    const nbe_json_cmd = b.addRunArtifact(nbe_json_exe);
+    run_nbe_json.dependOn(&nbe_json_cmd.step);
+    nbe_json_cmd.step.dependOn(b.getInstallStep());
+
+    // NATS by Example: Concurrent processing
+    const nbe_concurrent_exe = b.addExecutable(.{
+        .name = "nbe-messaging-concurrent",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(
+                "doc/nats-by-example/messaging/concurrent.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(nbe_concurrent_exe);
+
+    const run_nbe_concurrent = b.step(
+        "run-nbe-messaging-concurrent",
+        "Run NATS by Example: Concurrent processing",
+    );
+    const nbe_concurrent_cmd = b.addRunArtifact(
+        nbe_concurrent_exe,
+    );
+    run_nbe_concurrent.dependOn(&nbe_concurrent_cmd.step);
+    nbe_concurrent_cmd.step.dependOn(b.getInstallStep());
+
+    // NATS by Example: Iterating multiple subscriptions
+    const nbe_multisub_exe = b.addExecutable(.{
+        .name = "nbe-messaging-iterating-multiple-subscriptions",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(
+                "doc/nats-by-example/messaging/" ++
+                    "iterating-multiple-subscriptions.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+            },
+        }),
+    });
+    b.installArtifact(nbe_multisub_exe);
+
+    const run_nbe_multisub = b.step(
+        "run-nbe-messaging-iterating-multiple-subscriptions",
+        "Run NATS by Example: Multiple subscriptions",
+    );
+    const nbe_multisub_cmd = b.addRunArtifact(
+        nbe_multisub_exe,
+    );
+    run_nbe_multisub.dependOn(&nbe_multisub_cmd.step);
+    nbe_multisub_cmd.step.dependOn(b.getInstallStep());
+
     const fmt = b.addFmt(.{
-        .paths = &.{ "src", "build.zig" },
+        .paths = &.{ "src", "doc", "build.zig" },
         .check = false,
     });
     const fmt_step = b.step("fmt", "Format source code");
     fmt_step.dependOn(&fmt.step);
 
     const fmt_check = b.addFmt(.{
-        .paths = &.{ "src", "build.zig" },
+        .paths = &.{ "src", "doc", "build.zig" },
         .check = true,
     });
     const fmt_check_step = b.step("fmt-check", "Check formatting");

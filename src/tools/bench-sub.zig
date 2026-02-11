@@ -83,24 +83,36 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         break :blk clamped;
     };
 
-    if (bench.TimeOfDay.now()) |tod| {
+    var threaded: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    if (bench.TimeOfDay.now(io)) |tod| {
         var buf: [8]u8 = undefined;
         std.debug.print(
             "{s} Starting subscriber benchmark " ++
                 "[msgs={d}, queue={d}, subject={s}]\n",
-            .{ tod.format(&buf), config.msgs, queue_size, config.subject },
+            .{
+                tod.format(&buf),
+                config.msgs,
+                queue_size,
+                config.subject,
+            },
         );
     } else {
         std.debug.print(
             "Starting subscriber benchmark " ++
                 "[msgs={d}, queue={d}, subject={s}]\n",
-            .{ config.msgs, queue_size, config.subject },
+            .{
+                config.msgs,
+                queue_size,
+                config.subject,
+            },
         );
     }
-
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
 
     const client = nats.Client.connect(allocator, io, config.url, .{
         .name = "bench-sub",
@@ -126,7 +138,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         config.subject,
     });
 
-    var timer: ?std.time.Timer = null;
+    var start_ts: ?std.Io.Timestamp = null;
     var msg_count: u64 = 0;
     var total_bytes: u64 = 0;
 
@@ -137,12 +149,12 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     while (msg_count < config.msgs) {
         const batch_count = sub.tryNextBatch(&batch_buf);
         if (batch_count > 0) {
-            if (timer == null) {
-                timer = std.time.Timer.start() catch {
-                    std.debug.print("Timer unavailable\n", .{});
-                    return error.TimerUnavailable;
-                };
-                std.debug.print("First message received, timing...\n", .{});
+            if (start_ts == null) {
+                start_ts = std.Io.Timestamp.now(io, .awake);
+                std.debug.print(
+                    "First message received, timing...\n",
+                    .{},
+                );
             }
 
             for (batch_buf[0..batch_count]) |*msg| {
@@ -175,12 +187,12 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         };
         defer msg.deinit(allocator);
 
-        if (timer == null) {
-            timer = std.time.Timer.start() catch {
-                std.debug.print("Timer unavailable\n", .{});
-                return error.TimerUnavailable;
-            };
-            std.debug.print("First message received, timing...\n", .{});
+        if (start_ts == null) {
+            start_ts = std.Io.Timestamp.now(io, .awake);
+            std.debug.print(
+                "First message received, timing...\n",
+                .{},
+            );
         }
 
         msg_count += 1;
@@ -200,8 +212,10 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         }
     }
 
-    if (timer) |*t| {
-        const elapsed_ns = t.read();
+    if (start_ts) |start| {
+        const end = std.Io.Timestamp.now(io, .awake);
+        const elapsed = start.durationTo(end);
+        const elapsed_ns: u64 = @intCast(elapsed.nanoseconds);
         const stats = bench.Stats{
             .elapsed_ns = elapsed_ns,
             .msg_count = msg_count,

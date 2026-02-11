@@ -70,28 +70,43 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     assert(config.subject.len > 0);
     assert(config.msgs > 0);
 
-    if (bench.TimeOfDay.now()) |tod| {
+    var threaded: std.Io.Threaded = .init(
+        allocator,
+        .{ .environ = .empty },
+    );
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    if (bench.TimeOfDay.now(io)) |tod| {
         var buf: [8]u8 = undefined;
         std.debug.print(
             "{s} Starting publisher benchmark " ++
                 "[msgs={d}, size={d}B, subject={s}]\n",
-            .{ tod.format(&buf), config.msgs, config.size, config.subject },
+            .{
+                tod.format(&buf),
+                config.msgs,
+                config.size,
+                config.subject,
+            },
         );
     } else {
         std.debug.print(
             "Starting publisher benchmark " ++
                 "[msgs={d}, size={d}B, subject={s}]\n",
-            .{ config.msgs, config.size, config.subject },
+            .{
+                config.msgs,
+                config.size,
+                config.subject,
+            },
         );
     }
 
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
-
-    const client = nats.Client.connect(allocator, io, config.url, .{
-        .name = "bench-pub",
-    }) catch |err| {
+    const client = nats.Client.connect(
+        allocator,
+        io,
+        config.url,
+        .{ .name = "bench-pub" },
+    ) catch |err| {
         std.debug.print("Failed to connect: {}\n", .{err});
         return err;
     };
@@ -101,10 +116,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
     defer allocator.free(payload);
     @memset(payload, 'A');
 
-    var timer = std.time.Timer.start() catch {
-        std.debug.print("Timer unavailable\n", .{});
-        return error.TimerUnavailable;
-    };
+    const start = std.Io.Timestamp.now(io, .awake);
 
     var i: u64 = 0;
     while (i < config.msgs) : (i += 1) {
@@ -119,7 +131,9 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         return err;
     };
 
-    const elapsed_ns = timer.read();
+    const end = std.Io.Timestamp.now(io, .awake);
+    const elapsed = start.durationTo(end);
+    const elapsed_ns: u64 = @intCast(elapsed.nanoseconds);
     const stats = bench.Stats{
         .elapsed_ns = elapsed_ns,
         .msg_count = config.msgs,

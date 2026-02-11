@@ -59,7 +59,7 @@ pub fn main() !void {
     var total_received: u32 = 0;
     var batch_count: u32 = 0;
 
-    const recv_start = std.time.Instant.now() catch unreachable;
+    const recv_start = Io.Timestamp.now(io, .awake);
 
     while (total_received < message_count) {
         // nextBatch waits for at least 1 message, returns up to 32
@@ -81,8 +81,11 @@ pub fn main() !void {
         }
     }
 
-    const recv_elapsed = (std.time.Instant.now() catch unreachable).since(recv_start);
-    const recv_ms = @as(f64, @floatFromInt(recv_elapsed)) / 1_000_000.0;
+    const recv_end = Io.Timestamp.now(io, .awake);
+    const elapsed = recv_start.durationTo(recv_end);
+    const recv_ns: u64 = @intCast(elapsed.nanoseconds);
+    const recv_ms = @as(f64, @floatFromInt(recv_ns)) /
+        1_000_000.0;
 
     std.debug.print(
         "Received {d} messages in {d} batches ({d:.2}ms)\n",
