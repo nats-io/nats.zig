@@ -132,7 +132,6 @@ Ports of [natsbyexample.com](https://natsbyexample.com) examples.
 | [Multiple Subscriptions](doc/nats-by-example/messaging/iterating-multiple-subscriptions.zig) | `run-nbe-messaging-iterating-multiple-subscriptions` | Yes |
 | [NKeys & JWTs](doc/nats-by-example/auth/nkeys-jwts.zig) | `run-nbe-auth-nkeys-jwts` | No |
 
-Source: `doc/nats-by-example/`
 
 ---
 
