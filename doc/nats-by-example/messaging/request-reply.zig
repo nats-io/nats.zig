@@ -45,7 +45,7 @@ pub fn main(init: std.process.Init) !void {
     // Subscribe to "greet.*" to handle incoming requests.
     // The handler extracts the name from the subject and
     // responds with a greeting.
-    const sub = try client.subscribe("greet.*");
+    const sub = try client.subscribeSync("greet.*");
     defer sub.deinit();
 
     // Run the request handler in a background async task.

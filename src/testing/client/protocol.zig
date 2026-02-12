@@ -82,7 +82,7 @@ pub fn testPingPongKeepAlive(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("ping.test") catch {
+    const sub = client.subscribeSync("ping.test") catch {
         reportResult("ping_pong_keep_alive", false, "subscribe failed");
         return;
     };
@@ -169,7 +169,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub1 = client.subscribe("unknown.sid.test") catch {
+    const sub1 = client.subscribeSync("unknown.sid.test") catch {
         reportResult("unknown_sid_handling", false, "subscribe failed");
         return;
     };
@@ -181,7 +181,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
     };
     sub1.deinit();
 
-    const sub2 = client.subscribe("unknown.sid.test") catch {
+    const sub2 = client.subscribeSync("unknown.sid.test") catch {
         reportResult("unknown_sid_handling", false, "subscribe2 failed");
         return;
     };
@@ -455,7 +455,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
         var buf: [32]u8 = undefined;
         const subject =
             std.fmt.bufPrint(&buf, "stability.{d}", .{i}) catch continue;
-        subs[i] = client.subscribe(subject) catch {
+        subs[i] = client.subscribeSync(subject) catch {
             reportResult("protocol_stability", false, "subscribe failed");
             return;
         };

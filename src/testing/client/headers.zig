@@ -27,7 +27,7 @@ pub fn testHeadersPublishSingle(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("test.headers.single") catch {
+    const sub = client.subscribeSync("test.headers.single") catch {
         reportResult("headers_publish_single", false, "subscribe failed");
         return;
     };
@@ -89,7 +89,7 @@ pub fn testHeadersPublishMultiple(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("test.headers.multi") catch {
+    const sub = client.subscribeSync("test.headers.multi") catch {
         reportResult("headers_publish_multiple", false, "subscribe failed");
         return;
     };
@@ -158,7 +158,7 @@ pub fn testHeadersPublishEmptyPayload(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("test.headers.empty") catch {
+    const sub = client.subscribeSync("test.headers.empty") catch {
         reportResult("headers_empty_payload", false, "subscribe failed");
         return;
     };
@@ -212,7 +212,7 @@ pub fn testHeadersPublishRequest(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("test.headers.req") catch {
+    const sub = client.subscribeSync("test.headers.req") catch {
         reportResult("headers_publish_request", false, "subscribe failed");
         return;
     };
@@ -296,7 +296,7 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
     };
     defer requester.deinit();
 
-    const sub = responder.subscribe("svc.headers") catch {
+    const sub = responder.subscribeSync("svc.headers") catch {
         reportResult("headers_request_reply", false, "responder sub failed");
         return;
     };
@@ -442,7 +442,7 @@ pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
     };
     defer client_b.deinit();
 
-    const sub = client_b.subscribe("cross.headers") catch {
+    const sub = client_b.subscribeSync("cross.headers") catch {
         reportResult("headers_cross_client", false, "B sub failed");
         return;
     };
@@ -505,7 +505,7 @@ pub fn testHeadersManyEntries(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("test.headers.many") catch {
+    const sub = client.subscribeSync("test.headers.many") catch {
         reportResult("headers_many_entries", false, "subscribe failed");
         return;
     };
@@ -600,7 +600,7 @@ pub fn testHeadersLargeValues(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("test.headers.large") catch {
+    const sub = client.subscribeSync("test.headers.large") catch {
         reportResult("headers_large_values", false, "subscribe failed");
         return;
     };
@@ -665,7 +665,7 @@ pub fn testHeadersSpecialChars(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("test.headers.special") catch {
+    const sub = client.subscribeSync("test.headers.special") catch {
         reportResult("headers_special_chars", false, "subscribe failed");
         return;
     };
@@ -736,7 +736,7 @@ pub fn testHeadersBinaryPayload(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("test.headers.binary") catch {
+    const sub = client.subscribeSync("test.headers.binary") catch {
         reportResult("headers_binary_payload", false, "subscribe failed");
         return;
     };
@@ -800,7 +800,7 @@ pub fn testHeadersWellKnown(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("test.headers.wellknown") catch {
+    const sub = client.subscribeSync("test.headers.wellknown") catch {
         reportResult("headers_well_known", false, "subscribe failed");
         return;
     };
@@ -862,7 +862,7 @@ pub fn testHeadersCaseInsensitive(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("test.headers.case") catch {
+    const sub = client.subscribeSync("test.headers.case") catch {
         reportResult("headers_case_insensitive", false, "subscribe failed");
         return;
     };

@@ -28,7 +28,7 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Connected to NATS!\n", .{});
 
     // Subscribe to a subject
-    const sub = try client.subscribe("hello");
+    const sub = try client.subscribeSync("hello");
     defer sub.deinit();
 
     // Publish a message

@@ -53,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
     );
     defer client.deinit();
 
-    const sub = try client.subscribe("greet.*");
+    const sub = try client.subscribeSync("greet.*");
     defer sub.deinit();
 
     // Publish 10 messages

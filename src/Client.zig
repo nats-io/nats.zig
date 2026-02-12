@@ -57,7 +57,7 @@ const Client = @This();
 ///     }
 /// };
 /// var handler = MyHandler{ .counter = &count };
-/// const sub = try client.subscribeWithCallback(
+/// const sub = try client.subscribe(
 ///     "subject", MsgHandler.init(MyHandler, &handler),
 /// );
 /// ```
@@ -1390,11 +1390,11 @@ inline fn cleanupFailedSub(
 ///     subject: Subject pattern to subscribe to (wildcards allowed: *, >)
 ///
 /// Returns subscription pointer. Caller must call sub.deinit() when done.
-pub fn subscribe(
+pub fn subscribeSync(
     self: *Client,
     subject: []const u8,
 ) !*Sub {
-    return self.subscribeQueue(subject, null);
+    return self.subscribeSyncQueue(subject, null);
 }
 
 /// Subscribes with queue group for load balancing.
@@ -1405,7 +1405,7 @@ pub fn subscribe(
 ///
 /// Queue groups allow multiple subscribers to share the message load.
 /// Only one subscriber in the group receives each message.
-pub fn subscribeQueue(
+pub fn subscribeSyncQueue(
     self: *Client,
     subject: []const u8,
     queue_group: ?[]const u8,
@@ -1514,12 +1514,12 @@ pub fn subscribeQueue(
 /// The drain task frees each message after dispatch.
 ///
 /// Do NOT call next()/tryNext() on the returned subscription.
-pub fn subscribeWithCallback(
+pub fn subscribe(
     self: *Client,
     subject: []const u8,
     handler: MsgHandler,
 ) !*Sub {
-    return self.subscribeWithCallbackQueue(
+    return self.subscribeQueue(
         subject,
         null,
         handler,
@@ -1527,13 +1527,13 @@ pub fn subscribeWithCallback(
 }
 
 /// Subscribes with a MsgHandler callback and queue group.
-pub fn subscribeWithCallbackQueue(
+pub fn subscribeQueue(
     self: *Client,
     subject: []const u8,
     queue_group: ?[]const u8,
     handler: MsgHandler,
 ) !*Sub {
-    const sub = try self.subscribeQueue(
+    const sub = try self.subscribeSyncQueue(
         subject,
         queue_group,
     );
@@ -1548,12 +1548,12 @@ pub fn subscribeWithCallbackQueue(
 
 /// Subscribes with a plain function callback.
 /// Simpler alternative when no handler state is needed.
-pub fn subscribeWithCallbackFn(
+pub fn subscribeFn(
     self: *Client,
     subject: []const u8,
     cb: *const fn (*const Message) void,
 ) !*Sub {
-    return self.subscribeWithCallbackFnQueue(
+    return self.subscribeFnQueue(
         subject,
         null,
         cb,
@@ -1561,13 +1561,13 @@ pub fn subscribeWithCallbackFn(
 }
 
 /// Subscribes with a plain function callback and queue group.
-pub fn subscribeWithCallbackFnQueue(
+pub fn subscribeFnQueue(
     self: *Client,
     subject: []const u8,
     queue_group: ?[]const u8,
     cb: *const fn (*const Message) void,
 ) !*Sub {
-    const sub = try self.subscribeQueue(
+    const sub = try self.subscribeSyncQueue(
         subject,
         queue_group,
     );
@@ -1872,7 +1872,7 @@ pub fn requestWithHeaders(
     defer allocator.free(inbox);
 
     // Subscribe to inbox (temporary subscription)
-    const sub = try self.subscribe(inbox);
+    const sub = try self.subscribeSync(inbox);
     defer sub.deinit();
 
     // Brief delay to ensure server has registered subscription
@@ -2144,7 +2144,7 @@ pub fn request(
     defer allocator.free(inbox);
 
     // Subscribe to inbox (temporary subscription)
-    const sub = try self.subscribe(inbox);
+    const sub = try self.subscribeSync(inbox);
     defer sub.deinit();
 
     // Brief delay to ensure server has registered subscription
@@ -2225,7 +2225,7 @@ pub fn requestMsg(
     defer allocator.free(inbox);
 
     // Subscribe to inbox (temporary subscription)
-    const sub = try self.subscribe(inbox);
+    const sub = try self.subscribeSync(inbox);
     defer sub.deinit();
 
     // Brief delay to ensure server has registered subscription

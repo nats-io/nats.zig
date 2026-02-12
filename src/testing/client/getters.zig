@@ -201,7 +201,7 @@ pub fn testSubscriptionInfoGetters(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     // Create a regular subscription
-    const sub = client.subscribe("test.getters") catch {
+    const sub = client.subscribeSync("test.getters") catch {
         reportResult("subscription_info_getters", false, "subscribe failed");
         return;
     };
@@ -253,11 +253,11 @@ pub fn testQueueSubGetters(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     // Create a queue subscription
-    const sub = client.subscribeQueue(
+    const sub = client.subscribeSyncQueue(
         "test.queue.getters",
         "workers",
     ) catch {
-        reportResult("queue_sub_getters", false, "subscribeQueue failed");
+        reportResult("queue_sub_getters", false, "subscribe failed");
         return;
     };
     defer sub.deinit();
@@ -290,7 +290,7 @@ pub fn testDrainingState(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("test.draining") catch {
+    const sub = client.subscribeSync("test.draining") catch {
         reportResult("draining_state", false, "subscribe failed");
         return;
     };

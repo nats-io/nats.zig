@@ -76,7 +76,7 @@ pub fn main(init: std.process.Init) !void {
     // Start service with callback subscription
     var svc = DoublerService{ .client = service_client };
 
-    const sub = try service_client.subscribeWithCallback(
+    const sub = try service_client.subscribe(
         "math.double",
         nats.MsgHandler.init(DoublerService, &svc),
     );

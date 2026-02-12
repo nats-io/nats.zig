@@ -61,13 +61,13 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Connected to NATS!\n", .{});
 
     // Create 3 workers in queue group
-    const worker1 = try client.subscribeQueue("tasks", "workers");
+    const worker1 = try client.subscribeSyncQueue("tasks", "workers");
     defer worker1.deinit();
 
-    const worker2 = try client.subscribeQueue("tasks", "workers");
+    const worker2 = try client.subscribeSyncQueue("tasks", "workers");
     defer worker2.deinit();
 
-    const worker3 = try client.subscribeQueue("tasks", "workers");
+    const worker3 = try client.subscribeSyncQueue("tasks", "workers");
     defer worker3.deinit();
 
     std.debug.print("Created 3 workers in queue group 'workers'\n", .{});

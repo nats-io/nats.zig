@@ -105,7 +105,7 @@ pub fn testDrainingEvent(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     // Subscribe to something
-    const sub = client.subscribe("drain.test") catch {
+    const sub = client.subscribeSync("drain.test") catch {
         reportResult("draining_event", false, "subscribe failed");
         return;
     };
@@ -161,7 +161,7 @@ pub fn testSubscriptionCompleteEvent(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     // Subscribe with auto-unsub after 3 messages
-    const sub = client.subscribe("complete.test") catch {
+    const sub = client.subscribeSync("complete.test") catch {
         reportResult("sub_complete_event", false, "subscribe failed");
         return;
     };

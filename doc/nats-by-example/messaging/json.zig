@@ -49,7 +49,7 @@ pub fn main(init: std.process.Init) !void {
     );
     defer client.deinit();
 
-    const sub = try client.subscribe("greet");
+    const sub = try client.subscribeSync("greet");
     defer sub.deinit();
 
     // Create a payload and serialize it to JSON.

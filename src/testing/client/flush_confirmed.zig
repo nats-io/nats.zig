@@ -30,7 +30,7 @@ pub fn testFlushConfirmedBasic(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("fc.basic") catch {
+    const sub = client.subscribeSync("fc.basic") catch {
         reportResult("flush_confirmed_basic", false, "subscribe failed");
         return;
     };
@@ -85,7 +85,7 @@ pub fn testFlushConfirmedMultipleMessages(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("fc.batch") catch {
+    const sub = client.subscribeSync("fc.batch") catch {
         reportResult("flush_confirmed_multi", false, "subscribe failed");
         return;
     };
@@ -151,7 +151,7 @@ pub fn testFlushConfirmedNoSideEffects(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("fc.side") catch {
+    const sub = client.subscribeSync("fc.side") catch {
         reportResult("flush_confirmed_side_effects", false, "subscribe failed");
         return;
     };
@@ -221,7 +221,7 @@ pub fn testFlushConfirmedVsFlush(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("fc.compare") catch {
+    const sub = client.subscribeSync("fc.compare") catch {
         reportResult("flush_confirmed_vs_flush", false, "subscribe failed");
         return;
     };
@@ -326,7 +326,7 @@ pub fn testFlushConfirmedLargePayload(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("fc.large") catch {
+    const sub = client.subscribeSync("fc.large") catch {
         reportResult("flush_confirmed_large", false, "subscribe failed");
         return;
     };
@@ -388,7 +388,7 @@ pub fn testFlushConfirmedRapidFire(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("fc.rapid") catch {
+    const sub = client.subscribeSync("fc.rapid") catch {
         reportResult("flush_confirmed_rapid", false, "subscribe failed");
         return;
     };

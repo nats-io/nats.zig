@@ -52,7 +52,7 @@ pub fn testClientManySubs(allocator: std.mem.Allocator) void {
             "many.{d}",
             .{i},
         ) catch "err";
-        subs[i] = client.subscribe(topics[i]) catch {
+        subs[i] = client.subscribeSync(topics[i]) catch {
             reportResult("client_many_subs", false, "sub failed");
             return;
         };
@@ -120,7 +120,7 @@ pub fn testClientWildcard(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("wild.*") catch {
+    const sub = client.subscribeSync("wild.*") catch {
         reportResult("client_wildcard", false, "sub failed");
         return;
     };
@@ -193,13 +193,13 @@ pub fn testClientDuplicateSubs(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub1 = client.subscribe("dup") catch {
+    const sub1 = client.subscribeSync("dup") catch {
         reportResult("client_dup_subs", false, "sub1 failed");
         return;
     };
     defer sub1.deinit();
 
-    const sub2 = client.subscribe("dup") catch {
+    const sub2 = client.subscribeSync("dup") catch {
         reportResult("client_dup_subs", false, "sub2 failed");
         return;
     };
@@ -260,7 +260,7 @@ pub fn testClientQueueGroup(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribeQueue("qg", "workers") catch {
+    const sub = client.subscribeSyncQueue("qg", "workers") catch {
         reportResult("client_queue_group", false, "sub failed");
         return;
     };
@@ -302,7 +302,7 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("wc.*") catch {
+    const sub = client.subscribeSync("wc.*") catch {
         reportResult("wildcard_matching", false, "sub failed");
         return;
     };
@@ -342,7 +342,7 @@ pub fn testWildcardGreater(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("gt.>") catch {
+    const sub = client.subscribeSync("gt.>") catch {
         reportResult("wildcard_greater", false, "sub failed");
         return;
     };
@@ -382,7 +382,7 @@ pub fn testSubjectCaseSensitivity(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("case.test") catch {
+    const sub = client.subscribeSync("case.test") catch {
         reportResult("subject_case", false, "sub failed");
         return;
     };
@@ -422,7 +422,7 @@ pub fn testUnsubscribeStopsDelivery(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("unsub.test") catch {
+    const sub = client.subscribeSync("unsub.test") catch {
         reportResult("unsub_stops", false, "sub failed");
         return;
     };
@@ -459,7 +459,7 @@ pub fn testHierarchicalSubject(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     const subject = "a.b.c.d.e.f.g.h";
-    const sub = client.subscribe(subject) catch {
+    const sub = client.subscribeSync(subject) catch {
         reportResult("hierarchical", false, "sub failed");
         return;
     };
@@ -502,7 +502,7 @@ pub fn testUnsubscribeWithPending(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("pending.test") catch {
+    const sub = client.subscribeSync("pending.test") catch {
         reportResult("unsub_with_pending", false, "subscribe failed");
         return;
     };
@@ -544,7 +544,7 @@ pub fn testSubscribeAfterDisconnect(allocator: std.mem.Allocator) void {
         return;
     };
 
-    const result = client.subscribe("test.sub");
+    const result = client.subscribeSync("test.sub");
 
     if (result) |sub| {
         sub.deinit();
@@ -572,7 +572,7 @@ pub fn testSubscriptionQueueCapacity(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("qcap.test") catch {
+    const sub = client.subscribeSync("qcap.test") catch {
         reportResult("sub_queue_cap", false, "subscribe failed");
         return;
     };

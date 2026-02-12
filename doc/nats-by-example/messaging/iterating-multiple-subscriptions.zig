@@ -45,13 +45,13 @@ pub fn main(init: std.process.Init) !void {
 
     // Create three separate subscriptions. We use ">"
     // (multi-level wildcard) to match all sub-subjects.
-    const sub_cars = try client.subscribe("cars.>");
+    const sub_cars = try client.subscribeSync("cars.>");
     defer sub_cars.deinit();
 
-    const sub_planes = try client.subscribe("planes.>");
+    const sub_planes = try client.subscribeSync("planes.>");
     defer sub_planes.deinit();
 
-    const sub_ships = try client.subscribe("ships.>");
+    const sub_ships = try client.subscribeSync("ships.>");
     defer sub_ships.deinit();
 
     // Publish 10 messages to each category

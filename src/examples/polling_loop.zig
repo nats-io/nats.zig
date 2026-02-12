@@ -32,13 +32,13 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Connected to NATS!\n", .{});
 
     // Subscribe to multiple subjects
-    const high_priority = try client.subscribe("priority.high");
+    const high_priority = try client.subscribeSync("priority.high");
     defer high_priority.deinit();
 
-    const normal = try client.subscribe("priority.normal");
+    const normal = try client.subscribeSync("priority.normal");
     defer normal.deinit();
 
-    const low_priority = try client.subscribe("priority.low");
+    const low_priority = try client.subscribeSync("priority.low");
     defer low_priority.deinit();
 
     std.debug.print("Subscribed to: priority.high, priority.normal, priority.low\n\n", .{});

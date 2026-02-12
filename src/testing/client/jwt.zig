@@ -84,7 +84,7 @@ pub fn testJwtPubSub(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("jwt.test.subject") catch {
+    const sub = client.subscribeSync("jwt.test.subject") catch {
         reportResult("jwt_pub_sub", false, "subscribe failed");
         return;
     };

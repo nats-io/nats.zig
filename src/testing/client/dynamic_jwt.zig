@@ -290,7 +290,7 @@ pub fn testDynamicJwtPubSub(
     };
     defer client.deinit();
 
-    const sub = client.subscribe(
+    const sub = client.subscribeSync(
         "dynamic.jwt.test",
     ) catch {
         reportResult(

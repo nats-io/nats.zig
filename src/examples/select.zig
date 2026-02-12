@@ -37,7 +37,7 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("Connected to NATS!\n", .{});
 
-    const sub = try client.subscribe("demo.select");
+    const sub = try client.subscribeSync("demo.select");
     defer sub.deinit();
 
     std.debug.print("Subscribed to 'demo.select'\n", .{});

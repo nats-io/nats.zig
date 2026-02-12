@@ -30,7 +30,7 @@ pub fn testClientPubSub(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("pubsub") catch {
+    const sub = client.subscribeSync("pubsub") catch {
         reportResult("client_pubsub", false, "sub failed");
         return;
     };
@@ -75,7 +75,7 @@ pub fn testClientPublishReply(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("req") catch {
+    const sub = client.subscribeSync("req") catch {
         reportResult("client_pub_reply", false, "sub failed");
         return;
     };
@@ -122,7 +122,7 @@ pub fn testPublishEmptyPayload(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("empty") catch {
+    const sub = client.subscribeSync("empty") catch {
         reportResult("publish_empty_payload", false, "sub failed");
         return;
     };
@@ -167,7 +167,7 @@ pub fn testPublishLargePayload(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("large") catch {
+    const sub = client.subscribeSync("large") catch {
         reportResult("publish_large_payload", false, "sub failed");
         return;
     };
@@ -310,7 +310,7 @@ pub fn testPublishBatching(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("batch.test") catch {
+    const sub = client.subscribeSync("batch.test") catch {
         reportResult("publish_batching", false, "subscribe failed");
         return;
     };
@@ -356,7 +356,7 @@ pub fn testFlushAfterEachPublish(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("flush.each") catch {
+    const sub = client.subscribeSync("flush.each") catch {
         reportResult("flush_after_each", false, "subscribe failed");
         return;
     };

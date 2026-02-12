@@ -55,7 +55,7 @@ pub fn testPublishMsg(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    var sub = client.subscribe("test.publishmsg") catch {
+    var sub = client.subscribeSync("test.publishmsg") catch {
         reportResult("publish_msg", false, "subscribe failed");
         return;
     };
@@ -149,7 +149,7 @@ pub fn testRequestMsg(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     // Set up a responder
-    var sub = client.subscribe("test.requestmsg") catch {
+    var sub = client.subscribeSync("test.requestmsg") catch {
         reportResult("request_msg", false, "subscribe failed");
         return;
     };

@@ -30,13 +30,13 @@ pub fn testDrainOperation(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub1 = client.subscribe("drain.test.1") catch {
+    const sub1 = client.subscribeSync("drain.test.1") catch {
         reportResult("drain_operation", false, "sub1 failed");
         return;
     };
     defer sub1.deinit();
 
-    const sub2 = client.subscribe("drain.test.2") catch {
+    const sub2 = client.subscribeSync("drain.test.2") catch {
         reportResult("drain_operation", false, "sub2 failed");
         return;
     };
@@ -72,13 +72,13 @@ pub fn testDrainCleansUp(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub1 = client.subscribe("drain.cleanup.1") catch {
+    const sub1 = client.subscribeSync("drain.cleanup.1") catch {
         reportResult("drain_cleanup", false, "sub1 failed");
         return;
     };
     defer sub1.deinit();
 
-    const sub2 = client.subscribe("drain.cleanup.2") catch {
+    const sub2 = client.subscribeSync("drain.cleanup.2") catch {
         reportResult("drain_cleanup", false, "sub2 failed");
         return;
     };
@@ -164,7 +164,7 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
         ) catch {
             continue;
         };
-        subs[i] = client.subscribe(subject) catch break;
+        subs[i] = client.subscribeSync(subject) catch break;
         created += 1;
     }
 
@@ -199,7 +199,7 @@ pub fn testSubWaitDrained(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("wait.drained") catch {
+    const sub = client.subscribeSync("wait.drained") catch {
         reportResult("sub_wait_drained", false, "subscribe failed");
         return;
     };
@@ -264,7 +264,7 @@ pub fn testWaitDrainedNotDraining(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("not.draining") catch {
+    const sub = client.subscribeSync("not.draining") catch {
         reportResult("wait_not_draining", false, "subscribe failed");
         return;
     };

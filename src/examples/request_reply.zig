@@ -33,7 +33,7 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Connected to NATS!\n", .{});
 
     // Service subscribes to handle requests
-    const service = try service_client.subscribe("math.double");
+    const service = try service_client.subscribeSync("math.double");
     defer service.deinit();
 
     std.debug.print("Service listening on 'math.double'\n", .{});

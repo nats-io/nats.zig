@@ -116,7 +116,7 @@ pub fn testTlsPubSub(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("tls.test.subject") catch {
+    const sub = client.subscribeSync("tls.test.subject") catch {
         reportResult("tls_pubsub", false, "subscribe failed");
         return;
     };
@@ -263,7 +263,7 @@ pub fn testTlsMultipleMessages(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("tls.multi.>") catch {
+    const sub = client.subscribeSync("tls.multi.>") catch {
         reportResult("tls_multiple_msgs", false, "subscribe failed");
         return;
     };

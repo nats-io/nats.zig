@@ -121,7 +121,7 @@ pub fn testReplyToPreserved(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("reply.test") catch {
+    const sub = client.subscribeSync("reply.test") catch {
         reportResult("reply_preserved", false, "sub failed");
         return;
     };
@@ -180,7 +180,7 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
     };
     defer requester.deinit();
 
-    const sub = responder.subscribe("test.service") catch {
+    const sub = responder.subscribeSync("test.service") catch {
         reportResult("request_reply_success", false, "responder sub failed");
         return;
     };
@@ -257,7 +257,7 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
     };
     defer client_b.deinit();
 
-    const sub = client_b.subscribe("cross.service") catch {
+    const sub = client_b.subscribeSync("cross.service") catch {
         reportResult("cross_client_reqrep", false, "B sub failed");
         return;
     };
@@ -389,7 +389,7 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
     };
     defer requester.deinit();
 
-    const sub = responder.subscribe("large.service") catch {
+    const sub = responder.subscribeSync("large.service") catch {
         reportResult("request_large_payload", false, "responder sub failed");
         return;
     };
@@ -473,7 +473,7 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
     };
     defer requester.deinit();
 
-    const sub = responder.subscribe("multi.service") catch {
+    const sub = responder.subscribeSync("multi.service") catch {
         reportResult("multi_requests_seq", false, "responder sub failed");
         return;
     };

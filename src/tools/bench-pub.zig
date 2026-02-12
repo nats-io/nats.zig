@@ -20,12 +20,15 @@ const BenchConfig = struct {
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
-    const config = parseArgs(init) catch |err| {
+    const config = parseArgs(init) catch {
         printUsage();
-        return err;
+        std.process.exit(1);
     };
 
-    try runBenchmark(init.io, allocator, config);
+    runBenchmark(init.io, allocator, config) catch |err| {
+        std.debug.print("Benchmark failed: {}\n", .{err});
+        std.process.exit(1);
+    };
 }
 
 fn parseArgs(init: std.process.Init) !BenchConfig {
@@ -105,7 +108,7 @@ fn runBenchmark(
         .{ .name = "bench-pub" },
     ) catch |err| {
         std.debug.print("Failed to connect: {}\n", .{err});
-        return err;
+        std.process.exit(1);
     };
     defer client.deinit();
 
@@ -119,13 +122,13 @@ fn runBenchmark(
     while (i < config.msgs) : (i += 1) {
         client.publish(config.subject, payload) catch |err| {
             std.debug.print("Publish failed at msg {d}: {}\n", .{ i, err });
-            return err;
+            std.process.exit(1);
         };
     }
 
     client.flush(50_000_000) catch |err| {
         std.debug.print("Flush failed: {}\n", .{err});
-        return err;
+        std.process.exit(1);
     };
 
     const end = std.Io.Timestamp.now(io, .awake);

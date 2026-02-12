@@ -70,7 +70,7 @@ fn testAutoflushBasicDelivery(
     };
     defer client.deinit();
 
-    var sub = client.subscribe(
+    var sub = client.subscribeSync(
         "autoflush.basic",
     ) catch {
         reportResult(
@@ -152,7 +152,7 @@ fn testAutoflushMultipleMessages(
     };
     defer client.deinit();
 
-    var sub = client.subscribe(
+    var sub = client.subscribeSync(
         "autoflush.multi",
     ) catch {
         reportResult(
@@ -248,7 +248,7 @@ fn testAutoflushHighThroughput(
     };
     defer client.deinit();
 
-    var sub = client.subscribe(
+    var sub = client.subscribeSync(
         "autoflush.throughput",
     ) catch {
         reportResult(
@@ -359,7 +359,7 @@ fn testAutoflushDuringDisconnect(
     };
     defer client.deinit();
 
-    var sub = client.subscribe(
+    var sub = client.subscribeSync(
         "autoflush.disconnect",
     ) catch {
         server.stop(io.io());
@@ -486,7 +486,7 @@ fn testAutoflushTLS(
     };
     defer client.deinit();
 
-    var sub = client.subscribe(
+    var sub = client.subscribeSync(
         "autoflush.tls",
     ) catch {
         reportResult(
@@ -564,7 +564,7 @@ fn testAutoflushLatencyBound(
     };
     defer client.deinit();
 
-    var sub = client.subscribe(
+    var sub = client.subscribeSync(
         "autoflush.latency",
     ) catch {
         reportResult(
@@ -650,7 +650,7 @@ fn testAutoflushWithSubscribe(
     };
     defer client2.deinit();
 
-    var sub = client2.subscribe(
+    var sub = client2.subscribeSync(
         "autoflush.sub.test",
     ) catch {
         reportResult(
@@ -725,7 +725,7 @@ fn testAutoflushNoBatching(
     };
     defer client.deinit();
 
-    var sub = client.subscribe(
+    var sub = client.subscribeSync(
         "autoflush.single",
     ) catch {
         reportResult(
@@ -835,7 +835,7 @@ fn testAutoflushMultiClient(
     };
     defer client3.deinit();
 
-    var sub1 = client1.subscribe(
+    var sub1 = client1.subscribeSync(
         "autoflush.mc.to1",
     ) catch {
         reportResult(
@@ -847,7 +847,7 @@ fn testAutoflushMultiClient(
     };
     defer sub1.deinit();
 
-    var sub2 = client2.subscribe(
+    var sub2 = client2.subscribeSync(
         "autoflush.mc.to2",
     ) catch {
         reportResult(
@@ -859,7 +859,7 @@ fn testAutoflushMultiClient(
     };
     defer sub2.deinit();
 
-    var sub3 = client3.subscribe(
+    var sub3 = client3.subscribeSync(
         "autoflush.mc.to3",
     ) catch {
         reportResult(
@@ -982,7 +982,7 @@ fn testAutoflushPublishRequest(
     };
     defer sub_client.deinit();
 
-    var sub = sub_client.subscribe(
+    var sub = sub_client.subscribeSync(
         "autoflush.pubreq",
     ) catch {
         reportResult(
@@ -1085,7 +1085,7 @@ fn testAutoflushPublishWithHeaders(
     };
     defer client.deinit();
 
-    var sub = client.subscribe(
+    var sub = client.subscribeSync(
         "autoflush.headers",
     ) catch {
         reportResult(
@@ -1210,7 +1210,7 @@ fn testAutoflushPubReqWithHeaders(
     };
     defer client.deinit();
 
-    var sub = client.subscribe(
+    var sub = client.subscribeSync(
         "autoflush.hdr.req",
     ) catch {
         reportResult(
@@ -1337,7 +1337,7 @@ fn testAutoflushPubWithHeaderMap(
     };
     defer client.deinit();
 
-    var sub = client.subscribe(
+    var sub = client.subscribeSync(
         "autoflush.hdrmap",
     ) catch {
         reportResult(
@@ -1463,7 +1463,7 @@ fn testAutoflushPublishMsg(
     };
     defer client.deinit();
 
-    var sub_dst = client.subscribe(
+    var sub_dst = client.subscribeSync(
         "autoflush.msg.dst",
     ) catch {
         reportResult(
@@ -1574,7 +1574,7 @@ fn testAutoflushAutoUnsubscribe(
     };
     defer sub_client.deinit();
 
-    var sub = sub_client.subscribe(
+    var sub = sub_client.subscribeSync(
         "autoflush.autounsub",
     ) catch {
         reportResult(
@@ -1700,7 +1700,7 @@ fn testAutoflushDrain(
     };
     defer sub_client.deinit();
 
-    var sub = sub_client.subscribe(
+    var sub = sub_client.subscribeSync(
         "autoflush.drain",
     ) catch {
         reportResult(
@@ -1849,7 +1849,7 @@ fn testAutoflushUnsubscribe(
     };
     defer sub_client.deinit();
 
-    var sub = sub_client.subscribe(
+    var sub = sub_client.subscribeSync(
         "autoflush.unsub",
     ) catch {
         reportResult(
@@ -1862,13 +1862,13 @@ fn testAutoflushUnsubscribe(
     defer sub.deinit();
 
     // Control sub to verify connection still works
-    var ctrl = sub_client.subscribe(
+    var ctrl = sub_client.subscribeSync(
         "autoflush.unsub.ctrl",
     ) catch {
         reportResult(
             "autoflush_unsubscribe",
             false,
-            "ctrl subscribe failed",
+            "ctrl subscribeSync failed",
         );
         return;
     };

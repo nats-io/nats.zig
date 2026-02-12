@@ -62,7 +62,7 @@ pub fn testAuthenticatedPubSub(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("auth.test.subject") catch {
+    const sub = client.subscribeSync("auth.test.subject") catch {
         reportResult("auth_pubsub", false, "subscribe failed");
         return;
     };

@@ -80,7 +80,7 @@ pub fn testNKeyPubSub(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("nkey.test.subject") catch {
+    const sub = client.subscribeSync("nkey.test.subject") catch {
         reportResult("nkey_pubsub", false, "subscribe failed");
         return;
     };

@@ -40,7 +40,7 @@ pub fn testClientBasic(allocator: std.mem.Allocator) void {
         return;
     }
 
-    const sub = client.subscribe("basic") catch {
+    const sub = client.subscribeSync("basic") catch {
         reportResult("client_basic", false, "subscribe failed");
         return;
     };
@@ -67,7 +67,7 @@ pub fn testClientTryNext(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("trynext") catch {
+    const sub = client.subscribeSync("trynext") catch {
         reportResult("client_try_next", false, "sub failed");
         return;
     };
@@ -129,14 +129,14 @@ pub fn testClientRapidSubUnsub(allocator: std.mem.Allocator) void {
     for (0..20) |i| {
         var buf: [32]u8 = undefined;
         const subj = std.fmt.bufPrint(&buf, "rapid.{d}", .{i}) catch "e";
-        const sub = client.subscribe(subj) catch {
+        const sub = client.subscribeSync(subj) catch {
             reportResult("client_rapid_sub", false, "sub failed");
             return;
         };
         sub.deinit();
     }
 
-    const sub = client.subscribe("rapid.final") catch {
+    const sub = client.subscribeSync("rapid.final") catch {
         reportResult("client_rapid_sub", false, "final sub failed");
         return;
     };

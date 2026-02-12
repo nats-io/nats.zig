@@ -28,7 +28,7 @@ pub fn testSubjectTooLong(allocator: std.mem.Allocator) void {
     var long_subject: [max_len + 1]u8 = undefined;
     @memset(&long_subject, 'a');
 
-    const result = client.subscribe(&long_subject);
+    const result = client.subscribeSync(&long_subject);
     if (result) |sub| {
         sub.deinit();
         reportResult("subject_too_long", false, "should have failed");
@@ -66,7 +66,7 @@ pub fn testQueueGroupTooLong(allocator: std.mem.Allocator) void {
     var long_qg: [max_len + 1]u8 = undefined;
     @memset(&long_qg, 'q');
 
-    const result = client.subscribeQueue("test.subject", &long_qg);
+    const result = client.subscribeSyncQueue("test.subject", &long_qg);
     if (result) |sub| {
         sub.deinit();
         reportResult("queue_group_too_long", false, "should have failed");
@@ -131,7 +131,7 @@ pub fn testDrainResultIsClean(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("drain.test") catch {
+    const sub = client.subscribeSync("drain.test") catch {
         reportResult("drain_result_clean", false, "subscribe failed");
         return;
     };
@@ -174,7 +174,7 @@ pub fn testSubjectExactLimit(allocator: std.mem.Allocator) void {
     var subject_max: [max_len]u8 = undefined;
     @memset(&subject_max, 'a');
 
-    const sub = client.subscribe(&subject_max) catch {
+    const sub = client.subscribeSync(&subject_max) catch {
         reportResult("subject_exact_limit", false, "subscribe failed");
         return;
     };
@@ -202,7 +202,7 @@ pub fn testQueueGroupExactLimit(allocator: std.mem.Allocator) void {
     var qg_max: [max_len]u8 = undefined;
     @memset(&qg_max, 'q');
 
-    const sub = client.subscribeQueue("test.subject", &qg_max) catch {
+    const sub = client.subscribeSyncQueue("test.subject", &qg_max) catch {
         reportResult("qg_exact_limit", false, "subscribe failed");
         return;
     };

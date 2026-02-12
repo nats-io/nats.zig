@@ -129,7 +129,7 @@ pub fn testStatsMsgsIn(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("msgsin.test") catch {
+    const sub = client.subscribeSync("msgsin.test") catch {
         reportResult("stats_msgs_in", false, "subscribe failed");
         return;
     };
@@ -184,7 +184,7 @@ pub fn testStatsBytesIn(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("bytesin.test") catch {
+    const sub = client.subscribeSync("bytesin.test") catch {
         reportResult("stats_bytes_in", false, "subscribe failed");
         return;
     };
@@ -264,7 +264,7 @@ pub fn testSubStats(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("substats.test") catch {
+    const sub = client.subscribeSync("substats.test") catch {
         reportResult("sub_stats", false, "subscribe failed");
         return;
     };
@@ -312,7 +312,7 @@ pub fn testPendingBytes(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("pending.bytes") catch {
+    const sub = client.subscribeSync("pending.bytes") catch {
         reportResult("pending_bytes", false, "subscribe failed");
         return;
     };
@@ -372,7 +372,7 @@ pub fn testMaxPending(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("max.pending") catch {
+    const sub = client.subscribeSync("max.pending") catch {
         reportResult("max_pending", false, "subscribe failed");
         return;
     };

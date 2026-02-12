@@ -48,7 +48,7 @@ pub fn testCallbackMsgHandler(
     var count: u32 = 0;
     var handler = CountHandler{ .count = &count };
 
-    const sub = client.subscribeWithCallback(
+    const sub = client.subscribe(
         "cb.handler.test",
         nats.MsgHandler.init(CountHandler, &handler),
     ) catch {
@@ -128,7 +128,7 @@ pub fn testCallbackPlainFn(
     };
     defer client.deinit();
 
-    const sub = client.subscribeWithCallbackFn(
+    const sub = client.subscribeFn(
         "cb.plainfn.test",
         plainCallback,
     ) catch {
@@ -212,7 +212,7 @@ pub fn testCallbackQueueGroup(
     var h1 = QueueHandler{ .count = &count1 };
     var h2 = QueueHandler{ .count = &count2 };
 
-    const sub1 = client.subscribeWithCallbackQueue(
+    const sub1 = client.subscribeQueue(
         "cb.queue.test",
         "workers",
         nats.MsgHandler.init(QueueHandler, &h1),
@@ -226,7 +226,7 @@ pub fn testCallbackQueueGroup(
     };
     defer sub1.deinit();
 
-    const sub2 = client.subscribeWithCallbackQueue(
+    const sub2 = client.subscribeQueue(
         "cb.queue.test",
         "workers",
         nats.MsgHandler.init(QueueHandler, &h2),
@@ -302,7 +302,7 @@ pub fn testCallbackDeinitCleanup(
     var count: u32 = 0;
     var handler = CountHandler{ .count = &count };
 
-    const sub = client.subscribeWithCallback(
+    const sub = client.subscribe(
         "cb.deinit.test",
         nats.MsgHandler.init(CountHandler, &handler),
     ) catch {
@@ -349,7 +349,7 @@ pub fn testCallbackModeField(
     defer client.deinit();
 
     // Manual sub should have .manual mode
-    const manual_sub = client.subscribe(
+    const manual_sub = client.subscribeSync(
         "cb.mode.manual",
     ) catch {
         reportResult(
@@ -365,7 +365,7 @@ pub fn testCallbackModeField(
     var handler = CountHandler{ .count = &count };
 
     // Callback sub should have .callback mode
-    const cb_sub = client.subscribeWithCallback(
+    const cb_sub = client.subscribe(
         "cb.mode.callback",
         nats.MsgHandler.init(CountHandler, &handler),
     ) catch {
@@ -431,7 +431,7 @@ pub fn testCallbackHighVolume(
     var count: u32 = 0;
     var handler = CountHandler{ .count = &count };
 
-    const sub = client.subscribeWithCallback(
+    const sub = client.subscribe(
         "cb.volume.test",
         nats.MsgHandler.init(CountHandler, &handler),
     ) catch {
@@ -534,7 +534,7 @@ pub fn testCallbackDataIntegrity(
         .count = &count,
     };
 
-    const sub = client.subscribeWithCallback(
+    const sub = client.subscribe(
         "cb.integrity.test",
         nats.MsgHandler.init(
             IntegrityHandler,
@@ -643,7 +643,7 @@ pub fn testCallbackMixedModes(
     var cb_count: u32 = 0;
     var handler = CountHandler{ .count = &cb_count };
 
-    const cb_sub = client.subscribeWithCallback(
+    const cb_sub = client.subscribe(
         "cb.mixed.auto",
         nats.MsgHandler.init(CountHandler, &handler),
     ) catch {
@@ -657,7 +657,7 @@ pub fn testCallbackMixedModes(
     defer cb_sub.deinit();
 
     // Manual sub on different subject
-    const man_sub = client.subscribe(
+    const man_sub = client.subscribeSync(
         "cb.mixed.manual",
     ) catch {
         reportResult(
@@ -781,7 +781,7 @@ pub fn testCallbackRequestReply(
         .handled = &handled,
     };
 
-    const sub = svc_client.subscribeWithCallback(
+    const sub = svc_client.subscribe(
         "cb.echo.test",
         nats.MsgHandler.init(EchoHandler, &handler),
     ) catch {

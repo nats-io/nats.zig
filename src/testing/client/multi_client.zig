@@ -41,7 +41,7 @@ pub fn testCrossClientRouting(allocator: std.mem.Allocator) void {
     };
     defer subscriber.deinit();
 
-    const sub = subscriber.subscribe("cross") catch {
+    const sub = subscriber.subscribeSync("cross") catch {
         reportResult("cross_client", false, "sub failed");
         return;
     };
@@ -146,7 +146,7 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("highrate") catch {
+    const sub = client.subscribeSync("highrate") catch {
         reportResult("client_high_rate", false, "sub failed");
         return;
     };
@@ -243,14 +243,14 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
     defer client_c.deinit();
 
     // B subscribes to "step1"
-    const sub_b = client_b.subscribe("chain.step1") catch {
+    const sub_b = client_b.subscribeSync("chain.step1") catch {
         reportResult("three_client_chain", false, "B sub failed");
         return;
     };
     defer sub_b.deinit();
 
     // C subscribes to "step2"
-    const sub_c = client_c.subscribe("chain.step2") catch {
+    const sub_c = client_c.subscribeSync("chain.step2") catch {
         reportResult("three_client_chain", false, "C sub failed");
         return;
     };
@@ -315,19 +315,19 @@ pub fn testMultipleSubscribersSameSubject(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub1 = client.subscribe("broadcast.test") catch {
+    const sub1 = client.subscribeSync("broadcast.test") catch {
         reportResult("multi_sub_same_subject", false, "sub1 failed");
         return;
     };
     defer sub1.deinit();
 
-    const sub2 = client.subscribe("broadcast.test") catch {
+    const sub2 = client.subscribeSync("broadcast.test") catch {
         reportResult("multi_sub_same_subject", false, "sub2 failed");
         return;
     };
     defer sub2.deinit();
 
-    const sub3 = client.subscribe("broadcast.test") catch {
+    const sub3 = client.subscribeSync("broadcast.test") catch {
         reportResult("multi_sub_same_subject", false, "sub3 failed");
         return;
     };

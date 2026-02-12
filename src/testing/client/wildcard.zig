@@ -29,14 +29,14 @@ pub fn testWildcardSubscribe(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     // Test * wildcard
-    const sub1 = client.subscribe("wild.*") catch {
+    const sub1 = client.subscribeSync("wild.*") catch {
         reportResult("wildcard_subscribe", false, "* wildcard failed");
         return;
     };
     defer sub1.deinit();
 
     // Test > wildcard
-    const sub2 = client.subscribe("wild.>") catch {
+    const sub2 = client.subscribeSync("wild.>") catch {
         reportResult("wildcard_subscribe", false, "> wildcard failed");
         return;
     };
@@ -64,14 +64,14 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     // Subscribe to foo.*
-    const sub_star = client.subscribe("wtest.*") catch {
+    const sub_star = client.subscribeSync("wtest.*") catch {
         reportResult("wildcard_matching", false, "star sub failed");
         return;
     };
     defer sub_star.deinit();
 
     // Subscribe to foo.>
-    const sub_gt = client.subscribe("wtest.>") catch {
+    const sub_gt = client.subscribeSync("wtest.>") catch {
         reportResult("wildcard_matching", false, "gt sub failed");
         return;
     };
@@ -149,14 +149,14 @@ pub fn testWildcardPositions(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     // Wildcard at beginning: *.bar
-    const sub1 = client.subscribe("*.middle.end") catch {
+    const sub1 = client.subscribeSync("*.middle.end") catch {
         reportResult("wildcard_positions", false, "sub1 failed");
         return;
     };
     defer sub1.deinit();
 
     // Wildcard in middle: foo.*.baz
-    const sub2 = client.subscribe("start.*.end") catch {
+    const sub2 = client.subscribeSync("start.*.end") catch {
         reportResult("wildcard_positions", false, "sub2 failed");
         return;
     };
@@ -205,7 +205,7 @@ pub fn testMultipleWildcards(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     // Subscribe with multiple * wildcards
-    const sub = client.subscribe("mw.*.middle.*") catch {
+    const sub = client.subscribeSync("mw.*.middle.*") catch {
         reportResult("multi_wildcards", false, "subscribe failed");
         return;
     };
@@ -252,7 +252,7 @@ pub fn testPublishSubscribe(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("roundtrip.test") catch {
+    const sub = client.subscribeSync("roundtrip.test") catch {
         reportResult("publish_subscribe", false, "subscribe failed");
         return;
     };

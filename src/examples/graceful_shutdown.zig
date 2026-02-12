@@ -27,10 +27,10 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Connected to NATS!\n", .{});
 
     // Create multiple subscriptions
-    const orders = try client.subscribe("orders.*");
+    const orders = try client.subscribeSync("orders.*");
     defer orders.deinit();
 
-    const events = try client.subscribe("events.>");
+    const events = try client.subscribeSync("events.>");
     defer events.deinit();
 
     std.debug.print("Subscriptions active:\n", .{});

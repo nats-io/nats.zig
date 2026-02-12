@@ -223,7 +223,7 @@ pub fn testConnectionStateAfterOps(allocator: std.mem.Allocator) void {
         return;
     }
 
-    const sub = client.subscribe("state.sub") catch {
+    const sub = client.subscribeSync("state.sub") catch {
         reportResult("state_after_ops", false, "subscribe failed");
         return;
     };
@@ -335,13 +335,13 @@ pub fn testConnectionDrain(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     // Create some subscriptions
-    const sub1 = client.subscribe("drain.1") catch {
+    const sub1 = client.subscribeSync("drain.1") catch {
         reportResult("connection_drain", false, "sub1 failed");
         return;
     };
     defer sub1.deinit();
 
-    const sub2 = client.subscribe("drain.2") catch {
+    const sub2 = client.subscribeSync("drain.2") catch {
         reportResult("connection_drain", false, "sub2 failed");
         return;
     };
@@ -425,7 +425,7 @@ pub fn testConnectionStateTransitions(allocator: std.mem.Allocator) void {
         return;
     };
 
-    const sub = client.subscribe("state.trans") catch {
+    const sub = client.subscribeSync("state.trans") catch {
         reportResult("connection_state", false, "subscribe failed");
         return;
     };
@@ -470,7 +470,7 @@ pub fn testManyClientSubscriptions(allocator: std.mem.Allocator) void {
             .{i},
         ) catch continue;
 
-        subs[i] = client.subscribe(subject) catch {
+        subs[i] = client.subscribeSync(subject) catch {
             break;
         };
         created += 1;

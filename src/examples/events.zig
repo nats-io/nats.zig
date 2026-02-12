@@ -92,7 +92,7 @@ pub fn main(init: std.process.Init) !void {
     defer client.deinit();
 
     // Subscribe to test subject
-    const sub = try client.subscribe("test.>");
+    const sub = try client.subscribeSync("test.>");
     defer sub.deinit();
 
     std.debug.print("\nSubscribed to test.>\n", .{});

@@ -52,7 +52,7 @@ pub fn main(init: std.process.Init) !void {
     // Subscribe using a wildcard subject. "greet.*" will
     // match any subject with exactly one token after "greet.",
     // for example: "greet.joe", "greet.pam", "greet.bob"
-    const sub = try client.subscribe("greet.*");
+    const sub = try client.subscribeSync("greet.*");
     defer sub.deinit();
 
     // Try to receive the message published before subscribing.

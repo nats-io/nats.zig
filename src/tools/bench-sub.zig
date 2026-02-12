@@ -21,12 +21,15 @@ const BenchConfig = struct {
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
-    const config = parseArgs(init) catch |err| {
+    const config = parseArgs(init) catch {
         printUsage();
-        return err;
+        std.process.exit(1);
     };
 
-    try runBenchmark(init.io, allocator, config);
+    runBenchmark(init.io, allocator, config) catch |err| {
+        std.debug.print("Benchmark failed: {}\n", .{err});
+        std.process.exit(1);
+    };
 }
 
 fn parseArgs(init: std.process.Init) !BenchConfig {
@@ -116,19 +119,19 @@ fn runBenchmark(
         .sub_queue_size = queue_size,
     }) catch |err| {
         std.debug.print("Failed to connect: {}\n", .{err});
-        return err;
+        std.process.exit(1);
     };
     defer client.deinit();
 
-    var sub = client.subscribe(config.subject) catch |err| {
+    var sub = client.subscribeSync(config.subject) catch |err| {
         std.debug.print("Subscribe failed: {}\n", .{err});
-        return err;
+        std.process.exit(1);
     };
     defer sub.deinit();
 
     client.flushBuffer() catch |err| {
         std.debug.print("Flush failed: {}\n", .{err});
-        return err;
+        std.process.exit(1);
     };
 
     std.debug.print("Subscribed to '{s}', waiting for messages...\n", .{
@@ -177,7 +180,7 @@ fn runBenchmark(
 
         const msg = sub.nextWithTimeout(5000) catch |err| {
             std.debug.print("Receive error: {}\n", .{err});
-            return err;
+            std.process.exit(1);
         } orelse {
             std.debug.print("Timeout or connection closed\n", .{});
             break;

@@ -50,7 +50,7 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
             .{i},
         ) catch continue;
 
-        subs[i] = client.subscribe(subject) catch {
+        subs[i] = client.subscribeSync(subject) catch {
             continue;
         };
         created += 1;
@@ -109,7 +109,7 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("rapid.publish") catch {
+    const sub = client.subscribeSync("rapid.publish") catch {
         reportResult("rapid_publish", false, "subscribe failed");
         return;
     };
@@ -193,7 +193,7 @@ pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
             .{i},
         ) catch continue;
 
-        current_sub = client.subscribe(subject) catch {
+        current_sub = client.subscribeSync(subject) catch {
             reportResult("concurrent_sub_unsub", false, "subscribe failed");
             return;
         };
@@ -239,7 +239,7 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     };
     defer subscriber.deinit();
 
-    const sub = subscriber.subscribe("race.delivery") catch {
+    const sub = subscriber.subscribeSync("race.delivery") catch {
         reportResult("race_sub_delivery", false, "subscribe failed");
         return;
     };
@@ -287,7 +287,7 @@ pub fn testRaceUnsubscribeVsDelivery(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("race.unsub") catch {
+    const sub = client.subscribeSync("race.unsub") catch {
         reportResult("race_unsub_delivery", false, "subscribe failed");
         return;
     };
@@ -339,7 +339,7 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
             .{i},
         ) catch continue;
 
-        const sub = client.subscribe(subject) catch {
+        const sub = client.subscribeSync(subject) catch {
             reportResult("sid_allocation_recycle", false, "subscribe failed");
             return;
         };
@@ -413,7 +413,7 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     };
     defer client3.deinit();
 
-    const sub = client1.subscribe("shared.io.test") catch {
+    const sub = client1.subscribeSync("shared.io.test") catch {
         reportResult("multi_client_shared_io", false, "subscribe failed");
         return;
     };
@@ -465,19 +465,19 @@ pub fn testParallelReceive(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub1 = client.subscribe("parallel.1") catch {
+    const sub1 = client.subscribeSync("parallel.1") catch {
         reportResult("parallel_recv", false, "sub1 failed");
         return;
     };
     defer sub1.deinit();
 
-    const sub2 = client.subscribe("parallel.2") catch {
+    const sub2 = client.subscribeSync("parallel.2") catch {
         reportResult("parallel_recv", false, "sub2 failed");
         return;
     };
     defer sub2.deinit();
 
-    const sub3 = client.subscribe("parallel.3") catch {
+    const sub3 = client.subscribeSync("parallel.3") catch {
         reportResult("parallel_recv", false, "sub3 failed");
         return;
     };
@@ -586,7 +586,7 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("stats.test") catch {
+    const sub = client.subscribeSync("stats.test") catch {
         reportResult("stats_concurrency", false, "subscribe failed");
         return;
     };

@@ -53,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
     printConnectionInfo(client);
 
     // Subscribe
-    const sub = try client.subscribe("demo.reconnect");
+    const sub = try client.subscribeSync("demo.reconnect");
     defer sub.deinit();
 
     std.debug.print("\nSubscribed to 'demo.reconnect'\n", .{});

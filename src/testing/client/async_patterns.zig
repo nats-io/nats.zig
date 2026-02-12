@@ -42,7 +42,7 @@ fn testAsyncSelectTimeout(allocator: Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("async.timeout.test") catch {
+    const sub = client.subscribeSync("async.timeout.test") catch {
         reportResult("async_select_timeout", false, "subscribe failed");
         return;
     };
@@ -95,7 +95,7 @@ fn testAsyncSelectMessage(allocator: Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("async.message.test") catch {
+    const sub = client.subscribeSync("async.message.test") catch {
         reportResult("async_select_message", false, "subscribe failed");
         return;
     };
@@ -190,7 +190,7 @@ fn testAsyncConcurrentWorkers(allocator: Allocator) void {
     defer client.deinit();
 
     // Create 3 workers in queue group
-    const w1_sub = client.subscribeQueue(
+    const w1_sub = client.subscribeSyncQueue(
         "async.workers",
         "workers",
     ) catch {
@@ -199,7 +199,7 @@ fn testAsyncConcurrentWorkers(allocator: Allocator) void {
     };
     defer w1_sub.deinit();
 
-    const w2_sub = client.subscribeQueue(
+    const w2_sub = client.subscribeSyncQueue(
         "async.workers",
         "workers",
     ) catch {
@@ -208,7 +208,7 @@ fn testAsyncConcurrentWorkers(allocator: Allocator) void {
     };
     defer w2_sub.deinit();
 
-    const w3_sub = client.subscribeQueue(
+    const w3_sub = client.subscribeSyncQueue(
         "async.workers",
         "workers",
     ) catch {
@@ -322,19 +322,19 @@ fn testAsyncParallelSubscriptions(allocator: Allocator) void {
     };
     defer client.deinit();
 
-    const sub_a = client.subscribe("async.parallel.a") catch {
+    const sub_a = client.subscribeSync("async.parallel.a") catch {
         reportResult("async_parallel_subs", false, "sub_a failed");
         return;
     };
     defer sub_a.deinit();
 
-    const sub_b = client.subscribe("async.parallel.b") catch {
+    const sub_b = client.subscribeSync("async.parallel.b") catch {
         reportResult("async_parallel_subs", false, "sub_b failed");
         return;
     };
     defer sub_b.deinit();
 
-    const sub_c = client.subscribe("async.parallel.c") catch {
+    const sub_c = client.subscribeSync("async.parallel.c") catch {
         reportResult("async_parallel_subs", false, "sub_c failed");
         return;
     };
@@ -401,7 +401,7 @@ fn testAsyncCancellation(allocator: Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("async.cancel.test") catch {
+    const sub = client.subscribeSync("async.cancel.test") catch {
         reportResult("async_cancellation", false, "subscribe failed");
         return;
     };
@@ -441,7 +441,7 @@ fn testAsyncCancelWithPendingMessage(allocator: Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("async.cancel.msg") catch {
+    const sub = client.subscribeSync("async.cancel.msg") catch {
         reportResult("async_cancel_with_msg", false, "subscribe failed");
         return;
     };
@@ -490,7 +490,7 @@ fn testBatchReceive(allocator: Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("async.batch") catch {
+    const sub = client.subscribeSync("async.batch") catch {
         reportResult("batch_receive", false, "subscribe failed");
         return;
     };
@@ -555,7 +555,7 @@ fn testTryNextBatch(allocator: Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("async.trybatch") catch {
+    const sub = client.subscribeSync("async.trybatch") catch {
         reportResult("try_next_batch", false, "subscribe failed");
         return;
     };
@@ -636,7 +636,7 @@ fn testAsyncDeferCleanup(allocator: Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("async.defer.test") catch {
+    const sub = client.subscribeSync("async.defer.test") catch {
         reportResult("async_defer_cleanup", false, "subscribe failed");
         return;
     };
@@ -670,13 +670,13 @@ fn testSelectMultipleSubs(allocator: Allocator) void {
     };
     defer client.deinit();
 
-    const fast_sub = client.subscribe("async.fast") catch {
+    const fast_sub = client.subscribeSync("async.fast") catch {
         reportResult("select_multiple_subs", false, "fast_sub failed");
         return;
     };
     defer fast_sub.deinit();
 
-    const slow_sub = client.subscribe("async.slow") catch {
+    const slow_sub = client.subscribeSync("async.slow") catch {
         reportResult("select_multiple_subs", false, "slow_sub failed");
         return;
     };

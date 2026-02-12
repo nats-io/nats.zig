@@ -55,16 +55,18 @@ pub fn main(init: std.process.Init) !void {
     const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{});
     defer client.deinit();
 
-    // Subscribe
-    const sub = try client.subscribe("greet.*");
+    // Subscribe with callback - messages dispatched automatically
+    const sub = try client.subscribeFn("greet.*", onMessage);
     defer sub.deinit();
 
     // Publish (auto-flushed to network)
     try client.publish("greet.hello", "Hello, NATS!");
 
-    // Receive message
-    const msg = try sub.next();
-    defer msg.deinit();
+    // Keep running (callbacks fire on the io thread)
+    io.sleep(.fromSeconds(1), .awake) catch {};
+}
+
+fn onMessage(msg: *const nats.Message) void {
     std.debug.print("Received: {s}\n", .{msg.data});
 }
 ```
@@ -75,7 +77,7 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 
 | Example | Run | Description |
 |---------|-----|-------------|
-| simple | `run-simple` | Basic pub/sub - connect, subscribe, publish, receive |
+| simple | `run-simple` | Basic pub/sub - connect, `subscribeSync`, publish, receive |
 | request_reply | `run-request-reply` | RPC pattern with automatic inbox handling |
 | queue_groups | `run-queue-groups` | Load-balanced workers with `io.concurrent()` |
 | polling_loop | `run-polling-loop` | Non-blocking `tryNext()` with priority scheduling |
@@ -83,7 +85,7 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 | batch_receiving | `run-batch-receiving` | `nextBatch()` for bulk receives, stats monitoring |
 | reconnection | `run-reconnection` | Auto-reconnect, backoff, buffer during disconnect |
 | events | `run-events` | EventHandler callbacks with external state |
-| callback | `run-callback` | MsgHandler and plain fn callback subscriptions |
+| callback | `run-callback` | `subscribe()` and `subscribeFn()` callback subscriptions |
 | request_reply_callback | `run-request-reply-callback` | Service responder via callback subscription |
 | graceful_shutdown | `run-graceful-shutdown` | `drain()` lifecycle, pre-shutdown health checks |
 
@@ -184,15 +186,91 @@ try client.flush(5_000_000_000); // 5 second timeout
 
 ## Subscribing
 
-### Simple Subscription
+### Subscribe (Callback)
+
+Messages are dispatched automatically via callback.
+
+**MsgHandler pattern** (handler struct with state):
 
 ```zig
-const sub = try client.subscribe("events.>");
+const MyHandler = struct {
+    counter: *u32,
+    pub fn onMessage(self: *@This(), msg: *const nats.Message) void {
+        self.counter.* += 1;
+        std.debug.print("got: {s}\n", .{msg.data});
+    }
+};
+
+var count: u32 = 0;
+var handler = MyHandler{ .counter = &count };
+const sub = try client.subscribe(
+    "events.>",
+    nats.MsgHandler.init(MyHandler, &handler),
+);
+defer sub.deinit();
+```
+
+**Plain function** (no state needed):
+
+```zig
+fn onAlert(msg: *const nats.Message) void {
+    std.debug.print("alert: {s}\n", .{msg.data});
+}
+
+const sub = try client.subscribeFn(
+    "alerts.>",
+    onAlert,
+);
+defer sub.deinit();
+```
+
+**Queue group** (load balancing — only one subscriber in the group
+receives each message):
+
+```zig
+const sub = try client.subscribeQueue(
+    "tasks.*",
+    "workers",
+    handler,
+);
+```
+
+| Method | Handler | Queue Group |
+|--------|---------|-------------|
+| `subscribe` | MsgHandler | No |
+| `subscribeQueue` | MsgHandler | Yes |
+| `subscribeFn` | plain fn | No |
+| `subscribeFnQueue` | plain fn | Yes |
+
+> **Warning:** Do not call `next()`, `tryNext()`, or other receive methods on
+> a callback subscription. They assert `mode == .manual` and will trap.
+
+### Subscribe Sync (Manual Receive)
+
+For manual control over message receiving, use `subscribeSync()`. You call
+`next()`, `tryNext()`, or `nextBatch()` yourself:
+
+```zig
+const sub = try client.subscribeSync("events.>");
 defer sub.deinit();
 
 // Wildcards:
 // * matches single token: "events.*" matches "events.click" but not "events.user.login"
 // > matches remainder: "events.>" matches "events.click" and "events.user.login"
+
+while (true) {
+    const msg = try sub.next();
+    defer msg.deinit();
+    std.debug.print("{s}: {s}\n", .{ msg.subject, msg.data });
+}
+```
+
+**Queue group** variant:
+
+```zig
+const sub1 = try client.subscribeSyncQueue("tasks.*", "workers");
+const sub2 = try client.subscribeSyncQueue("tasks.*", "workers");
+// Message goes to either sub1 OR sub2, not both
 ```
 
 ### Subscription Registration
@@ -202,7 +280,7 @@ If you need to ensure the subscription is fully registered before publishing (es
 with separate publisher/subscriber clients), call `flush()` after subscribing:
 
 ```zig
-const sub = try client.subscribe("events.>");
+const sub = try client.subscribeSync("events.>");
 defer sub.deinit();
 
 // Ensure subscription is registered on server before publishing
@@ -220,86 +298,13 @@ try client.flush(5_000_000_000);  // 5 second timeout
 - Single client publishing to itself (same client does subscribe + publish)
 - Using `request()` which handles synchronization internally
 
-### Queue Groups (Load Balancing)
-
-Distribute messages across workers - only one subscriber in the group receives each message:
-
-```zig
-// Worker 1
-const sub1 = try client.subscribeQueue("tasks.*", "workers");
-
-// Worker 2 (different process)
-const sub2 = try client.subscribeQueue("tasks.*", "workers");
-
-// Message goes to either sub1 OR sub2, not both
-```
-
-### Callback Subscriptions
-
-Instead of manually calling `next()`, you can subscribe with a callback handler.
-An async drain task calls your handler for each message and frees it automatically.
-
-**MsgHandler pattern** (handler struct with state):
-
-```zig
-const MyHandler = struct {
-    counter: *u32,
-    pub fn onMessage(self: *@This(), msg: *const nats.Message) void {
-        self.counter.* += 1;
-        std.debug.print("got: {s}\n", .{msg.data});
-    }
-};
-
-var count: u32 = 0;
-var handler = MyHandler{ .counter = &count };
-const sub = try client.subscribeWithCallback(
-    "events.>",
-    nats.MsgHandler.init(MyHandler, &handler),
-);
-defer sub.deinit();
-```
-
-**Plain function** (no state needed):
-
-```zig
-fn onAlert(msg: *const nats.Message) void {
-    std.debug.print("alert: {s}\n", .{msg.data});
-}
-
-const sub = try client.subscribeWithCallbackFn(
-    "alerts.>",
-    onAlert,
-);
-defer sub.deinit();
-```
-
-**Queue group** variant:
-
-```zig
-const sub = try client.subscribeWithCallbackQueue(
-    "tasks.*",
-    "workers",
-    handler,
-);
-```
-
-| Method | Handler | Queue Group |
-|--------|---------|-------------|
-| `subscribeWithCallback` | MsgHandler | No |
-| `subscribeWithCallbackQueue` | MsgHandler | Yes |
-| `subscribeWithCallbackFn` | plain fn | No |
-| `subscribeWithCallbackFnQueue` | plain fn | Yes |
-
-> **Warning:** Do not call `next()`, `tryNext()`, or other receive methods on
-> a callback subscription. They assert `mode == .manual` and will trap.
-
 ### Unsubscribing
 
 **Zig deinit pattern (recommended):** Use `defer sub.deinit()` - it calls `unsubscribe()`
 internally and handles errors gracefully:
 
 ```zig
-const sub = try client.subscribe("events.>");
+const sub = try client.subscribeSync("events.>");
 defer sub.deinit();  // Unsubscribes + frees memory
 
 // ... use subscription ...
@@ -309,7 +314,7 @@ defer sub.deinit();  // Unsubscribes + frees memory
 received the UNSUB command, call `unsubscribe()` directly:
 
 ```zig
-const sub = try client.subscribe("events.>");
+const sub = try client.subscribeSync("events.>");
 
 // ... use subscription ...
 
@@ -403,7 +408,7 @@ for (buf[0..available]) |*msg| {
 **Auto-Unsubscribe:** Automatically unsubscribe after receiving a specific number of messages:
 
 ```zig
-const sub = try client.subscribe("events.>");
+const sub = try client.subscribeSync("events.>");
 
 // Auto-unsubscribe after 10 messages
 try sub.autoUnsubscribe(10);
@@ -463,7 +468,7 @@ if (try client.request("math.double", "21", 5000)) |reply| {
 Respond to requests by publishing to the `reply_to` subject:
 
 ```zig
-const service = try client.subscribe("math.double");
+const service = try client.subscribeSync("math.double");
 defer service.deinit();
 
 while (true) {
@@ -509,7 +514,7 @@ For more control, manage the inbox yourself:
 const inbox = try client.newInbox();
 defer allocator.free(inbox);
 
-const reply_sub = try client.subscribe(inbox);
+const reply_sub = try client.subscribeSync(inbox);
 defer reply_sub.deinit();
 
 // Send request with reply-to (auto-flushed)
@@ -1382,12 +1387,12 @@ if (client.getConnectedServerVersion()) |version| {
 | Publish message | `client.publish(subject, data)` | `!void` |
 | Publish with reply-to | `client.publishRequest(subject, reply_to, data)` | `!void` |
 | Flush buffer to socket | `client.flushBuffer()` | `!void` |
-| Subscribe | `client.subscribe(subject)` | `!*Sub` |
-| Queue subscribe | `client.subscribeQueue(subject, group)` | `!*Sub` |
-| Callback subscribe | `client.subscribeWithCallback(subject, handler)` | `!*Sub` |
-| Callback queue sub | `client.subscribeWithCallbackQueue(subject, group, handler)` | `!*Sub` |
-| Callback fn sub | `client.subscribeWithCallbackFn(subject, fn)` | `!*Sub` |
-| Callback fn queue sub | `client.subscribeWithCallbackFnQueue(subject, group, fn)` | `!*Sub` |
+| Subscribe | `client.subscribeSync(subject)` | `!*Sub` |
+| Queue subscribe (sync) | `client.subscribeSyncQueue(subject, group)` | `!*Sub` |
+| Callback subscribe | `client.subscribe(subject, handler)` | `!*Sub` |
+| Callback queue sub | `client.subscribeQueue(subject, group, handler)` | `!*Sub` |
+| Callback fn sub | `client.subscribeFn(subject, fn)` | `!*Sub` |
+| Callback fn queue sub | `client.subscribeFnQueue(subject, group, fn)` | `!*Sub` |
 | Unsubscribe | `sub.unsubscribe()` | `!void` |
 | Free subscription | `sub.deinit()` | `void` |
 | Request/reply | `client.request(subject, data, timeout_ms)` | `!?Message` |

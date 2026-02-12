@@ -70,14 +70,14 @@ pub fn main(init: std.process.Init) !void {
     var app = AppState{};
     var handler = MyHandler{ .app = &app };
 
-    const sub1 = try client.subscribeWithCallback(
+    const sub1 = try client.subscribe(
         "demo.handler",
         nats.MsgHandler.init(MyHandler, &handler),
     );
     defer sub1.deinit();
 
     // 2. Plain fn callback subscription
-    const sub2 = try client.subscribeWithCallbackFn(
+    const sub2 = try client.subscribeFn(
         "demo.alert",
         alertFn,
     );

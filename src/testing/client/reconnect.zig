@@ -122,7 +122,7 @@ fn testSubscriptionRestored(
     };
     defer client.deinit();
 
-    var sub = client.subscribe("test.restore.>") catch {
+    var sub = client.subscribeSync("test.restore.>") catch {
         reportResult("reconnect_sub_restored", false, "subscribe failed");
         return;
     };
@@ -196,19 +196,19 @@ fn testMultipleSubscriptionsRestored(
     };
     defer client.deinit();
 
-    var sub1 = client.subscribe("multi.sub.one") catch {
+    var sub1 = client.subscribeSync("multi.sub.one") catch {
         reportResult("reconnect_multi_sub", false, "sub1 failed");
         return;
     };
     defer sub1.deinit();
 
-    var sub2 = client.subscribe("multi.sub.two") catch {
+    var sub2 = client.subscribeSync("multi.sub.two") catch {
         reportResult("reconnect_multi_sub", false, "sub2 failed");
         return;
     };
     defer sub2.deinit();
 
-    var sub3 = client.subscribe("multi.sub.three") catch {
+    var sub3 = client.subscribeSync("multi.sub.three") catch {
         reportResult("reconnect_multi_sub", false, "sub3 failed");
         return;
     };
@@ -366,7 +366,7 @@ fn testPendingBufferFlush(
     };
     defer client.deinit();
 
-    var sub = client.subscribe("pending.test") catch {
+    var sub = client.subscribeSync("pending.test") catch {
         reportResult("pending_buffer_flush", false, "subscribe failed");
         return;
     };
@@ -417,7 +417,7 @@ fn testPublishDuringReconnect(
     };
     defer client.deinit();
 
-    var sub = client.subscribe("during.reconnect") catch {
+    var sub = client.subscribeSync("during.reconnect") catch {
         reportResult("publish_during_reconnect", false, "subscribe failed");
         return;
     };
@@ -524,7 +524,7 @@ fn testReconnectWithQueueGroup(
     };
     defer client.deinit();
 
-    var sub = client.subscribeQueue("queue.test", "workers") catch {
+    var sub = client.subscribeSyncQueue("queue.test", "workers") catch {
         reportResult("reconnect_queue_group", false, "subscribe failed");
         return;
     };
@@ -630,7 +630,7 @@ fn testReconnectPreservesSid(
     };
     defer client.deinit();
 
-    var sub = client.subscribe("sid.test") catch {
+    var sub = client.subscribeSync("sid.test") catch {
         reportResult("reconnect_preserves_sid", false, "subscribe failed");
         return;
     };
@@ -675,7 +675,7 @@ fn testReconnectWildcardSub(
     };
     defer client.deinit();
 
-    var sub = client.subscribe("wild.*.test.>") catch {
+    var sub = client.subscribeSync("wild.*.test.>") catch {
         reportResult("reconnect_wildcard", false, "subscribe failed");
         return;
     };
@@ -907,7 +907,7 @@ fn testFailoverToSecondServer(
         return;
     };
 
-    var sub = client.subscribe("failover.test") catch {
+    var sub = client.subscribeSync("failover.test") catch {
         server1.stop(io.io());
         reportResult("failover_to_second", false, "subscribe failed");
         return;
@@ -1054,7 +1054,7 @@ fn testAllServersDownThenRecover(
 
     client.server_pool.addServer(url2) catch {};
 
-    var sub = client.subscribe("recover.test") catch {
+    var sub = client.subscribeSync("recover.test") catch {
         server1.stop(io.io());
         reportResult("all_servers_down_recover", false, "subscribe failed");
         return;
@@ -1160,31 +1160,31 @@ fn testMultipleSubsActivelyReceiving(
     };
     defer client.deinit();
 
-    var sub1 = client.subscribe("active.sub.one") catch {
+    var sub1 = client.subscribeSync("active.sub.one") catch {
         reportResult("multi_subs_receiving", false, "sub1 failed");
         return;
     };
     defer sub1.deinit();
 
-    var sub2 = client.subscribe("active.sub.two") catch {
+    var sub2 = client.subscribeSync("active.sub.two") catch {
         reportResult("multi_subs_receiving", false, "sub2 failed");
         return;
     };
     defer sub2.deinit();
 
-    var sub3 = client.subscribe("active.sub.three") catch {
+    var sub3 = client.subscribeSync("active.sub.three") catch {
         reportResult("multi_subs_receiving", false, "sub3 failed");
         return;
     };
     defer sub3.deinit();
 
-    var sub4 = client.subscribe("active.sub.four") catch {
+    var sub4 = client.subscribeSync("active.sub.four") catch {
         reportResult("multi_subs_receiving", false, "sub4 failed");
         return;
     };
     defer sub4.deinit();
 
-    var sub5 = client.subscribe("active.sub.five") catch {
+    var sub5 = client.subscribeSync("active.sub.five") catch {
         reportResult("multi_subs_receiving", false, "sub5 failed");
         return;
     };
@@ -1307,7 +1307,7 @@ fn testHighVolumePendingBuffer(
     };
     defer client.deinit();
 
-    var sub = client.subscribe("buffer.test") catch {
+    var sub = client.subscribeSync("buffer.test") catch {
         reportResult("high_volume_buffer", false, "subscribe failed");
         return;
     };
@@ -1418,7 +1418,7 @@ fn testQueueGroupMultiClientReconnect(
     };
     defer client2.deinit();
 
-    var sub1 = client1.subscribeQueue(
+    var sub1 = client1.subscribeSyncQueue(
         "qgroup.test",
         "workers",
     ) catch {
@@ -1427,7 +1427,7 @@ fn testQueueGroupMultiClientReconnect(
     };
     defer sub1.deinit();
 
-    var sub2 = client2.subscribeQueue(
+    var sub2 = client2.subscribeSyncQueue(
         "qgroup.test",
         "workers",
     ) catch {
@@ -1532,7 +1532,7 @@ fn testRapidServerRestarts(
     };
     defer client.deinit();
 
-    var sub = client.subscribe("rapid.test") catch {
+    var sub = client.subscribeSync("rapid.test") catch {
         reportResult("rapid_restarts", false, "subscribe failed");
         return;
     };
@@ -1603,7 +1603,7 @@ fn testMultipleReconnectionCycles(
     };
     defer client.deinit();
 
-    var sub = client.subscribe("cycles.test") catch {
+    var sub = client.subscribeSync("cycles.test") catch {
         reportResult("multiple_cycles", false, "subscribe failed");
         return;
     };
@@ -1702,7 +1702,7 @@ fn testLongDisconnectionRecovery(
     };
     defer client.deinit();
 
-    var sub = client.subscribe("long.test") catch {
+    var sub = client.subscribeSync("long.test") catch {
         reportResult("long_disconnection", false, "subscribe failed");
         return;
     };

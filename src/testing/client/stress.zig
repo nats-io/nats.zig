@@ -39,7 +39,7 @@ pub fn testStress500Messages(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("stress500") catch {
+    const sub = client.subscribeSync("stress500") catch {
         reportResult("stress_500", false, "sub failed");
         return;
     };
@@ -96,7 +96,7 @@ pub fn testStress1000Messages(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("stress1k") catch {
+    const sub = client.subscribeSync("stress1k") catch {
         reportResult("stress_1000", false, "sub failed");
         return;
     };
@@ -144,7 +144,7 @@ pub fn testStress2000Messages(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("stress2k") catch {
+    const sub = client.subscribeSync("stress2k") catch {
         reportResult("stress_2000", false, "sub failed");
         return;
     };
@@ -196,7 +196,7 @@ pub fn testPayload30KB(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("stress.30kb") catch {
+    const sub = client.subscribeSync("stress.30kb") catch {
         reportResult("payload_30kb", false, "sub failed");
         return;
     };
@@ -258,7 +258,7 @@ pub fn testManySubscriptions(allocator: std.mem.Allocator) void {
             std.fmt.bufPrint(&subject_buf, "manysub.{d}", .{i}) catch {
                 continue;
             };
-        subs[i] = client.subscribe(subject) catch {
+        subs[i] = client.subscribeSync(subject) catch {
             break;
         };
         created += 1;
@@ -292,7 +292,7 @@ pub fn testPayloadBoundary(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribe("boundary.test") catch {
+    const sub = client.subscribeSync("boundary.test") catch {
         reportResult("payload_boundary", false, "subscribe failed");
         return;
     };
