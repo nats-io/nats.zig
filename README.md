@@ -52,8 +52,10 @@ const std = @import("std");
 const nats = @import("nats");
 
 const Handler = struct {
-    pub fn onMessage(_: *@This(), msg: *const nats.Message) void {
-        std.debug.print("Received: {s}\n", .{msg.data});
+    count: u32 = 0,
+    pub fn onMessage(self: *@This(), msg: *const nats.Message) void {
+        self.count += 1;
+        std.debug.print("[{d}] {s}\n", .{ self.count, msg.data });
     }
 };
 
