@@ -51,9 +51,11 @@ with its `onMessage` method:
 const std = @import("std");
 const nats = @import("nats");
 
+// Handler struct captures external state via pointer
 const Handler = struct {
     counter: *u32,
     pub fn onMessage(self: *@This(), msg: *const nats.Message) void {
+        // Modify captured state from within the callback
         self.counter.* += 1;
         std.debug.print("[{d}] {s}\n", .{ self.counter.*, msg.data });
     }
