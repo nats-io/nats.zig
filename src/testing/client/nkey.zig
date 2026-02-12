@@ -28,7 +28,7 @@ pub fn testNKeyAuthentication(allocator: std.mem.Allocator) void {
         reportResult("nkey_authentication", false, detail);
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.isConnected()) {
         reportResult("nkey_authentication", true, "");
@@ -54,7 +54,7 @@ pub fn testNKeyAuthFailure(allocator: std.mem.Allocator) void {
     });
 
     if (result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("nkey_auth_failure", false, "should have failed");
     } else |_| {
         reportResult("nkey_auth_failure", true, "");
@@ -78,21 +78,21 @@ pub fn testNKeyPubSub(allocator: std.mem.Allocator) void {
         reportResult("nkey_pubsub", false, detail);
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "nkey.test.subject") catch {
+    const sub = client.subscribe("nkey.test.subject") catch {
         reportResult("nkey_pubsub", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish("nkey.test.subject", "nkey message") catch {
         reportResult("nkey_pubsub", false, "publish failed");
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
-        m.deinit(allocator);
+    if (sub.nextWithTimeout(1000) catch null) |m| {
+        m.deinit();
         reportResult("nkey_pubsub", true, "");
     } else {
         reportResult("nkey_pubsub", false, "no message");
@@ -112,7 +112,7 @@ pub fn testNKeyNoSeedFails(allocator: std.mem.Allocator) void {
     });
 
     if (result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("nkey_no_seed_fails", false, "should have failed");
     } else |_| {
         reportResult("nkey_no_seed_fails", true, "");
@@ -133,7 +133,7 @@ pub fn testNKeyInvalidSeedFormat(allocator: std.mem.Allocator) void {
     });
 
     if (result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("nkey_invalid_seed", false, "should have failed");
     } else |_| {
         reportResult("nkey_invalid_seed", true, "");
@@ -179,7 +179,7 @@ pub fn testNKeySeedFile(allocator: std.mem.Allocator) void {
         reportResult("nkey_seed_file", false, detail);
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.isConnected()) {
         reportResult("nkey_seed_file", true, "");
@@ -202,7 +202,7 @@ pub fn testNKeySeedFileMissing(allocator: std.mem.Allocator) void {
     });
 
     if (result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("nkey_seed_file_missing", false, "should have failed");
     } else |_| {
         reportResult("nkey_seed_file_missing", true, "");
@@ -237,7 +237,7 @@ pub fn testNKeySigningCallback(allocator: std.mem.Allocator) void {
         reportResult("nkey_signing_callback", false, detail);
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.isConnected()) {
         reportResult("nkey_signing_callback", true, "");
@@ -279,7 +279,7 @@ pub fn testNKeyCallbackFails(allocator: std.mem.Allocator) void {
     });
 
     if (result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("nkey_callback_fails", false, "should have failed");
     } else |_| {
         reportResult("nkey_callback_fails", true, "");

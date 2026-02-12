@@ -68,10 +68,9 @@ fn testAutoflushBasicDelivery(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var sub = client.subscribe(
-        allocator,
         "autoflush.basic",
     ) catch {
         reportResult(
@@ -81,7 +80,7 @@ fn testAutoflushBasicDelivery(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish(
         "autoflush.basic",
@@ -96,10 +95,9 @@ fn testAutoflushBasicDelivery(
     };
 
     if (sub.nextWithTimeout(
-        allocator,
         100,
     ) catch null) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         if (std.mem.eql(
             u8,
             msg.data,
@@ -152,10 +150,9 @@ fn testAutoflushMultipleMessages(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var sub = client.subscribe(
-        allocator,
         "autoflush.multi",
     ) catch {
         reportResult(
@@ -165,7 +162,7 @@ fn testAutoflushMultipleMessages(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const msg_count: u8 = 10;
     var i: u8 = 0;
@@ -192,10 +189,9 @@ fn testAutoflushMultipleMessages(
     var received: u8 = 0;
     while (received < msg_count) {
         if (sub.nextWithTimeout(
-            allocator,
             200,
         ) catch null) |msg| {
-            msg.deinit(allocator);
+            msg.deinit();
             received += 1;
         } else {
             break;
@@ -250,10 +246,9 @@ fn testAutoflushHighThroughput(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var sub = client.subscribe(
-        allocator,
         "autoflush.throughput",
     ) catch {
         reportResult(
@@ -263,7 +258,7 @@ fn testAutoflushHighThroughput(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Publish 1000 messages - every publish must succeed
     const msg_count: u32 = 1000;
@@ -286,10 +281,9 @@ fn testAutoflushHighThroughput(
     var received: u32 = 0;
     while (received < msg_count) {
         if (sub.nextWithTimeout(
-            allocator,
             200,
         ) catch null) |msg| {
-            msg.deinit(allocator);
+            msg.deinit();
             received += 1;
         } else {
             break;
@@ -363,10 +357,9 @@ fn testAutoflushDuringDisconnect(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var sub = client.subscribe(
-        allocator,
         "autoflush.disconnect",
     ) catch {
         server.stop(io.io());
@@ -377,7 +370,7 @@ fn testAutoflushDuringDisconnect(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     var i: u8 = 0;
     while (i < 10) : (i += 1) {
@@ -491,10 +484,9 @@ fn testAutoflushTLS(
         reportResult("autoflush_tls", false, msg);
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var sub = client.subscribe(
-        allocator,
         "autoflush.tls",
     ) catch {
         reportResult(
@@ -504,7 +496,7 @@ fn testAutoflushTLS(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish(
         "autoflush.tls",
@@ -519,10 +511,9 @@ fn testAutoflushTLS(
     };
 
     if (sub.nextWithTimeout(
-        allocator,
         200,
     ) catch null) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         if (std.mem.eql(
             u8,
             msg.data,
@@ -571,10 +562,9 @@ fn testAutoflushLatencyBound(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var sub = client.subscribe(
-        allocator,
         "autoflush.latency",
     ) catch {
         reportResult(
@@ -584,7 +574,7 @@ fn testAutoflushLatencyBound(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish(
         "autoflush.latency",
@@ -599,10 +589,9 @@ fn testAutoflushLatencyBound(
     };
 
     if (sub.nextWithTimeout(
-        allocator,
         50,
     ) catch null) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
         reportResult("autoflush_latency", true, "");
     } else {
         reportResult(
@@ -644,7 +633,7 @@ fn testAutoflushWithSubscribe(
         );
         return;
     };
-    defer client1.deinit(allocator);
+    defer client1.deinit();
 
     const client2 = nats.Client.connect(
         allocator,
@@ -659,10 +648,9 @@ fn testAutoflushWithSubscribe(
         );
         return;
     };
-    defer client2.deinit(allocator);
+    defer client2.deinit();
 
     var sub = client2.subscribe(
-        allocator,
         "autoflush.sub.test",
     ) catch {
         reportResult(
@@ -672,7 +660,7 @@ fn testAutoflushWithSubscribe(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     io1.io().sleep(
         .fromMilliseconds(20),
@@ -692,10 +680,9 @@ fn testAutoflushWithSubscribe(
     };
 
     if (sub.nextWithTimeout(
-        allocator,
         200,
     ) catch null) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
         reportResult(
             "autoflush_subscribe",
             true,
@@ -736,10 +723,9 @@ fn testAutoflushNoBatching(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var sub = client.subscribe(
-        allocator,
         "autoflush.single",
     ) catch {
         reportResult(
@@ -749,7 +735,7 @@ fn testAutoflushNoBatching(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish(
         "autoflush.single",
@@ -764,10 +750,9 @@ fn testAutoflushNoBatching(
     };
 
     if (sub.nextWithTimeout(
-        allocator,
         30,
     ) catch null) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
         reportResult(
             "autoflush_no_batching",
             true,
@@ -818,7 +803,7 @@ fn testAutoflushMultiClient(
         );
         return;
     };
-    defer client1.deinit(allocator);
+    defer client1.deinit();
 
     const client2 = nats.Client.connect(
         allocator,
@@ -833,7 +818,7 @@ fn testAutoflushMultiClient(
         );
         return;
     };
-    defer client2.deinit(allocator);
+    defer client2.deinit();
 
     const client3 = nats.Client.connect(
         allocator,
@@ -848,10 +833,9 @@ fn testAutoflushMultiClient(
         );
         return;
     };
-    defer client3.deinit(allocator);
+    defer client3.deinit();
 
     var sub1 = client1.subscribe(
-        allocator,
         "autoflush.mc.to1",
     ) catch {
         reportResult(
@@ -861,10 +845,9 @@ fn testAutoflushMultiClient(
         );
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
     var sub2 = client2.subscribe(
-        allocator,
         "autoflush.mc.to2",
     ) catch {
         reportResult(
@@ -874,10 +857,9 @@ fn testAutoflushMultiClient(
         );
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
     var sub3 = client3.subscribe(
-        allocator,
         "autoflush.mc.to3",
     ) catch {
         reportResult(
@@ -887,7 +869,7 @@ fn testAutoflushMultiClient(
         );
         return;
     };
-    defer sub3.deinit(allocator);
+    defer sub3.deinit();
 
     io1.io().sleep(
         .fromMilliseconds(20),
@@ -910,24 +892,21 @@ fn testAutoflushMultiClient(
     var received: u8 = 0;
 
     if (sub1.nextWithTimeout(
-        allocator,
         200,
     ) catch null) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
         received += 1;
     }
     if (sub2.nextWithTimeout(
-        allocator,
         200,
     ) catch null) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
         received += 1;
     }
     if (sub3.nextWithTimeout(
-        allocator,
         200,
     ) catch null) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
         received += 1;
     }
 
@@ -986,7 +965,7 @@ fn testAutoflushPublishRequest(
         );
         return;
     };
-    defer pub_client.deinit(allocator);
+    defer pub_client.deinit();
 
     const sub_client = nats.Client.connect(
         allocator,
@@ -1001,10 +980,9 @@ fn testAutoflushPublishRequest(
         );
         return;
     };
-    defer sub_client.deinit(allocator);
+    defer sub_client.deinit();
 
     var sub = sub_client.subscribe(
-        allocator,
         "autoflush.pubreq",
     ) catch {
         reportResult(
@@ -1014,7 +992,7 @@ fn testAutoflushPublishRequest(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     io1.io().sleep(
         .fromMilliseconds(20),
@@ -1036,10 +1014,9 @@ fn testAutoflushPublishRequest(
     };
 
     if (sub.nextWithTimeout(
-        allocator,
         200,
     ) catch null) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
 
         const data_ok = std.mem.eql(
             u8,
@@ -1106,10 +1083,9 @@ fn testAutoflushPublishWithHeaders(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var sub = client.subscribe(
-        allocator,
         "autoflush.headers",
     ) catch {
         reportResult(
@@ -1119,7 +1095,7 @@ fn testAutoflushPublishWithHeaders(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const hdrs = [_]headers.Entry{
         .{
@@ -1143,10 +1119,9 @@ fn testAutoflushPublishWithHeaders(
     };
 
     if (sub.nextWithTimeout(
-        allocator,
         200,
     ) catch null) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
 
         if (msg.headers == null) {
             reportResult(
@@ -1233,10 +1208,9 @@ fn testAutoflushPubReqWithHeaders(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var sub = client.subscribe(
-        allocator,
         "autoflush.hdr.req",
     ) catch {
         reportResult(
@@ -1246,7 +1220,7 @@ fn testAutoflushPubReqWithHeaders(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const hdrs = [_]headers.Entry{
         .{
@@ -1271,10 +1245,9 @@ fn testAutoflushPubReqWithHeaders(
     };
 
     if (sub.nextWithTimeout(
-        allocator,
         200,
     ) catch null) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
 
         const reply_ok = if (msg.reply_to) |rt|
             std.mem.eql(u8, rt, "reply.hdr.inbox")
@@ -1362,10 +1335,9 @@ fn testAutoflushPubWithHeaderMap(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var sub = client.subscribe(
-        allocator,
         "autoflush.hdrmap",
     ) catch {
         reportResult(
@@ -1375,7 +1347,7 @@ fn testAutoflushPubWithHeaderMap(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     var hdr_map = nats.Client.HeaderMap{};
     defer hdr_map.deinit(allocator);
@@ -1409,10 +1381,9 @@ fn testAutoflushPubWithHeaderMap(
     };
 
     if (sub.nextWithTimeout(
-        allocator,
         200,
     ) catch null) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
 
         if (msg.headers == null) {
             reportResult(
@@ -1490,10 +1461,9 @@ fn testAutoflushPublishMsg(
         );
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var sub_dst = client.subscribe(
-        allocator,
         "autoflush.msg.dst",
     ) catch {
         reportResult(
@@ -1503,7 +1473,7 @@ fn testAutoflushPublishMsg(
         );
         return;
     };
-    defer sub_dst.deinit(allocator);
+    defer sub_dst.deinit();
 
     // Construct a Message to forward via publishMsg
     const fwd_msg = nats.Client.Message{
@@ -1526,10 +1496,9 @@ fn testAutoflushPublishMsg(
     };
 
     if (sub_dst.nextWithTimeout(
-        allocator,
         200,
     ) catch null) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         if (std.mem.eql(
             u8,
             msg.data,
@@ -1588,7 +1557,7 @@ fn testAutoflushAutoUnsubscribe(
         );
         return;
     };
-    defer pub_client.deinit(allocator);
+    defer pub_client.deinit();
 
     const sub_client = nats.Client.connect(
         allocator,
@@ -1603,10 +1572,9 @@ fn testAutoflushAutoUnsubscribe(
         );
         return;
     };
-    defer sub_client.deinit(allocator);
+    defer sub_client.deinit();
 
     var sub = sub_client.subscribe(
-        allocator,
         "autoflush.autounsub",
     ) catch {
         reportResult(
@@ -1616,7 +1584,7 @@ fn testAutoflushAutoUnsubscribe(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // autoUnsubscribe(3): UNSUB sent via autoflush
     sub.autoUnsubscribe(3) catch {
@@ -1653,10 +1621,9 @@ fn testAutoflushAutoUnsubscribe(
     var received: u8 = 0;
     while (received < 5) {
         if (sub.nextWithTimeout(
-            allocator,
             200,
         ) catch null) |msg| {
-            msg.deinit(allocator);
+            msg.deinit();
             received += 1;
         } else {
             break;
@@ -1716,7 +1683,7 @@ fn testAutoflushDrain(
         );
         return;
     };
-    defer pub_client.deinit(allocator);
+    defer pub_client.deinit();
 
     const sub_client = nats.Client.connect(
         allocator,
@@ -1731,10 +1698,9 @@ fn testAutoflushDrain(
         );
         return;
     };
-    defer sub_client.deinit(allocator);
+    defer sub_client.deinit();
 
     var sub = sub_client.subscribe(
-        allocator,
         "autoflush.drain",
     ) catch {
         reportResult(
@@ -1744,7 +1710,7 @@ fn testAutoflushDrain(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     io1.io().sleep(
         .fromMilliseconds(20),
@@ -1771,10 +1737,9 @@ fn testAutoflushDrain(
     var pre_drain: u8 = 0;
     while (pre_drain < 3) {
         if (sub.nextWithTimeout(
-            allocator,
             200,
         ) catch null) |msg| {
-            msg.deinit(allocator);
+            msg.deinit();
             pre_drain += 1;
         } else {
             break;
@@ -1821,10 +1786,9 @@ fn testAutoflushDrain(
 
     // Verify no new messages arrive
     if (sub.nextWithTimeout(
-        allocator,
         100,
     ) catch null) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
         reportResult(
             "autoflush_drain",
             false,
@@ -1868,7 +1832,7 @@ fn testAutoflushUnsubscribe(
         );
         return;
     };
-    defer pub_client.deinit(allocator);
+    defer pub_client.deinit();
 
     const sub_client = nats.Client.connect(
         allocator,
@@ -1883,10 +1847,9 @@ fn testAutoflushUnsubscribe(
         );
         return;
     };
-    defer sub_client.deinit(allocator);
+    defer sub_client.deinit();
 
     var sub = sub_client.subscribe(
-        allocator,
         "autoflush.unsub",
     ) catch {
         reportResult(
@@ -1896,11 +1859,10 @@ fn testAutoflushUnsubscribe(
         );
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Control sub to verify connection still works
     var ctrl = sub_client.subscribe(
-        allocator,
         "autoflush.unsub.ctrl",
     ) catch {
         reportResult(
@@ -1910,7 +1872,7 @@ fn testAutoflushUnsubscribe(
         );
         return;
     };
-    defer ctrl.deinit(allocator);
+    defer ctrl.deinit();
 
     io1.io().sleep(
         .fromMilliseconds(20),
@@ -1931,10 +1893,9 @@ fn testAutoflushUnsubscribe(
     };
 
     if (sub.nextWithTimeout(
-        allocator,
         200,
     ) catch null) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
     } else {
         reportResult(
             "autoflush_unsubscribe",
@@ -1986,10 +1947,9 @@ fn testAutoflushUnsubscribe(
 
     // Control sub must receive (proves msgs are flowing)
     if (ctrl.nextWithTimeout(
-        allocator,
         200,
     ) catch null) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
     } else {
         reportResult(
             "autoflush_unsubscribe",

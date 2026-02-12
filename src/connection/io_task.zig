@@ -63,7 +63,7 @@ inline fn drainReturnQueue(client: *Client) void {
 /// Main I/O task entry point. Called via io.async() from connect().
 /// Reader: reads socket, routes MSG, responds to PING with PONG.
 /// Exits cleanly when stream is closed (close then cancel).
-pub fn run(client: *Client, allocator: Allocator) void {
+pub fn run(client: *Client) void {
     dbg.print("io_task[fd={d}]: STARTED", .{client.stream.socket.handle});
     var loop_count: u64 = 0;
 
@@ -93,7 +93,7 @@ pub fn run(client: *Client, allocator: Allocator) void {
                     // Connection stale - trigger disconnect/reconnect
                     const state = State.atomicLoad(&client.state);
                     if (client.options.reconnect and state != .closed) {
-                        if (!handleDisconnect(client, allocator)) break :outer;
+                        if (!handleDisconnect(client)) break :outer;
                         continue :outer;
                     }
                     // Reconnect disabled - set closed state before exiting
@@ -110,7 +110,7 @@ pub fn run(client: *Client, allocator: Allocator) void {
 
             drainReturnQueue(client);
 
-            const route_result = tryRouteBufferedMessages(client, allocator);
+            const route_result = tryRouteBufferedMessages(client);
             if (route_result == .progress) {
                 dbg.print("io_task[fd={d}]: routed messages", .{client.stream.socket.handle});
                 made_progress = true;
@@ -118,7 +118,7 @@ pub fn run(client: *Client, allocator: Allocator) void {
             if (route_result == .disconnected) {
                 const state = State.atomicLoad(&client.state);
                 if (client.options.reconnect and state != .closed) {
-                    if (!handleDisconnect(client, allocator)) break :outer;
+                    if (!handleDisconnect(client)) break :outer;
                     continue :outer;
                 }
                 // Reconnect disabled - set closed state before exiting
@@ -136,7 +136,7 @@ pub fn run(client: *Client, allocator: Allocator) void {
                 if (read_result == .disconnected) {
                     const state = State.atomicLoad(&client.state);
                     if (client.options.reconnect and state != .closed) {
-                        if (!handleDisconnect(client, allocator)) break :outer;
+                        if (!handleDisconnect(client)) break :outer;
                         continue :outer;
                     }
                     // Reconnect disabled - set closed state before exiting
@@ -334,8 +334,8 @@ inline fn tryFillBuffer(client: *Client) ReadResult {
 /// Uses lock-free SpscQueue - no yields needed.
 inline fn tryRouteBufferedMessages(
     client: *Client,
-    allocator: Allocator,
 ) ReadResult {
+    const allocator = client.allocator;
     const reader = client.active_reader;
     const slab = &client.tiered_slab;
 
@@ -599,7 +599,7 @@ inline fn routeHMessageToSub(
 
 /// Handle disconnect - backup subs, attempt reconnection, restore subs.
 /// Returns true if reconnected successfully, false if should exit task.
-fn handleDisconnect(client: *Client, allocator: Allocator) bool {
+fn handleDisconnect(client: *Client) bool {
     @atomicStore(State, &client.state, .disconnected, .release);
 
     client.pushEvent(.{ .disconnected = .{ .err = null } });
@@ -608,7 +608,7 @@ fn handleDisconnect(client: *Client, allocator: Allocator) bool {
         dbg.print("backupSubscriptions failed: {s}", .{@errorName(err)});
     };
 
-    if (tryReconnectLoop(client, allocator)) {
+    if (tryReconnectLoop(client)) {
         client.restoreSubscriptions() catch {
             dbg.print("Failed to restore subscriptions after reconnect", .{});
         };
@@ -624,7 +624,7 @@ fn handleDisconnect(client: *Client, allocator: Allocator) bool {
 
 /// Attempt reconnection loop with backoff.
 /// Returns true if reconnected, false if failed or canceled.
-fn tryReconnectLoop(client: *Client, allocator: Allocator) bool {
+fn tryReconnectLoop(client: *Client) bool {
     @atomicStore(State, &client.state, .reconnecting, .release);
     const max_attempts = if (client.options.max_reconnect_attempts == 0)
         std.math.maxInt(u32)
@@ -648,7 +648,7 @@ fn tryReconnectLoop(client: *Client, allocator: Allocator) bool {
         }
 
         for (client.server_pool.servers[0..client.server_pool.count]) |*server| {
-            client.tryConnect(allocator, server) catch continue;
+            client.tryConnect(server) catch continue;
             @atomicStore(State, &client.state, .connected, .release);
             client.stats.reconnects += 1;
             client.reconnect_attempt = 0;
@@ -684,7 +684,7 @@ fn calculateReconnectDelay(client: *Client, attempt: u32) u32 {
     if (jitter_pct == 0) return capped_delay;
 
     // Simple jitter using attempt number as pseudo-random seed
-    // Real randomness would require io.random() but we keep it simple
+    // Deterministic jitter using attempt as seed
     const jitter_range = (capped_delay * jitter_pct) / 100;
     const jitter_offset = (attempt * 7) % (jitter_range * 2 + 1);
     const jitter: i64 = @as(i64, jitter_offset) - @as(i64, jitter_range);

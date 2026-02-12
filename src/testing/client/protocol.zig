@@ -31,7 +31,7 @@ pub fn testServerInfoParsing(allocator: std.mem.Allocator) void {
         reportResult("server_info_parsing", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const info = client.getServerInfo();
     if (info == null) {
@@ -80,13 +80,13 @@ pub fn testPingPongKeepAlive(allocator: std.mem.Allocator) void {
         reportResult("ping_pong_keep_alive", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "ping.test") catch {
+    const sub = client.subscribe("ping.test") catch {
         reportResult("ping_pong_keep_alive", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     for (0..5) |_| {
         client.publish("ping.test", "keep-alive") catch {
@@ -103,8 +103,8 @@ pub fn testPingPongKeepAlive(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..5) |_| {
-        if (sub.nextWithTimeout(allocator, 200) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(200) catch null) |m| {
+            m.deinit();
             received += 1;
         }
     }
@@ -139,7 +139,7 @@ pub fn testProtocolAuthError(allocator: std.mem.Allocator) void {
 
     if (result) |client| {
         // Should have failed with auth error
-        client.deinit(allocator);
+        client.deinit();
         reportResult("protocol_auth_error", false, "should have failed");
     } else |err| {
         // Expect AuthorizationViolation
@@ -167,33 +167,33 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
         reportResult("unknown_sid_handling", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub1 = client.subscribe(allocator, "unknown.sid.test") catch {
+    const sub1 = client.subscribe("unknown.sid.test") catch {
         reportResult("unknown_sid_handling", false, "subscribe failed");
         return;
     };
 
     sub1.unsubscribe() catch {
-        sub1.deinit(allocator);
+        sub1.deinit();
         reportResult("unknown_sid_handling", false, "unsubscribe failed");
         return;
     };
-    sub1.deinit(allocator);
+    sub1.deinit();
 
-    const sub2 = client.subscribe(allocator, "unknown.sid.test") catch {
+    const sub2 = client.subscribe("unknown.sid.test") catch {
         reportResult("unknown_sid_handling", false, "subscribe2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
     client.publish("unknown.sid.test", "test") catch {
         reportResult("unknown_sid_handling", false, "publish failed");
         return;
     };
 
-    if (sub2.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub2.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         if (client.isConnected()) {
             reportResult("unknown_sid_handling", true, "");
         } else {
@@ -377,7 +377,7 @@ pub fn testMaxPayloadLimit(allocator: std.mem.Allocator) void {
         reportResult("max_payload_limit", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const info = client.getServerInfo();
     if (info == null) {
@@ -444,18 +444,18 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
         reportResult("protocol_stability", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     var subs: [5]?*nats.Subscription = [_]?*nats.Subscription{null} ** 5;
     defer for (&subs) |*s| {
-        if (s.*) |sub| sub.deinit(allocator);
+        if (s.*) |sub| sub.deinit();
     };
 
     for (0..5) |i| {
         var buf: [32]u8 = undefined;
         const subject =
             std.fmt.bufPrint(&buf, "stability.{d}", .{i}) catch continue;
-        subs[i] = client.subscribe(allocator, subject) catch {
+        subs[i] = client.subscribe(subject) catch {
             reportResult("protocol_stability", false, "subscribe failed");
             return;
         };
@@ -474,8 +474,8 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
     var received: u32 = 0;
     for (0..5) |i| {
         if (subs[i]) |sub| {
-            if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
-                m.deinit(allocator);
+            if (sub.nextWithTimeout(500) catch null) |m| {
+                m.deinit();
                 received += 1;
             }
         }

@@ -26,14 +26,9 @@ const formatAuthUrl = utils.formatAuthUrl;
 
 const nkey_config_path = "/tmp/nats-nkey-test.conf";
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     std.debug.print("\n=== NATS Integration Tests ===\n\n", .{});
 

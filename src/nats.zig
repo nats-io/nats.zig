@@ -9,20 +9,15 @@
 //! const nats = @import("nats");
 //! const std = @import("std");
 //!
-//! pub fn main() !void {
-//!     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-//!     defer _ = gpa.deinit();
-//!     const allocator = gpa.allocator();
-//!
-//!     var threaded: std.Io.Threaded = .init(allocator);
-//!     defer threaded.deinit();
-//!     const io = threaded.io();
+//! pub fn main(init: std.process.Init) !void {
+//!     const allocator = init.gpa;
+//!     const io = init.io;
 //!
 //!     const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{});
-//!     defer client.deinit(allocator);
+//!     defer client.deinit();
 //!
 //!     try client.publish("hello", "world");
-//!     try client.flush();
+//!     try client.flush(std.time.ns_per_s * 10);
 //! }
 //! ```
 

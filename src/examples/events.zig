@@ -74,11 +74,7 @@ const MyEventHandler = struct {
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
-
-    // Create async I/O runtime
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = init.io;
 
     // External state that callbacks will modify
     var app_state = AppState{};
@@ -93,11 +89,11 @@ pub fn main(init: std.process.Init) !void {
         .event_handler = nats.EventHandler.init(MyEventHandler, &handler),
         .reconnect = true,
     });
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Subscribe to test subject
-    const sub = try client.subscribe(allocator, "test.>");
-    defer sub.deinit(allocator);
+    const sub = try client.subscribe("test.>");
+    defer sub.deinit();
 
     std.debug.print("\nSubscribed to test.>\n", .{});
     std.debug.print("Try: nats pub test.hello 'world'\n", .{});
@@ -110,8 +106,8 @@ pub fn main(init: std.process.Init) !void {
 
     while (!app_state.should_shutdown and msg_count < max_msgs) {
         // Non-blocking message check with timeout
-        if (try sub.nextWithTimeout(allocator, 1000)) |msg| {
-            defer msg.deinit(allocator);
+        if (try sub.nextWithTimeout(1000)) |msg| {
+            defer msg.deinit();
             std.debug.print("Received: {s}\n", .{msg.data});
             msg_count += 1;
         }

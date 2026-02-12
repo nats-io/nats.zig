@@ -73,7 +73,7 @@ fn testAutoReconnectBasic(
         reportResult("reconnect_basic", false, "initial connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (!client.isConnected()) {
         reportResult("reconnect_basic", false, "not connected initially");
@@ -120,13 +120,13 @@ fn testSubscriptionRestored(
         reportResult("reconnect_sub_restored", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub = client.subscribe(allocator, "test.restore.>") catch {
+    var sub = client.subscribe("test.restore.>") catch {
         reportResult("reconnect_sub_restored", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     std.debug.print(
         "\n[TEST reconnect_sub_restored] Stopping server...\n",
@@ -164,8 +164,8 @@ fn testSubscriptionRestored(
         .{},
     );
 
-    if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
-        defer msg.deinit(allocator);
+    if (sub.nextWithTimeout(500) catch null) |msg| {
+        defer msg.deinit();
         if (std.mem.eql(u8, msg.data, "after-reconnect")) {
             reportResult("reconnect_sub_restored", true, "");
         } else {
@@ -194,25 +194,25 @@ fn testMultipleSubscriptionsRestored(
         reportResult("reconnect_multi_sub", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub1 = client.subscribe(allocator, "multi.sub.one") catch {
+    var sub1 = client.subscribe("multi.sub.one") catch {
         reportResult("reconnect_multi_sub", false, "sub1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
-    var sub2 = client.subscribe(allocator, "multi.sub.two") catch {
+    var sub2 = client.subscribe("multi.sub.two") catch {
         reportResult("reconnect_multi_sub", false, "sub2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
-    var sub3 = client.subscribe(allocator, "multi.sub.three") catch {
+    var sub3 = client.subscribe("multi.sub.three") catch {
         reportResult("reconnect_multi_sub", false, "sub3 failed");
         return;
     };
-    defer sub3.deinit(allocator);
+    defer sub3.deinit();
 
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
@@ -230,18 +230,18 @@ fn testMultipleSubscriptionsRestored(
 
     var received: u8 = 0;
 
-    if (sub1.nextWithTimeout(allocator, 500) catch null) |msg| {
-        msg.deinit(allocator);
+    if (sub1.nextWithTimeout(500) catch null) |msg| {
+        msg.deinit();
         received += 1;
     }
 
-    if (sub2.nextWithTimeout(allocator, 500) catch null) |msg| {
-        msg.deinit(allocator);
+    if (sub2.nextWithTimeout(500) catch null) |msg| {
+        msg.deinit();
         received += 1;
     }
 
-    if (sub3.nextWithTimeout(allocator, 500) catch null) |msg| {
-        msg.deinit(allocator);
+    if (sub3.nextWithTimeout(500) catch null) |msg| {
+        msg.deinit();
         received += 1;
     }
 
@@ -279,7 +279,7 @@ fn testReconnectMaxAttempts(
         reportResult("reconnect_max_attempts", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     std.debug.print("[TEST max_attempts] Stopping server...\n", .{});
     manager.stopAll(io.io());
@@ -324,7 +324,7 @@ fn testReconnectDisabled(
         reportResult("reconnect_disabled", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     manager.stopAll(io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
@@ -364,13 +364,13 @@ fn testPendingBufferFlush(
         reportResult("pending_buffer_flush", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub = client.subscribe(allocator, "pending.test") catch {
+    var sub = client.subscribe("pending.test") catch {
         reportResult("pending_buffer_flush", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
@@ -385,7 +385,7 @@ fn testPendingBufferFlush(
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
     if (sub.tryNext()) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         if (std.mem.eql(u8, msg.data, "buffered-message")) {
             reportResult("pending_buffer_flush", true, "");
         } else {
@@ -415,13 +415,13 @@ fn testPublishDuringReconnect(
         reportResult("publish_during_reconnect", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub = client.subscribe(allocator, "during.reconnect") catch {
+    var sub = client.subscribe("during.reconnect") catch {
         reportResult("publish_during_reconnect", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     manager.stopServer(0, io.io());
 
@@ -445,7 +445,7 @@ fn testPublishDuringReconnect(
     var received: u8 = 0;
     while (received < 10) {
         if (sub.tryNext()) |msg| {
-            msg.deinit(allocator);
+            msg.deinit();
             received += 1;
         } else {
             break;
@@ -479,7 +479,7 @@ fn testReconnectStatsIncrement(
         reportResult("reconnect_stats", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const initial_reconnects = client.getStats().reconnects;
 
@@ -522,13 +522,13 @@ fn testReconnectWithQueueGroup(
         reportResult("reconnect_queue_group", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub = client.subscribeQueue(allocator, "queue.test", "workers") catch {
+    var sub = client.subscribeQueue("queue.test", "workers") catch {
         reportResult("reconnect_queue_group", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
@@ -545,8 +545,8 @@ fn testReconnectWithQueueGroup(
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
-        msg.deinit(allocator);
+    if (sub.nextWithTimeout(500) catch null) |msg| {
+        msg.deinit();
         reportResult("reconnect_queue_group", true, "");
     } else {
         reportResult("reconnect_queue_group", false, "no message");
@@ -573,7 +573,7 @@ fn testMultiClientReconnect(
         reportResult("multi_client_reconnect", false, "client1 connect failed");
         return;
     };
-    defer client1.deinit(allocator);
+    defer client1.deinit();
 
     const client2 = nats.Client.connect(allocator, io2.io(), url, .{
         .reconnect = true,
@@ -583,7 +583,7 @@ fn testMultiClientReconnect(
         reportResult("multi_client_reconnect", false, "client2 connect failed");
         return;
     };
-    defer client2.deinit(allocator);
+    defer client2.deinit();
 
     manager.stopServer(0, io1.io());
     io1.io().sleep(.fromMilliseconds(200), .awake) catch {};
@@ -628,13 +628,13 @@ fn testReconnectPreservesSid(
         reportResult("reconnect_preserves_sid", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub = client.subscribe(allocator, "sid.test") catch {
+    var sub = client.subscribe("sid.test") catch {
         reportResult("reconnect_preserves_sid", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const original_sid = sub.sid;
 
@@ -673,13 +673,13 @@ fn testReconnectWildcardSub(
         reportResult("reconnect_wildcard", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub = client.subscribe(allocator, "wild.*.test.>") catch {
+    var sub = client.subscribe("wild.*.test.>") catch {
         reportResult("reconnect_wildcard", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
@@ -696,8 +696,8 @@ fn testReconnectWildcardSub(
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
-        msg.deinit(allocator);
+    if (sub.nextWithTimeout(500) catch null) |msg| {
+        msg.deinit();
         reportResult("reconnect_wildcard", true, "");
     } else {
         reportResult("reconnect_wildcard", false, "no message");
@@ -724,7 +724,7 @@ fn testReconnectBackoff(
         reportResult("reconnect_backoff", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     manager.stopServer(0, io.io());
 
@@ -779,7 +779,7 @@ fn testCustomReconnectDelay(
         reportResult("custom_reconnect_delay", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Stop the specific server we started to trigger reconnect attempts
     server.stop(io.io());
@@ -833,7 +833,7 @@ fn testHealthCheckReconnect(
         reportResult("health_check_reconnect", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (!client.isConnected()) {
         reportResult("health_check_reconnect", false, "not connected");
@@ -899,7 +899,7 @@ fn testFailoverToSecondServer(
         reportResult("failover_to_second", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     client.server_pool.addServer(url2) catch {
         server1.stop(io.io());
@@ -907,17 +907,17 @@ fn testFailoverToSecondServer(
         return;
     };
 
-    var sub = client.subscribe(allocator, "failover.test") catch {
+    var sub = client.subscribe("failover.test") catch {
         server1.stop(io.io());
         reportResult("failover_to_second", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish("failover.test", "before") catch {};
 
-    if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
-        msg.deinit(allocator);
+    if (sub.nextWithTimeout(500) catch null) |msg| {
+        msg.deinit();
     } else {
         server1.stop(io.io());
         reportResult("failover_to_second", false, "no msg before failover");
@@ -932,8 +932,8 @@ fn testFailoverToSecondServer(
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 1000) catch null) |msg| {
-        msg.deinit(allocator);
+    if (sub.nextWithTimeout(1000) catch null) |msg| {
+        msg.deinit();
         reportResult("failover_to_second", true, "");
     } else {
         reportResult("failover_to_second", false, "no msg after failover");
@@ -993,7 +993,7 @@ fn testFailoverRoundRobin(
         reportResult("failover_round_robin", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     client.server_pool.addServer(url2) catch {};
     client.server_pool.addServer(url3) catch {};
@@ -1050,16 +1050,16 @@ fn testAllServersDownThenRecover(
         reportResult("all_servers_down_recover", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     client.server_pool.addServer(url2) catch {};
 
-    var sub = client.subscribe(allocator, "recover.test") catch {
+    var sub = client.subscribe("recover.test") catch {
         server1.stop(io.io());
         reportResult("all_servers_down_recover", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     server1.stop(io.io());
 
@@ -1080,8 +1080,8 @@ fn testAllServersDownThenRecover(
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 1000) catch null) |msg| {
-        msg.deinit(allocator);
+    if (sub.nextWithTimeout(1000) catch null) |msg| {
+        msg.deinit();
         reportResult("all_servers_down_recover", true, "");
     } else {
         reportResult("all_servers_down_recover", false, "no message received");
@@ -1118,7 +1118,7 @@ fn testServerCooldownRespected(
         reportResult("server_cooldown", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     client.server_pool.addServer(url1) catch {};
 
@@ -1158,37 +1158,37 @@ fn testMultipleSubsActivelyReceiving(
         reportResult("multi_subs_receiving", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub1 = client.subscribe(allocator, "active.sub.one") catch {
+    var sub1 = client.subscribe("active.sub.one") catch {
         reportResult("multi_subs_receiving", false, "sub1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
-    var sub2 = client.subscribe(allocator, "active.sub.two") catch {
+    var sub2 = client.subscribe("active.sub.two") catch {
         reportResult("multi_subs_receiving", false, "sub2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
-    var sub3 = client.subscribe(allocator, "active.sub.three") catch {
+    var sub3 = client.subscribe("active.sub.three") catch {
         reportResult("multi_subs_receiving", false, "sub3 failed");
         return;
     };
-    defer sub3.deinit(allocator);
+    defer sub3.deinit();
 
-    var sub4 = client.subscribe(allocator, "active.sub.four") catch {
+    var sub4 = client.subscribe("active.sub.four") catch {
         reportResult("multi_subs_receiving", false, "sub4 failed");
         return;
     };
-    defer sub4.deinit(allocator);
+    defer sub4.deinit();
 
-    var sub5 = client.subscribe(allocator, "active.sub.five") catch {
+    var sub5 = client.subscribe("active.sub.five") catch {
         reportResult("multi_subs_receiving", false, "sub5 failed");
         return;
     };
-    defer sub5.deinit(allocator);
+    defer sub5.deinit();
 
     client.publish("active.sub.one", "pre1") catch {};
     client.publish("active.sub.two", "pre2") catch {};
@@ -1197,24 +1197,24 @@ fn testMultipleSubsActivelyReceiving(
     client.publish("active.sub.five", "pre5") catch {};
 
     var pre_received: u8 = 0;
-    if (sub1.nextWithTimeout(allocator, 200) catch null) |m| {
-        m.deinit(allocator);
+    if (sub1.nextWithTimeout(200) catch null) |m| {
+        m.deinit();
         pre_received += 1;
     }
-    if (sub2.nextWithTimeout(allocator, 200) catch null) |m| {
-        m.deinit(allocator);
+    if (sub2.nextWithTimeout(200) catch null) |m| {
+        m.deinit();
         pre_received += 1;
     }
-    if (sub3.nextWithTimeout(allocator, 200) catch null) |m| {
-        m.deinit(allocator);
+    if (sub3.nextWithTimeout(200) catch null) |m| {
+        m.deinit();
         pre_received += 1;
     }
-    if (sub4.nextWithTimeout(allocator, 200) catch null) |m| {
-        m.deinit(allocator);
+    if (sub4.nextWithTimeout(200) catch null) |m| {
+        m.deinit();
         pre_received += 1;
     }
-    if (sub5.nextWithTimeout(allocator, 200) catch null) |m| {
-        m.deinit(allocator);
+    if (sub5.nextWithTimeout(200) catch null) |m| {
+        m.deinit();
         pre_received += 1;
     }
 
@@ -1246,24 +1246,24 @@ fn testMultipleSubsActivelyReceiving(
     client.publish("active.sub.five", "post5") catch {};
 
     var post_received: u8 = 0;
-    if (sub1.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub1.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         post_received += 1;
     }
-    if (sub2.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub2.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         post_received += 1;
     }
-    if (sub3.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub3.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         post_received += 1;
     }
-    if (sub4.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub4.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         post_received += 1;
     }
-    if (sub5.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub5.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         post_received += 1;
     }
 
@@ -1305,13 +1305,13 @@ fn testHighVolumePendingBuffer(
         reportResult("high_volume_buffer", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub = client.subscribe(allocator, "buffer.test") catch {
+    var sub = client.subscribe("buffer.test") catch {
         reportResult("high_volume_buffer", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     var published_before: u32 = 0;
     var i: u32 = 0;
@@ -1324,8 +1324,8 @@ fn testHighVolumePendingBuffer(
 
     var received_before: u32 = 0;
     while (received_before < 100) {
-        if (sub.nextWithTimeout(allocator, 100) catch null) |msg| {
-            msg.deinit(allocator);
+        if (sub.nextWithTimeout(100) catch null) |msg| {
+            msg.deinit();
             received_before += 1;
         } else {
             break;
@@ -1351,8 +1351,8 @@ fn testHighVolumePendingBuffer(
 
     var received_after: u32 = 0;
     while (received_after < 100) {
-        if (sub.nextWithTimeout(allocator, 200) catch null) |msg| {
-            msg.deinit(allocator);
+        if (sub.nextWithTimeout(200) catch null) |msg| {
+            msg.deinit();
             received_after += 1;
         } else {
             break;
@@ -1402,7 +1402,7 @@ fn testQueueGroupMultiClientReconnect(
         );
         return;
     };
-    defer client1.deinit(allocator);
+    defer client1.deinit();
 
     const client2 = nats.Client.connect(allocator, io2.io(), url, .{
         .reconnect = true,
@@ -1416,27 +1416,25 @@ fn testQueueGroupMultiClientReconnect(
         );
         return;
     };
-    defer client2.deinit(allocator);
+    defer client2.deinit();
 
     var sub1 = client1.subscribeQueue(
-        allocator,
         "qgroup.test",
         "workers",
     ) catch {
         reportResult("queue_group_multi_client", false, "sub1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
     var sub2 = client2.subscribeQueue(
-        allocator,
         "qgroup.test",
         "workers",
     ) catch {
         reportResult("queue_group_multi_client", false, "sub2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
     var i: u8 = 0;
     while (i < 20) : (i += 1) {
@@ -1449,10 +1447,10 @@ fn testQueueGroupMultiClientReconnect(
     var c2_before: u8 = 0;
     while (c1_before + c2_before < 30) {
         if (sub1.tryNext()) |m| {
-            m.deinit(allocator);
+            m.deinit();
             c1_before += 1;
         } else if (sub2.tryNext()) |m| {
-            m.deinit(allocator);
+            m.deinit();
             c2_before += 1;
         } else {
             break;
@@ -1480,10 +1478,10 @@ fn testQueueGroupMultiClientReconnect(
     var c2_after: u8 = 0;
     while (c1_after + c2_after < 30) {
         if (sub1.tryNext()) |m| {
-            m.deinit(allocator);
+            m.deinit();
             c1_after += 1;
         } else if (sub2.tryNext()) |m| {
-            m.deinit(allocator);
+            m.deinit();
             c2_after += 1;
         } else {
             break;
@@ -1532,13 +1530,13 @@ fn testRapidServerRestarts(
         reportResult("rapid_restarts", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub = client.subscribe(allocator, "rapid.test") catch {
+    var sub = client.subscribe("rapid.test") catch {
         reportResult("rapid_restarts", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     var cycle: u8 = 0;
     while (cycle < 3) : (cycle += 1) {
@@ -1560,8 +1558,8 @@ fn testRapidServerRestarts(
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 500) catch null) |msg| {
-        msg.deinit(allocator);
+    if (sub.nextWithTimeout(500) catch null) |msg| {
+        msg.deinit();
         const stats = client.getStats();
         if (stats.reconnects >= 3) {
             reportResult("rapid_restarts", true, "");
@@ -1603,13 +1601,13 @@ fn testMultipleReconnectionCycles(
         reportResult("multiple_cycles", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub = client.subscribe(allocator, "cycles.test") catch {
+    var sub = client.subscribe("cycles.test") catch {
         reportResult("multiple_cycles", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     var cycle: u8 = 0;
     while (cycle < 3) : (cycle += 1) {
@@ -1649,8 +1647,8 @@ fn testMultipleReconnectionCycles(
             return;
         };
 
-        if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(500) catch null) |m| {
+            m.deinit();
         } else {
             var buf: [32]u8 = undefined;
             const details = std.fmt.bufPrint(
@@ -1702,18 +1700,18 @@ fn testLongDisconnectionRecovery(
         reportResult("long_disconnection", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub = client.subscribe(allocator, "long.test") catch {
+    var sub = client.subscribe("long.test") catch {
         reportResult("long_disconnection", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish("long.test", "before") catch {};
 
-    if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
     } else {
         reportResult("long_disconnection", false, "no msg before");
         return;
@@ -1735,8 +1733,8 @@ fn testLongDisconnectionRecovery(
         return;
     };
 
-    if (sub.nextWithTimeout(allocator, 1000) catch null) |msg| {
-        msg.deinit(allocator);
+    if (sub.nextWithTimeout(1000) catch null) |msg| {
+        msg.deinit();
         reportResult("long_disconnection", true, "");
     } else {
         reportResult("long_disconnection", false, "no msg after long gap");

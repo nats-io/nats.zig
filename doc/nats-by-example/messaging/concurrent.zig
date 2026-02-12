@@ -36,12 +36,7 @@ const WorkItem = struct {
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
-    var threaded: Io.Threaded = .init(
-        allocator,
-        .{ .environ = .empty },
-    );
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = init.io;
 
     var stdout_buf: [4096]u8 = undefined;
     var stdout_writer = Io.File.stdout().writer(
@@ -56,10 +51,10 @@ pub fn main(init: std.process.Init) !void {
         "nats://localhost:4222",
         .{},
     );
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = try client.subscribe(allocator, "greet.*");
-    defer sub.deinit(allocator);
+    const sub = try client.subscribe("greet.*");
+    defer sub.deinit();
 
     // Publish 10 messages
     for (0..NUM_MSGS) |i| {
@@ -82,10 +77,9 @@ pub fn main(init: std.process.Init) !void {
     var received: usize = 0;
     for (0..NUM_MSGS) |_| {
         if (try sub.nextWithTimeout(
-            allocator,
             1000,
         )) |msg| {
-            defer msg.deinit(allocator);
+            defer msg.deinit();
             const len = @min(msg.data.len, 64);
             @memcpy(
                 items[received].data[0..len],

@@ -8,14 +8,9 @@
 const std = @import("std");
 const nats = @import("nats");
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     // Service client
     const service_client = try nats.Client.connect(
@@ -24,7 +19,7 @@ pub fn main() !void {
         "nats://localhost:4222",
         .{ .name = "service" },
     );
-    defer service_client.deinit(allocator);
+    defer service_client.deinit();
 
     // Requester client
     const requester = try nats.Client.connect(
@@ -33,13 +28,13 @@ pub fn main() !void {
         "nats://localhost:4222",
         .{ .name = "requester" },
     );
-    defer requester.deinit(allocator);
+    defer requester.deinit();
 
     std.debug.print("Connected to NATS!\n", .{});
 
     // Service subscribes to handle requests
-    const service = try service_client.subscribe(allocator, "math.double");
-    defer service.deinit(allocator);
+    const service = try service_client.subscribe("math.double");
+    defer service.deinit();
 
     std.debug.print("Service listening on 'math.double'\n", .{});
 
@@ -47,7 +42,6 @@ pub fn main() !void {
     var service_future = io.async(handleService, .{
         service_client,
         service,
-        allocator,
     });
     defer service_future.cancel(io);
 
@@ -57,8 +51,8 @@ pub fn main() !void {
     // Send request using client.request() - handles inbox automatically
     std.debug.print("\nRequester: What is 21 * 2?\n", .{});
 
-    if (try requester.request(allocator, "math.double", "21", 1000)) |reply| {
-        defer reply.deinit(allocator);
+    if (try requester.request("math.double", "21", 1000)) |reply| {
+        defer reply.deinit();
         std.debug.print("Reply: {s}\n", .{reply.data});
     } else {
         std.debug.print("Request timed out\n", .{});
@@ -70,11 +64,10 @@ pub fn main() !void {
 fn handleService(
     client: *nats.Client,
     service: *nats.Client.Sub,
-    allocator: std.mem.Allocator,
 ) void {
-    const req = service.nextWithTimeout(allocator, 2000) catch return;
+    const req = service.nextWithTimeout(2000) catch return;
     if (req) |r| {
-        defer r.deinit(allocator);
+        defer r.deinit();
 
         const num = std.fmt.parseInt(i32, r.data, 10) catch 0;
         var buf: [32]u8 = undefined;

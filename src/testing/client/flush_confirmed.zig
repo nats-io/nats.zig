@@ -28,13 +28,13 @@ pub fn testFlushConfirmedBasic(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_basic", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "fc.basic") catch {
+    const sub = client.subscribe("fc.basic") catch {
         reportResult("flush_confirmed_basic", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
@@ -45,16 +45,16 @@ pub fn testFlushConfirmedBasic(allocator: std.mem.Allocator) void {
     };
 
     // Use flushConfirmed with 5 second timeout
-    client.flush(allocator, 5_000_000_000) catch {
+    client.flush(5_000_000_000) catch {
         reportResult("flush_confirmed_basic", false, "flushConfirmed failed");
         return;
     };
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (std.mem.eql(u8, msg.data, "confirmed-message")) {
@@ -83,13 +83,13 @@ pub fn testFlushConfirmedMultipleMessages(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_multi", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "fc.batch") catch {
+    const sub = client.subscribe("fc.batch") catch {
         reportResult("flush_confirmed_multi", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
@@ -105,7 +105,7 @@ pub fn testFlushConfirmedMultipleMessages(allocator: std.mem.Allocator) void {
     }
 
     // Single flushConfirmed should send all
-    client.flush(allocator, 5_000_000_000) catch {
+    client.flush(5_000_000_000) catch {
         reportResult("flush_confirmed_multi", false, "flushConfirmed failed");
         return;
     };
@@ -113,8 +113,8 @@ pub fn testFlushConfirmedMultipleMessages(allocator: std.mem.Allocator) void {
     // Verify all 10 messages received
     var received: u32 = 0;
     for (0..10) |_| {
-        if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(500) catch null) |m| {
+            m.deinit();
             received += 1;
         }
     }
@@ -149,13 +149,13 @@ pub fn testFlushConfirmedNoSideEffects(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_side_effects", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "fc.side") catch {
+    const sub = client.subscribe("fc.side") catch {
         reportResult("flush_confirmed_side_effects", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
@@ -165,7 +165,7 @@ pub fn testFlushConfirmedNoSideEffects(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_side_effects", false, "pub1 failed");
         return;
     };
-    client.flush(allocator, 5_000_000_000) catch {
+    client.flush(5_000_000_000) catch {
         reportResult("flush_confirmed_side_effects", false, "flushConfirmed failed");
         return;
     };
@@ -183,8 +183,8 @@ pub fn testFlushConfirmedNoSideEffects(allocator: std.mem.Allocator) void {
     // Verify both messages received
     var received: u32 = 0;
     for (0..2) |_| {
-        if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(500) catch null) |m| {
+            m.deinit();
             received += 1;
         }
     }
@@ -219,13 +219,13 @@ pub fn testFlushConfirmedVsFlush(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_vs_flush", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "fc.compare") catch {
+    const sub = client.subscribe("fc.compare") catch {
         reportResult("flush_confirmed_vs_flush", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
@@ -242,25 +242,25 @@ pub fn testFlushConfirmedVsFlush(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_vs_flush", false, "pub2 failed");
         return;
     };
-    client.flush(allocator, 5_000_000_000) catch {
+    client.flush(5_000_000_000) catch {
         reportResult("flush_confirmed_vs_flush", false, "flushConfirmed failed");
         return;
     };
 
     // Verify both arrive in order
-    const msg1 = sub.nextWithTimeout(allocator, 500) catch null;
+    const msg1 = sub.nextWithTimeout(500) catch null;
     if (msg1 == null) {
         reportResult("flush_confirmed_vs_flush", false, "no msg1");
         return;
     }
-    defer msg1.?.deinit(allocator);
+    defer msg1.?.deinit();
 
-    const msg2 = sub.nextWithTimeout(allocator, 500) catch null;
+    const msg2 = sub.nextWithTimeout(500) catch null;
     if (msg2 == null) {
         reportResult("flush_confirmed_vs_flush", false, "no msg2");
         return;
     }
-    defer msg2.?.deinit(allocator);
+    defer msg2.?.deinit();
 
     const ok1 = std.mem.eql(u8, msg1.?.data, "via-flush");
     const ok2 = std.mem.eql(u8, msg2.?.data, "via-confirmed");
@@ -289,17 +289,16 @@ pub fn testFlushConfirmedNotConnected(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_not_connected", false, "connect failed");
         return;
     };
+    defer client.deinit();
 
     // Drain to close connection
-    _ = client.drain(allocator) catch {
+    _ = client.drain() catch {
         reportResult("flush_confirmed_not_connected", false, "drain failed");
-        client.deinit(allocator);
         return;
     };
 
     // Now try flushConfirmed - should fail
-    const result = client.flush(allocator, 1_000_000_000);
-    client.deinit(allocator);
+    const result = client.flush(1_000_000_000);
 
     if (result) |_| {
         reportResult("flush_confirmed_not_connected", false, "should have failed");
@@ -325,13 +324,13 @@ pub fn testFlushConfirmedLargePayload(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_large", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "fc.large") catch {
+    const sub = client.subscribe("fc.large") catch {
         reportResult("flush_confirmed_large", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
@@ -349,16 +348,16 @@ pub fn testFlushConfirmedLargePayload(allocator: std.mem.Allocator) void {
         return;
     };
 
-    client.flush(allocator, 5_000_000_000) catch {
+    client.flush(5_000_000_000) catch {
         reportResult("flush_confirmed_large", false, "flushConfirmed failed");
         return;
     };
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.data.len == 64 * 1024) {
@@ -387,13 +386,13 @@ pub fn testFlushConfirmedRapidFire(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_rapid", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "fc.rapid") catch {
+    const sub = client.subscribe("fc.rapid") catch {
         reportResult("flush_confirmed_rapid", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.flushBuffer() catch {};
     io.io().sleep(.fromMilliseconds(10), .awake) catch {};
@@ -408,7 +407,7 @@ pub fn testFlushConfirmedRapidFire(allocator: std.mem.Allocator) void {
             return;
         };
 
-        client.flush(allocator, 5_000_000_000) catch {
+        client.flush(5_000_000_000) catch {
             reportResult("flush_confirmed_rapid", false, "flushConfirmed failed");
             return;
         };
@@ -417,8 +416,8 @@ pub fn testFlushConfirmedRapidFire(allocator: std.mem.Allocator) void {
     // Verify all 20 messages received
     var received: u32 = 0;
     for (0..20) |_| {
-        if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(500) catch null) |m| {
+            m.deinit();
             received += 1;
         }
     }
@@ -455,15 +454,15 @@ pub fn testFlushConfirmedTimeout(allocator: std.mem.Allocator) void {
     };
 
     // Drain to disconnect, then try flushConfirmed with short timeout
-    _ = client.drain(allocator) catch {
+    _ = client.drain() catch {
         reportResult("flush_confirmed_timeout", false, "drain failed");
-        client.deinit(allocator);
+        client.deinit();
         return;
     };
 
     // Should fail quickly (NotConnected, not timeout in this case)
-    const result = client.flush(allocator, 100_000_000); // 100ms
-    client.deinit(allocator);
+    const result = client.flush(100_000_000); // 100ms
+    client.deinit();
 
     if (result) |_| {
         reportResult("flush_confirmed_timeout", false, "should have failed");

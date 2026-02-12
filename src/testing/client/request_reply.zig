@@ -30,10 +30,9 @@ pub fn testRequestMethod(allocator: std.mem.Allocator) void {
         reportResult("request_method", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const result = client.request(
-        allocator,
         "nonexistent.service.test",
         "ping",
         50,
@@ -43,7 +42,7 @@ pub fn testRequestMethod(allocator: std.mem.Allocator) void {
     };
 
     if (result) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
     }
 
     if (client.isConnected()) {
@@ -69,12 +68,11 @@ pub fn testRequestReturns(allocator: std.mem.Allocator) void {
         reportResult("request_returns", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const start = std.Io.Timestamp.now(io.io(), .awake);
 
     const result = client.request(
-        allocator,
         "nonexistent.service.test2",
         "data",
         100,
@@ -89,7 +87,7 @@ pub fn testRequestReturns(allocator: std.mem.Allocator) void {
     const elapsed_ms = elapsed_ns / std.time.ns_per_ms;
 
     if (result) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
     }
 
     if (elapsed_ms < 5000) {
@@ -121,13 +119,13 @@ pub fn testReplyToPreserved(allocator: std.mem.Allocator) void {
         reportResult("reply_preserved", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "reply.test") catch {
+    const sub = client.subscribe("reply.test") catch {
         reportResult("reply_preserved", false, "sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publishRequest("reply.test", "my.reply.inbox", "data") catch {
         reportResult("reply_preserved", false, "pub failed");
@@ -136,9 +134,9 @@ pub fn testReplyToPreserved(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.reply_to) |rt| {
@@ -167,7 +165,7 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
         reportResult("request_reply_success", false, "responder connect failed");
         return;
     };
-    defer responder.deinit(allocator);
+    defer responder.deinit();
 
     var io_req: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_req.deinit();
@@ -180,25 +178,22 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
         reportResult("request_reply_success", false, "requester connect failed");
         return;
     };
-    defer requester.deinit(allocator);
+    defer requester.deinit();
 
-    const sub = responder.subscribe(allocator, "test.service") catch {
+    const sub = responder.subscribe("test.service") catch {
         reportResult("request_reply_success", false, "responder sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const Handler = struct {
         fn handle(
             r: *nats.Client,
             s: *nats.Subscription,
-            a: std.mem.Allocator,
-            io: std.Io,
         ) void {
-            _ = io;
-            if (s.nextWithTimeout(a, 1000) catch null) |req| {
-                defer req.deinit(a);
+            if (s.nextWithTimeout(1000) catch null) |req| {
+                defer req.deinit();
                 if (req.reply_to) |reply_inbox| {
                     r.publish(reply_inbox, "pong") catch {};
                 }
@@ -209,13 +204,10 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
     var handler = io_r.io().async(Handler.handle, .{
         responder,
         sub,
-        allocator,
-        io_r.io(),
     });
     defer _ = handler.cancel(io_r.io());
 
     const reply = requester.request(
-        allocator,
         "test.service",
         "ping",
         2000,
@@ -225,7 +217,7 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
     };
 
     if (reply) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         if (std.mem.eql(u8, msg.data, "pong")) {
             reportResult("request_reply_success", true, "");
             return;
@@ -250,7 +242,7 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
         reportResult("cross_client_reqrep", false, "A connect failed");
         return;
     };
-    defer client_a.deinit(allocator);
+    defer client_a.deinit();
 
     var io_b: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_b.deinit();
@@ -263,25 +255,22 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
         reportResult("cross_client_reqrep", false, "B connect failed");
         return;
     };
-    defer client_b.deinit(allocator);
+    defer client_b.deinit();
 
-    const sub = client_b.subscribe(allocator, "cross.service") catch {
+    const sub = client_b.subscribe("cross.service") catch {
         reportResult("cross_client_reqrep", false, "B sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io_b.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const Handler = struct {
         fn handle(
             b: *nats.Client,
             s: *nats.Subscription,
-            a: std.mem.Allocator,
-            io: std.Io,
         ) void {
-            _ = io;
-            if (s.nextWithTimeout(a, 2000) catch null) |req| {
-                defer req.deinit(a);
+            if (s.nextWithTimeout(2000) catch null) |req| {
+                defer req.deinit();
                 if (req.reply_to) |inbox| {
                     b.publish(inbox, "response-from-B") catch {};
                 }
@@ -292,13 +281,10 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
     var handler = io_b.io().async(Handler.handle, .{
         client_b,
         sub,
-        allocator,
-        io_b.io(),
     });
     defer _ = handler.cancel(io_b.io());
 
     const reply = client_a.request(
-        allocator,
         "cross.service",
         "request-from-A",
         3000,
@@ -308,7 +294,7 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
     };
 
     if (reply) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         if (std.mem.eql(u8, msg.data, "response-from-B")) {
             reportResult("cross_client_reqrep", true, "");
             return;
@@ -332,12 +318,11 @@ pub fn testRequestTimeout(allocator: std.mem.Allocator) void {
         reportResult("request_timeout", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const start = std.Io.Timestamp.now(io.io(), .awake);
 
     const result = client.request(
-        allocator,
         "timeout.service.noexist",
         "ping",
         200,
@@ -356,7 +341,7 @@ pub fn testRequestTimeout(allocator: std.mem.Allocator) void {
     const elapsed_ms = elapsed_ns / std.time.ns_per_ms;
 
     if (result) |msg| {
-        msg.deinit(allocator);
+        msg.deinit();
         reportResult("request_timeout", true, "");
         return;
     }
@@ -389,7 +374,7 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
         reportResult("request_large_payload", false, "responder connect failed");
         return;
     };
-    defer responder.deinit(allocator);
+    defer responder.deinit();
 
     var io_req: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_req.deinit();
@@ -402,25 +387,22 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
         reportResult("request_large_payload", false, "requester connect failed");
         return;
     };
-    defer requester.deinit(allocator);
+    defer requester.deinit();
 
-    const sub = responder.subscribe(allocator, "large.service") catch {
+    const sub = responder.subscribe("large.service") catch {
         reportResult("request_large_payload", false, "responder sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const Handler = struct {
         fn handle(
             r: *nats.Client,
             s: *nats.Subscription,
-            a: std.mem.Allocator,
-            io: std.Io,
         ) void {
-            _ = io;
-            if (s.nextWithTimeout(a, 2000) catch null) |req| {
-                defer req.deinit(a);
+            if (s.nextWithTimeout(2000) catch null) |req| {
+                defer req.deinit();
                 if (req.reply_to) |reply_inbox| {
                     r.publish(reply_inbox, req.data) catch {};
                 }
@@ -431,8 +413,6 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
     var handler = io_r.io().async(Handler.handle, .{
         responder,
         sub,
-        allocator,
-        io_r.io(),
     });
     defer _ = handler.cancel(io_r.io());
 
@@ -444,7 +424,6 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
     @memset(payload, 'X');
 
     const reply = requester.request(
-        allocator,
         "large.service",
         payload,
         3000,
@@ -454,7 +433,7 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
     };
 
     if (reply) |msg| {
-        defer msg.deinit(allocator);
+        defer msg.deinit();
         if (msg.data.len == 1024) {
             reportResult("request_large_payload", true, "");
             return;
@@ -479,7 +458,7 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
         reportResult("multi_requests_seq", false, "responder connect failed");
         return;
     };
-    defer responder.deinit(allocator);
+    defer responder.deinit();
 
     var io_req: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
     defer io_req.deinit();
@@ -492,26 +471,23 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
         reportResult("multi_requests_seq", false, "requester connect failed");
         return;
     };
-    defer requester.deinit(allocator);
+    defer requester.deinit();
 
-    const sub = responder.subscribe(allocator, "multi.service") catch {
+    const sub = responder.subscribe("multi.service") catch {
         reportResult("multi_requests_seq", false, "responder sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const Handler = struct {
         fn handle(
             r: *nats.Client,
             s: *nats.Subscription,
-            a: std.mem.Allocator,
-            io: std.Io,
         ) void {
-            _ = io;
             for (0..5) |_| {
-                if (s.nextWithTimeout(a, 2000) catch null) |req| {
-                    defer req.deinit(a);
+                if (s.nextWithTimeout(2000) catch null) |req| {
+                    defer req.deinit();
                     if (req.reply_to) |reply_inbox| {
                         r.publish(reply_inbox, "response") catch {};
                     }
@@ -523,22 +499,19 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
     var handler = io_r.io().async(Handler.handle, .{
         responder,
         sub,
-        allocator,
-        io_r.io(),
     });
     defer _ = handler.cancel(io_r.io());
 
     var success_count: u32 = 0;
     for (0..5) |_| {
         const reply = requester.request(
-            allocator,
             "multi.service",
             "request",
             2000,
         ) catch continue;
 
         if (reply) |msg| {
-            msg.deinit(allocator);
+            msg.deinit();
             success_count += 1;
         }
     }

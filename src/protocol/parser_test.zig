@@ -241,9 +241,9 @@ test "parseU64Fast overflow protection" {
         error.Overflow,
         parseU64Fast("123456789012345678901"),
     );
-    // 20 digits at max value edge - should work
+    // 20 digits at max value edge
     _ = try parseU64Fast("18446744073709551615");
-    // 20 zeros - should work (equals 0)
+    // 20 zeros (equals 0)
     try std.testing.expectEqual(
         @as(u64, 0),
         try parseU64Fast("00000000000000000000"),
@@ -256,7 +256,7 @@ test "parseUsizeFast overflow protection" {
         error.Overflow,
         parseUsizeFast("123456789012345678901"),
     );
-    // 20 digits - should work
+    // 20 digits at max value
     _ = try parseUsizeFast("18446744073709551615");
 }
 
@@ -374,7 +374,7 @@ test "parseU64Fast minus in middle" {
 }
 
 test "parseU64Fast exactly 20 chars boundary" {
-    // All valid 20-digit numbers should work
+    // All valid 20-digit numbers
     _ = try parseU64Fast("10000000000000000000");
     _ = try parseU64Fast("12345678901234567890");
     _ = try parseU64Fast("99999999999999999999");

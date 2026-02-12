@@ -26,7 +26,7 @@ pub fn testServerInfo(allocator: std.mem.Allocator) void {
         reportResult("server_info", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const info = client.getServerInfo();
     if (info == null) {
@@ -54,7 +54,7 @@ pub fn testServerInfoFields(allocator: std.mem.Allocator) void {
         reportResult("server_info_fields", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const info = client.getServerInfo();
     if (info == null) {
@@ -92,7 +92,7 @@ pub fn testServerVersion(allocator: std.mem.Allocator) void {
         reportResult("server_version", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const info = client.getServerInfo();
     if (info == null) {
@@ -124,7 +124,7 @@ pub fn testServerMaxPayloadEnforced(allocator: std.mem.Allocator) void {
         reportResult("max_payload_enforced", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const info = client.getServerInfo();
     if (info == null) {
@@ -156,7 +156,7 @@ pub fn testMaxPayloadRespected(allocator: std.mem.Allocator) void {
         reportResult("max_payload_respected", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const info = client.getServerInfo();
     if (info == null) {
@@ -193,7 +193,7 @@ pub fn testProtocolVersion(allocator: std.mem.Allocator) void {
         reportResult("proto_version", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const info = client.getServerInfo();
     if (info == null) {
@@ -222,7 +222,7 @@ pub fn testClientName(allocator: std.mem.Allocator) void {
         reportResult("client_name", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.isConnected()) {
         reportResult("client_name", true, "");

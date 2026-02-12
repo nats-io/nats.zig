@@ -23,14 +23,9 @@ fn sleepMs(io: Io, ms: i64) void {
     io.sleep(.fromMilliseconds(ms), .awake) catch {};
 }
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     const client = try nats.Client.connect(
         allocator,
@@ -38,19 +33,19 @@ pub fn main() !void {
         "nats://localhost:4222",
         .{ .name = "select-example" },
     );
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     std.debug.print("Connected to NATS!\n", .{});
 
-    const sub = try client.subscribe(allocator, "demo.select");
-    defer sub.deinit(allocator);
+    const sub = try client.subscribe("demo.select");
+    defer sub.deinit();
 
     std.debug.print("Subscribed to 'demo.select'\n", .{});
     std.debug.print("\nPublishing 3 messages with 200ms gaps...\n", .{});
     std.debug.print("Using 500ms timeout - should receive all 3.\n\n", .{});
 
     // Spawn publisher in background
-    var publisher = io.async(publishMessages, .{ client, io, allocator });
+    var publisher = io.async(publishMessages, .{ client, io });
     defer publisher.cancel(io);
 
     // Receive with timeout using io.select()
@@ -59,7 +54,7 @@ pub fn main() !void {
 
     for (0..max_attempts) |attempt| {
         // Create futures for receive and timeout
-        var recv_future = io.async(Sub.next, .{ sub, allocator, io });
+        var recv_future = io.async(Sub.next, .{sub});
         var timeout_future = io.async(sleepMs, .{ io, 500 });
 
         // Track winner to avoid double-free
@@ -67,7 +62,7 @@ pub fn main() !void {
 
         // Defer cancel for non-winners
         defer if (winner != .message) {
-            if (recv_future.cancel(io)) |m| m.deinit(allocator) else |_| {}
+            if (recv_future.cancel(io)) |m| m.deinit() else |_| {}
         };
         defer if (winner != .timeout) {
             timeout_future.cancel(io);
@@ -83,7 +78,7 @@ pub fn main() !void {
             .message => |msg_result| {
                 winner = .message;
                 const msg = msg_result catch continue;
-                defer msg.deinit(allocator);
+                defer msg.deinit();
                 received += 1;
                 std.debug.print(
                     "  [{d}] Received: {s}\n",
@@ -107,7 +102,6 @@ pub fn main() !void {
 fn publishMessages(
     client: *nats.Client,
     io: Io,
-    _: std.mem.Allocator,
 ) void {
     io.sleep(.fromMilliseconds(100), .awake) catch {};
 

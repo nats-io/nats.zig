@@ -49,7 +49,7 @@ pub fn testTlsConnection(allocator: std.mem.Allocator) void {
         reportResult("tls_connection", false, err_msg);
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.isConnected()) {
         const info = client.getServerInfo();
@@ -84,7 +84,7 @@ pub fn testTlsInsecureSkipVerify(allocator: std.mem.Allocator) void {
         reportResult("tls_insecure_skip_verify", false, err_msg);
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (client.isConnected()) {
         reportResult("tls_insecure_skip_verify", true, "");
@@ -114,13 +114,13 @@ pub fn testTlsPubSub(allocator: std.mem.Allocator) void {
         reportResult("tls_pubsub", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "tls.test.subject") catch {
+    const sub = client.subscribe("tls.test.subject") catch {
         reportResult("tls_pubsub", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const test_msg = "encrypted message over TLS";
     client.publish("tls.test.subject", test_msg) catch {
@@ -128,10 +128,10 @@ pub fn testTlsPubSub(allocator: std.mem.Allocator) void {
         return;
     };
 
-    client.flush(allocator, 500_000_000) catch {};
+    client.flush(500_000_000) catch {};
 
-    if (sub.nextWithTimeout(allocator, 1000) catch null) |m| {
-        defer m.deinit(allocator);
+    if (sub.nextWithTimeout(1000) catch null) |m| {
+        defer m.deinit();
         if (std.mem.eql(u8, m.data, test_msg)) {
             reportResult("tls_pubsub", true, "");
         } else {
@@ -169,7 +169,7 @@ pub fn testTlsReconnect(
         reportResult("tls_reconnect", false, "initial connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     if (!client.isConnected()) {
         reportResult("tls_reconnect", false, "not connected initially");
@@ -225,7 +225,7 @@ pub fn testTlsServerInfo(allocator: std.mem.Allocator) void {
         reportResult("tls_server_info", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const info = client.getServerInfo();
     if (info == null) {
@@ -261,13 +261,13 @@ pub fn testTlsMultipleMessages(allocator: std.mem.Allocator) void {
         reportResult("tls_multiple_msgs", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "tls.multi.>") catch {
+    const sub = client.subscribe("tls.multi.>") catch {
         reportResult("tls_multiple_msgs", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const msg_count: usize = 100;
     for (0..msg_count) |i| {
@@ -283,12 +283,12 @@ pub fn testTlsMultipleMessages(allocator: std.mem.Allocator) void {
         };
     }
 
-    client.flush(allocator, 500_000_000) catch {};
+    client.flush(500_000_000) catch {};
 
     var received: usize = 0;
     for (0..msg_count) |_| {
-        if (sub.nextWithTimeout(allocator, 100) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(100) catch null) |m| {
+            m.deinit();
             received += 1;
         } else {
             break;

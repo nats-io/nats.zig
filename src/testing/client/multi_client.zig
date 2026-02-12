@@ -28,7 +28,7 @@ pub fn testCrossClientRouting(allocator: std.mem.Allocator) void {
         reportResult("cross_client", false, "pub connect failed");
         return;
     };
-    defer publisher.deinit(allocator);
+    defer publisher.deinit();
 
     const subscriber = nats.Client.connect(
         allocator,
@@ -39,13 +39,13 @@ pub fn testCrossClientRouting(allocator: std.mem.Allocator) void {
         reportResult("cross_client", false, "sub connect failed");
         return;
     };
-    defer subscriber.deinit(allocator);
+    defer subscriber.deinit();
 
-    const sub = subscriber.subscribe(allocator, "cross") catch {
+    const sub = subscriber.subscribe("cross") catch {
         reportResult("cross_client", false, "sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
@@ -56,9 +56,9 @@ pub fn testCrossClientRouting(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (std.mem.eql(u8, msg.data, "cross-message")) {
@@ -86,7 +86,7 @@ pub fn testMultipleClients(allocator: std.mem.Allocator) void {
         reportResult("multiple_clients", false, "client1 failed");
         return;
     };
-    defer client1.deinit(allocator);
+    defer client1.deinit();
 
     const client2 = nats.Client.connect(
         allocator,
@@ -97,7 +97,7 @@ pub fn testMultipleClients(allocator: std.mem.Allocator) void {
         reportResult("multiple_clients", false, "client2 failed");
         return;
     };
-    defer client2.deinit(allocator);
+    defer client2.deinit();
 
     const client3 = nats.Client.connect(
         allocator,
@@ -108,7 +108,7 @@ pub fn testMultipleClients(allocator: std.mem.Allocator) void {
         reportResult("multiple_clients", false, "client3 failed");
         return;
     };
-    defer client3.deinit(allocator);
+    defer client3.deinit();
 
     if (client1.isConnected() and client2.isConnected() and
         client3.isConnected())
@@ -135,7 +135,7 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
         reportResult("client_high_rate", false, "pub connect failed");
         return;
     };
-    defer publisher.deinit(allocator);
+    defer publisher.deinit();
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .sub_queue_size = 512,
@@ -144,17 +144,17 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
         reportResult("client_high_rate", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "highrate") catch {
+    const sub = client.subscribe("highrate") catch {
         reportResult("client_high_rate", false, "sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Wait for subscription to be registered on server
     // io.io().sleep(.fromMilliseconds(50), .awake) catch {};
-    client.flush(allocator, 50_000_000) catch {};
+    client.flush(50_000_000) catch {};
 
     const NUM_MSGS = 100;
     for (0..NUM_MSGS) |_| {
@@ -164,7 +164,7 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
         };
     }
 
-    publisher.flush(allocator, 500_000_000) catch {};
+    publisher.flush(500_000_000) catch {};
 
     std.debug.print("[TEST] flush done, starting receive loop\n", .{});
 
@@ -173,9 +173,9 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
         std.debug.print("[TEST] recv {d}: calling io.async()\n", .{i});
         var future = io.io().async(
             nats.Client.Sub.next,
-            .{ sub, allocator, io.io() },
+            .{sub},
         );
-        defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+        defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
         std.debug.print("[TEST] recv {d}: calling future.await()\n", .{i});
         if (future.await(io.io())) |_| {
@@ -212,7 +212,7 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
         reportResult("three_client_chain", false, "A connect failed");
         return;
     };
-    defer client_a.deinit(allocator);
+    defer client_a.deinit();
 
     // Client B - middleware (receives from A, forwards to C)
     var io_b: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
@@ -226,7 +226,7 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
         reportResult("three_client_chain", false, "B connect failed");
         return;
     };
-    defer client_b.deinit(allocator);
+    defer client_b.deinit();
 
     // Client C - final receiver
     var io_c: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
@@ -240,21 +240,21 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
         reportResult("three_client_chain", false, "C connect failed");
         return;
     };
-    defer client_c.deinit(allocator);
+    defer client_c.deinit();
 
     // B subscribes to "step1"
-    const sub_b = client_b.subscribe(allocator, "chain.step1") catch {
+    const sub_b = client_b.subscribe("chain.step1") catch {
         reportResult("three_client_chain", false, "B sub failed");
         return;
     };
-    defer sub_b.deinit(allocator);
+    defer sub_b.deinit();
 
     // C subscribes to "step2"
-    const sub_c = client_c.subscribe(allocator, "chain.step2") catch {
+    const sub_c = client_c.subscribe("chain.step2") catch {
         reportResult("three_client_chain", false, "C sub failed");
         return;
     };
-    defer sub_c.deinit(allocator);
+    defer sub_c.deinit();
 
     io_a.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
@@ -265,12 +265,12 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
     };
 
     // B receives and forwards to step2
-    const msg_b = sub_b.nextWithTimeout(allocator, 2000) catch {
+    const msg_b = sub_b.nextWithTimeout(2000) catch {
         reportResult("three_client_chain", false, "B receive failed");
         return;
     };
     if (msg_b) |m| {
-        defer m.deinit(allocator);
+        defer m.deinit();
         client_b.publish("chain.step2", "forwarded") catch {
             reportResult("three_client_chain", false, "B forward failed");
             return;
@@ -281,12 +281,12 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
     }
 
     // C receives final message
-    const msg_c = sub_c.nextWithTimeout(allocator, 2000) catch {
+    const msg_c = sub_c.nextWithTimeout(2000) catch {
         reportResult("three_client_chain", false, "C receive failed");
         return;
     };
     if (msg_c) |m| {
-        defer m.deinit(allocator);
+        defer m.deinit();
         if (std.mem.eql(u8, m.data, "forwarded")) {
             reportResult("three_client_chain", true, "");
         } else {
@@ -313,45 +313,45 @@ pub fn testMultipleSubscribersSameSubject(allocator: std.mem.Allocator) void {
         reportResult("multi_sub_same_subject", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub1 = client.subscribe(allocator, "broadcast.test") catch {
+    const sub1 = client.subscribe("broadcast.test") catch {
         reportResult("multi_sub_same_subject", false, "sub1 failed");
         return;
     };
-    defer sub1.deinit(allocator);
+    defer sub1.deinit();
 
-    const sub2 = client.subscribe(allocator, "broadcast.test") catch {
+    const sub2 = client.subscribe("broadcast.test") catch {
         reportResult("multi_sub_same_subject", false, "sub2 failed");
         return;
     };
-    defer sub2.deinit(allocator);
+    defer sub2.deinit();
 
-    const sub3 = client.subscribe(allocator, "broadcast.test") catch {
+    const sub3 = client.subscribe("broadcast.test") catch {
         reportResult("multi_sub_same_subject", false, "sub3 failed");
         return;
     };
-    defer sub3.deinit(allocator);
+    defer sub3.deinit();
 
     client.publish("broadcast.test", "hello all") catch {
         reportResult("multi_sub_same_subject", false, "publish failed");
         return;
     };
 
-    client.flush(allocator, 500_000_000) catch {};
+    client.flush(500_000_000) catch {};
 
     var count: u32 = 0;
 
-    if (sub1.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub1.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         count += 1;
     }
-    if (sub2.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub2.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         count += 1;
     }
-    if (sub3.nextWithTimeout(allocator, 500) catch null) |m| {
-        m.deinit(allocator);
+    if (sub3.nextWithTimeout(500) catch null) |m| {
+        m.deinit();
         count += 1;
     }
 

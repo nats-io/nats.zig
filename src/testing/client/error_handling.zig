@@ -22,15 +22,15 @@ pub fn testSubjectTooLong(allocator: std.mem.Allocator) void {
         reportResult("subject_too_long", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const max_len = defaults.Limits.max_subject_len;
     var long_subject: [max_len + 1]u8 = undefined;
     @memset(&long_subject, 'a');
 
-    const result = client.subscribe(allocator, &long_subject);
+    const result = client.subscribe(&long_subject);
     if (result) |sub| {
-        sub.deinit(allocator);
+        sub.deinit();
         reportResult("subject_too_long", false, "should have failed");
     } else |err| {
         if (err == error.SubjectTooLong) {
@@ -60,15 +60,15 @@ pub fn testQueueGroupTooLong(allocator: std.mem.Allocator) void {
         reportResult("queue_group_too_long", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const max_len = defaults.Limits.max_queue_group_len;
     var long_qg: [max_len + 1]u8 = undefined;
     @memset(&long_qg, 'q');
 
-    const result = client.subscribeQueue(allocator, "test.subject", &long_qg);
+    const result = client.subscribeQueue("test.subject", &long_qg);
     if (result) |sub| {
-        sub.deinit(allocator);
+        sub.deinit();
         reportResult("queue_group_too_long", false, "should have failed");
     } else |err| {
         if (err == error.QueueGroupTooLong) {
@@ -99,7 +99,7 @@ pub fn testUrlTooLong(allocator: std.mem.Allocator) void {
         .reconnect = false,
     });
     if (result) |client| {
-        client.deinit(allocator);
+        client.deinit();
         reportResult("url_too_long", false, "should have failed");
     } else |err| {
         if (err == error.UrlTooLong) {
@@ -129,21 +129,18 @@ pub fn testDrainResultIsClean(allocator: std.mem.Allocator) void {
         reportResult("drain_result_clean", false, "connect failed");
         return;
     };
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "drain.test") catch {
-        client.deinit(allocator);
+    const sub = client.subscribe("drain.test") catch {
         reportResult("drain_result_clean", false, "subscribe failed");
         return;
     };
+    defer sub.deinit();
 
-    const result = client.drain(allocator) catch {
-        sub.deinit(allocator);
-        client.deinit(allocator);
+    const result = client.drain() catch {
         reportResult("drain_result_clean", false, "drain failed");
         return;
     };
-    sub.deinit(allocator);
-    client.deinit(allocator);
 
     if (result.isClean()) {
         reportResult("drain_result_clean", true, "");
@@ -171,17 +168,17 @@ pub fn testSubjectExactLimit(allocator: std.mem.Allocator) void {
         reportResult("subject_exact_limit", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const max_len = defaults.Limits.max_subject_len;
     var subject_max: [max_len]u8 = undefined;
     @memset(&subject_max, 'a');
 
-    const sub = client.subscribe(allocator, &subject_max) catch {
+    const sub = client.subscribe(&subject_max) catch {
         reportResult("subject_exact_limit", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     reportResult("subject_exact_limit", true, "");
 }
@@ -199,17 +196,17 @@ pub fn testQueueGroupExactLimit(allocator: std.mem.Allocator) void {
         reportResult("qg_exact_limit", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const max_len = defaults.Limits.max_queue_group_len;
     var qg_max: [max_len]u8 = undefined;
     @memset(&qg_max, 'q');
 
-    const sub = client.subscribeQueue(allocator, "test.subject", &qg_max) catch {
+    const sub = client.subscribeQueue("test.subject", &qg_max) catch {
         reportResult("qg_exact_limit", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     reportResult("qg_exact_limit", true, "");
 }
@@ -227,7 +224,7 @@ pub fn testResetErrorNotifications(allocator: std.mem.Allocator) void {
         reportResult("reset_error_notif", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     client.resetErrorNotifications();
 

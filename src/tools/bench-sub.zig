@@ -26,7 +26,7 @@ pub fn main(init: std.process.Init) !void {
         return err;
     };
 
-    try runBenchmark(allocator, config);
+    try runBenchmark(init.io, allocator, config);
 }
 
 fn parseArgs(init: std.process.Init) !BenchConfig {
@@ -71,7 +71,11 @@ fn parseArgs(init: std.process.Init) !BenchConfig {
     return config;
 }
 
-fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
+fn runBenchmark(
+    io: std.Io,
+    allocator: Allocator,
+    config: BenchConfig,
+) !void {
     assert(config.subject.len > 0);
     assert(config.msgs > 0);
 
@@ -82,13 +86,6 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         const clamped = @min(auto_size, std.math.maxInt(u32));
         break :blk clamped;
     };
-
-    var threaded: std.Io.Threaded = .init(
-        allocator,
-        .{ .environ = .empty },
-    );
-    defer threaded.deinit();
-    const io = threaded.io();
 
     if (bench.TimeOfDay.now(io)) |tod| {
         var buf: [8]u8 = undefined;
@@ -121,13 +118,13 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
         std.debug.print("Failed to connect: {}\n", .{err});
         return err;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    var sub = client.subscribe(allocator, config.subject) catch |err| {
+    var sub = client.subscribe(config.subject) catch |err| {
         std.debug.print("Subscribe failed: {}\n", .{err});
         return err;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.flushBuffer() catch |err| {
         std.debug.print("Flush failed: {}\n", .{err});
@@ -160,7 +157,7 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
             for (batch_buf[0..batch_count]) |*msg| {
                 msg_count += 1;
                 total_bytes += msg.data.len;
-                msg.deinit(allocator);
+                msg.deinit();
             }
 
             if (config.progress and progress_interval > 0) {
@@ -178,14 +175,14 @@ fn runBenchmark(allocator: Allocator, config: BenchConfig) !void {
             continue;
         }
 
-        const msg = sub.nextWithTimeout(allocator, 5000) catch |err| {
+        const msg = sub.nextWithTimeout(5000) catch |err| {
             std.debug.print("Receive error: {}\n", .{err});
             return err;
         } orelse {
             std.debug.print("Timeout or connection closed\n", .{});
             break;
         };
-        defer msg.deinit(allocator);
+        defer msg.deinit();
 
         if (start_ts == null) {
             start_ts = std.Io.Timestamp.now(io, .awake);

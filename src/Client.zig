@@ -9,7 +9,7 @@
 //! - Reader task starts automatically on connect
 //! - Colorblind async: works blocking or async based on Io implementation
 //!
-//! Connection-scoped: Io, Reader, Writer stored for lifetime of connection.
+//! Connection-scoped: Allocator, Io, Reader, Writer stored for lifetime.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -58,7 +58,7 @@ const Client = @This();
 /// };
 /// var handler = MyHandler{ .counter = &count };
 /// const sub = try client.subscribeWithCallback(
-///     allocator, "subject", MsgHandler.init(MyHandler, &handler),
+///     "subject", MsgHandler.init(MyHandler, &handler),
 /// );
 /// ```
 pub const MsgHandler = struct {
@@ -105,6 +105,7 @@ pub const Message = struct {
     reply_to: ?[]const u8,
     data: []const u8,
     headers: ?[]const u8,
+    allocator: Allocator = undefined,
     owned: bool = true,
     /// Single backing buffer (all slices point into this).
     backing_buf: ?[]u8 = null,
@@ -112,7 +113,7 @@ pub const Message = struct {
     return_queue: ?*SpscQueue([]u8) = null,
 
     /// Frees message data. Pushes to return queue for slab-allocated msgs.
-    pub fn deinit(self: *const Message, allocator: Allocator) void {
+    pub fn deinit(self: *const Message) void {
         if (!self.owned) return;
         if (self.backing_buf) |buf| {
             assert(self.return_queue != null);
@@ -123,6 +124,7 @@ pub const Message = struct {
             }
             return;
         }
+        const allocator = self.allocator;
         allocator.free(self.subject);
         allocator.free(self.data);
         if (self.reply_to) |rt| allocator.free(rt);
@@ -461,6 +463,7 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
 pub const Sub = Subscription;
 
 io: Io,
+allocator: Allocator,
 stream: net.Stream,
 reader: net.Stream.Reader,
 writer: net.Stream.Writer,
@@ -602,6 +605,7 @@ pub fn connect(
     const parsed = try parseUrl(url);
 
     const client = try allocator.create(Client);
+    client.allocator = allocator;
     client.server_info = null;
     client.parser = .{};
     client.state = .connecting;
@@ -767,10 +771,10 @@ pub fn connect(
 
     // TLS-first mode: upgrade to TLS before NATS protocol
     if (client.use_tls and opts.tls_handshake_first) {
-        try client.upgradeTls(allocator, opts);
+        try client.upgradeTls(opts);
     }
 
-    try client.handshake(allocator, opts, parsed);
+    try client.handshake(opts, parsed);
     // Note: TLS upgrade (if needed) now happens inside handshake(),
     // between receiving INFO and sending CONNECT per NATS protocol.
 
@@ -806,7 +810,7 @@ pub fn connect(
         }
     }
 
-    try client.initPendingBuffer(allocator);
+    try client.initPendingBuffer();
 
     const now_ns = getNowNs(io);
     client.last_ping_sent_ns.store(now_ns, .monotonic);
@@ -815,10 +819,10 @@ pub fn connect(
     // concurrent() required - async() may deadlock on flush()
     client.io_task_future = io.concurrent(
         connection.io_task.run,
-        .{ client, allocator },
+        .{client},
     ) catch blk: {
         dbg.print("WARNING: concurrent() failed, using async()", .{});
-        break :blk io.async(connection.io_task.run, .{ client, allocator });
+        break :blk io.async(connection.io_task.run, .{client});
     };
 
     // Spawn callback task if event handler provided
@@ -974,7 +978,6 @@ fn callbackTaskFn(client: *Client) void {
 /// Automatically frees each message after dispatch.
 fn callbackDrainFn(
     sub: *Subscription,
-    allocator: Allocator,
     handler: MsgHandler,
 ) void {
     assert(sub.mode == .callback);
@@ -986,7 +989,7 @@ fn callbackDrainFn(
             continue;
         };
         handler.dispatch(&msg);
-        msg.deinit(allocator);
+        msg.deinit();
     }
 }
 
@@ -994,7 +997,6 @@ fn callbackDrainFn(
 /// Same as callbackDrainFn but calls a plain function pointer.
 fn callbackDrainFnPlain(
     sub: *Subscription,
-    allocator: Allocator,
     cb: *const fn (*const Message) void,
 ) void {
     assert(sub.mode == .callback);
@@ -1006,7 +1008,7 @@ fn callbackDrainFnPlain(
             continue;
         };
         cb(&msg);
-        msg.deinit(allocator);
+        msg.deinit();
     }
 }
 
@@ -1014,9 +1016,9 @@ fn callbackDrainFnPlain(
 /// Allocates TLS buffers, loads CA certificates, and performs handshake.
 fn upgradeTls(
     self: *Client,
-    allocator: Allocator,
     opts: Options,
 ) !void {
+    const allocator = self.allocator;
     assert(self.use_tls);
     assert(self.tls_client == null);
     assert(self.tls_host_len > 0);
@@ -1102,10 +1104,10 @@ fn upgradeTls(
 /// Performs NATS handshake (INFO/CONNECT exchange).
 fn handshake(
     self: *Client,
-    allocator: Allocator,
     opts: Options,
     parsed: ParsedUrl,
 ) !void {
+    const allocator = self.allocator;
     // Allow both initial connect and reconnection states
     assert(self.state == .connecting or self.state == .reconnecting);
     assert(parsed.host.len > 0);
@@ -1150,7 +1152,7 @@ fn handshake(
         const server_tls =
             if (self.server_info) |info| info.tls_required else false;
         if (server_tls or opts.tls_required or opts.tls_ca_file != null) {
-            try self.upgradeTls(allocator, opts);
+            try self.upgradeTls(opts);
         }
     }
 
@@ -1362,13 +1364,13 @@ fn peekGreedyAsync(reader: *Io.Reader, io: Io) ![]u8 {
 inline fn cleanupFailedSub(
     self: *Client,
     sub: *Sub,
-    allocator: Allocator,
     slot_idx: u16,
     queue_buf: []Message,
     owned_queue: ?[]const u8,
     owned_subject: []const u8,
     remove_from_sidmap: bool,
 ) void {
+    const allocator = self.allocator;
     if (remove_from_sidmap) {
         _ = self.sidmap.remove(sub.sid);
         self.sub_ptrs[slot_idx] = null;
@@ -1385,22 +1387,19 @@ inline fn cleanupFailedSub(
 /// Subscribes to a subject.
 ///
 /// Arguments:
-///     allocator: Allocator for subscription resources
 ///     subject: Subject pattern to subscribe to (wildcards allowed: *, >)
 ///
 /// Returns subscription pointer. Caller must call sub.deinit() when done.
 pub fn subscribe(
     self: *Client,
-    allocator: Allocator,
     subject: []const u8,
 ) !*Sub {
-    return self.subscribeQueue(allocator, subject, null);
+    return self.subscribeQueue(subject, null);
 }
 
 /// Subscribes with queue group for load balancing.
 ///
 /// Arguments:
-///     allocator: Allocator for subscription resources
 ///     subject: Subject pattern to subscribe to
 ///     queue_group: Queue group name (messages distributed among members)
 ///
@@ -1408,10 +1407,10 @@ pub fn subscribe(
 /// Only one subscriber in the group receives each message.
 pub fn subscribeQueue(
     self: *Client,
-    allocator: Allocator,
     subject: []const u8,
     queue_group: ?[]const u8,
 ) !*Sub {
+    const allocator = self.allocator;
     if (!self.state.canSend()) {
         return error.NotConnected;
     }
@@ -1476,7 +1475,6 @@ pub fn subscribeQueue(
     self.sidmap.put(sid, slot_idx) catch {
         self.cleanupFailedSub(
             sub,
-            allocator,
             slot_idx,
             queue_buf,
             owned_queue,
@@ -1496,7 +1494,6 @@ pub fn subscribeQueue(
     }) catch {
         self.cleanupFailedSub(
             sub,
-            allocator,
             slot_idx,
             queue_buf,
             owned_queue,
@@ -1519,12 +1516,10 @@ pub fn subscribeQueue(
 /// Do NOT call next()/tryNext() on the returned subscription.
 pub fn subscribeWithCallback(
     self: *Client,
-    allocator: Allocator,
     subject: []const u8,
     handler: MsgHandler,
 ) !*Sub {
     return self.subscribeWithCallbackQueue(
-        allocator,
         subject,
         null,
         handler,
@@ -1534,21 +1529,19 @@ pub fn subscribeWithCallback(
 /// Subscribes with a MsgHandler callback and queue group.
 pub fn subscribeWithCallbackQueue(
     self: *Client,
-    allocator: Allocator,
     subject: []const u8,
     queue_group: ?[]const u8,
     handler: MsgHandler,
 ) !*Sub {
     const sub = try self.subscribeQueue(
-        allocator,
         subject,
         queue_group,
     );
-    errdefer sub.deinit(allocator);
+    errdefer sub.deinit();
     sub.mode = .callback;
     sub.callback_future = self.io.async(
         callbackDrainFn,
-        .{ sub, allocator, handler },
+        .{ sub, handler },
     );
     return sub;
 }
@@ -1557,12 +1550,10 @@ pub fn subscribeWithCallbackQueue(
 /// Simpler alternative when no handler state is needed.
 pub fn subscribeWithCallbackFn(
     self: *Client,
-    allocator: Allocator,
     subject: []const u8,
     cb: *const fn (*const Message) void,
 ) !*Sub {
     return self.subscribeWithCallbackFnQueue(
-        allocator,
         subject,
         null,
         cb,
@@ -1572,21 +1563,19 @@ pub fn subscribeWithCallbackFn(
 /// Subscribes with a plain function callback and queue group.
 pub fn subscribeWithCallbackFnQueue(
     self: *Client,
-    allocator: Allocator,
     subject: []const u8,
     queue_group: ?[]const u8,
     cb: *const fn (*const Message) void,
 ) !*Sub {
     const sub = try self.subscribeQueue(
-        allocator,
         subject,
         queue_group,
     );
-    errdefer sub.deinit(allocator);
+    errdefer sub.deinit();
     sub.mode = .callback;
     sub.callback_future = self.io.async(
         callbackDrainFnPlain,
-        .{ sub, allocator, cb },
+        .{ sub, cb },
     );
     return sub;
 }
@@ -1855,7 +1844,6 @@ pub fn publishMsg(self: *Client, msg: *const Message) !void {
 /// Sends a request with headers and waits for a reply with timeout.
 ///
 /// Arguments:
-///     allocator: Allocator for response message
 ///     subject: Request destination subject
 ///     hdrs: Header entries to include in request
 ///     payload: Request data
@@ -1866,12 +1854,12 @@ pub fn publishMsg(self: *Client, msg: *const Message) !void {
 /// Returns null on timeout.
 pub fn requestWithHeaders(
     self: *Client,
-    allocator: Allocator,
     subject: []const u8,
     hdrs: []const headers.Entry,
     payload: []const u8,
     timeout_ms: u32,
 ) !?Message {
+    const allocator = self.allocator;
     assert(subject.len > 0);
     assert(hdrs.len > 0);
     assert(timeout_ms > 0);
@@ -1880,12 +1868,12 @@ pub fn requestWithHeaders(
     }
 
     // Generate unique inbox for reply (uses configured inbox_prefix)
-    const inbox = try self.newInbox(allocator);
+    const inbox = try self.newInbox();
     defer allocator.free(inbox);
 
     // Subscribe to inbox (temporary subscription)
-    const sub = try self.subscribe(allocator, inbox);
-    defer sub.deinit(allocator);
+    const sub = try self.subscribe(inbox);
+    defer sub.deinit();
 
     // Brief delay to ensure server has registered subscription
     // (auto-flush sends SUB within ~1ms, sleep gives server processing time)
@@ -1897,7 +1885,7 @@ pub fn requestWithHeaders(
     // Wait for reply using io.select()
     var response_future = self.io.async(
         Subscription.next,
-        .{ sub, allocator, self.io },
+        .{sub},
     );
     var timeout_future = self.io.async(
         sleepMs,
@@ -1909,7 +1897,7 @@ pub fn requestWithHeaders(
 
     defer if (winner != .response) {
         if (response_future.cancel(self.io)) |msg| {
-            msg.deinit(allocator);
+            msg.deinit();
         } else |_| {}
     };
     defer if (winner != .timeout) {
@@ -1978,10 +1966,8 @@ pub fn flushBuffer(self: *Client) !void {
 /// semantics or serialize calls externally.
 pub fn flush(
     self: *Client,
-    allocator: Allocator,
     timeout_ns: u64,
 ) !void {
-    _ = allocator;
     assert(timeout_ns > 0);
     if (!self.state.canSend()) return error.NotConnected;
 
@@ -2087,7 +2073,6 @@ pub fn forceReconnect(self: *Client) !void {
 /// Returns error.Timeout if drain doesn't complete in time.
 pub fn drainTimeout(
     self: *Client,
-    allocator: Allocator,
     timeout_ns: u64,
 ) !DrainResult {
     assert(timeout_ns > 0);
@@ -2095,7 +2080,7 @@ pub fn drainTimeout(
         return error.NotConnected;
     }
 
-    var drain_future = self.io.async(drainHelper, .{ self, allocator });
+    var drain_future = self.io.async(drainHelper, .{self});
     var timeout_future = self.io.async(sleepNs, .{ self.io, timeout_ns });
 
     var winner: enum { none, drain, timeout } = .none;
@@ -2128,14 +2113,13 @@ pub fn drainTimeout(
 }
 
 /// Helper for async drain.
-fn drainHelper(self: *Client, allocator: Allocator) !DrainResult {
-    return self.drain(allocator);
+fn drainHelper(self: *Client) !DrainResult {
+    return self.drain();
 }
 
 /// Sends a request and waits for a reply with timeout.
 ///
 /// Arguments:
-///     allocator: Allocator for response message
 ///     subject: Request destination subject
 ///     payload: Request data
 ///     timeout_ms: Maximum time to wait for reply in milliseconds
@@ -2144,11 +2128,11 @@ fn drainHelper(self: *Client, allocator: Allocator) !DrainResult {
 /// and waits for response using io.select(). Returns null on timeout.
 pub fn request(
     self: *Client,
-    allocator: Allocator,
     subject: []const u8,
     payload: []const u8,
     timeout_ms: u32,
 ) !?Message {
+    const allocator = self.allocator;
     assert(subject.len > 0);
     assert(timeout_ms > 0);
     if (!self.state.canSend()) {
@@ -2156,12 +2140,12 @@ pub fn request(
     }
 
     // Generate unique inbox for reply (uses configured inbox_prefix)
-    const inbox = try self.newInbox(allocator);
+    const inbox = try self.newInbox();
     defer allocator.free(inbox);
 
     // Subscribe to inbox (temporary subscription)
-    const sub = try self.subscribe(allocator, inbox);
-    defer sub.deinit(allocator);
+    const sub = try self.subscribe(inbox);
+    defer sub.deinit();
 
     // Brief delay to ensure server has registered subscription
     // (auto-flush sends SUB within ~1ms, sleep gives server processing time)
@@ -2173,7 +2157,7 @@ pub fn request(
     // Wait for reply using io.select()
     var response_future = self.io.async(
         Subscription.next,
-        .{ sub, allocator, self.io },
+        .{sub},
     );
     var timeout_future = self.io.async(
         sleepMs,
@@ -2185,7 +2169,7 @@ pub fn request(
 
     defer if (winner != .response) {
         if (response_future.cancel(self.io)) |msg| {
-            msg.deinit(allocator);
+            msg.deinit();
         } else |_| {}
     };
     defer if (winner != .timeout) {
@@ -2220,7 +2204,6 @@ pub fn request(
 /// Sends a request using a Message object and waits for a reply.
 ///
 /// Arguments:
-///     allocator: Allocator for response message
 ///     msg: Message to send (uses subject, data, and headers if present)
 ///     timeout_ms: Maximum time to wait for reply in milliseconds
 ///
@@ -2229,21 +2212,21 @@ pub fn request(
 /// and waits for response. Returns null on timeout.
 pub fn requestMsg(
     self: *Client,
-    allocator: Allocator,
     msg: *const Message,
     timeout_ms: u32,
 ) !?Message {
+    const allocator = self.allocator;
     assert(msg.subject.len > 0);
     assert(timeout_ms > 0);
     if (!self.state.canSend()) return error.NotConnected;
 
     // Generate unique inbox for reply
-    const inbox = try self.newInbox(allocator);
+    const inbox = try self.newInbox();
     defer allocator.free(inbox);
 
     // Subscribe to inbox (temporary subscription)
-    const sub = try self.subscribe(allocator, inbox);
-    defer sub.deinit(allocator);
+    const sub = try self.subscribe(inbox);
+    defer sub.deinit();
 
     // Brief delay to ensure server has registered subscription
     // (auto-flush sends SUB within ~1ms, sleep gives server processing time)
@@ -2280,7 +2263,7 @@ pub fn requestMsg(
     // Wait for reply using io.select()
     var response_future = self.io.async(
         Subscription.next,
-        .{ sub, allocator, self.io },
+        .{sub},
     );
     var timeout_future = self.io.async(
         sleepMs,
@@ -2291,7 +2274,7 @@ pub fn requestMsg(
 
     defer if (winner != .response) {
         if (response_future.cancel(self.io)) |reply| {
-            reply.deinit(allocator);
+            reply.deinit();
         } else |_| {}
     };
     defer if (winner != .timeout) {
@@ -2361,13 +2344,11 @@ fn readSeedFile(io: Io, path: []const u8, buf: *[128]u8) ![]const u8 {
 
 /// Gracefully drains subscriptions and closes the connection.
 ///
-/// Arguments:
-///     alloc: Allocator used for subscription cleanup
-///
 /// Returns DrainResult indicating any failures during cleanup.
 /// Unsubscribes all active subscriptions, drains remaining messages,
 /// and closes the connection. Use for graceful shutdown.
-pub fn drain(self: *Client, alloc: Allocator) !DrainResult {
+pub fn drain(self: *Client) !DrainResult {
+    const alloc = self.allocator;
     if (self.state != .connected) {
         return error.NotConnected;
     }
@@ -2403,7 +2384,7 @@ pub fn drain(self: *Client, alloc: Allocator) !DrainResult {
             while (true) {
                 const n = sub.queue.popBatch(&drain_buf);
                 if (n == 0) break;
-                drain_buf[0].deinit(alloc);
+                drain_buf[0].deinit();
             }
 
             // Mark subscription state - sub.deinit() frees resources
@@ -2895,7 +2876,8 @@ pub fn getRtt(self: *Client) !u64 {
 
 /// Generates a new unique inbox subject using the configured prefix.
 /// Caller owns returned memory.
-pub fn newInbox(self: *Client, allocator: Allocator) ![]u8 {
+pub fn newInbox(self: *Client) ![]u8 {
+    const allocator = self.allocator;
     assert(self.next_sid >= 1);
     const prefix = self.options.inbox_prefix;
     const random_len = 22;
@@ -3035,13 +3017,11 @@ pub fn closeAllQueues(self: *Client) void {
 
 /// Closes the connection and frees all resources.
 ///
-/// Arguments:
-///     alloc: Allocator used at connect() time
-///
 /// Closes connection, stops io_task, frees buffers.
 /// Uses shutdown-recv-then-close pattern for reliable shutdown.
 /// Safe to call multiple times.
-pub fn deinit(self: *Client, alloc: Allocator) void {
+pub fn deinit(self: *Client) void {
+    const alloc = self.allocator;
     assert(self.next_sid >= 1);
 
     // SHUTDOWN-RECV-THEN-CLOSE PATTERN
@@ -3113,7 +3093,7 @@ pub fn deinit(self: *Client, alloc: Allocator) void {
     self.tiered_slab.deinit();
 
     // Free pending buffer
-    self.deinitPendingBuffer(alloc);
+    self.deinitPendingBuffer();
 
     // Free TLS resources
     self.tls_client = null;
@@ -3218,7 +3198,8 @@ pub fn restoreSubscriptions(self: *Client) !void {
 }
 
 /// Initialize pending buffer for publishes during reconnect.
-fn initPendingBuffer(self: *Client, allocator: Allocator) !void {
+fn initPendingBuffer(self: *Client) !void {
+    const allocator = self.allocator;
     if (self.options.pending_buffer_size == 0) return;
     if (self.pending_buffer != null) return;
 
@@ -3231,7 +3212,8 @@ fn initPendingBuffer(self: *Client, allocator: Allocator) !void {
 }
 
 /// Free pending buffer.
-fn deinitPendingBuffer(self: *Client, allocator: Allocator) void {
+fn deinitPendingBuffer(self: *Client) void {
+    const allocator = self.allocator;
     if (self.pending_buffer) |buf| {
         allocator.free(buf);
         self.pending_buffer = null;
@@ -3314,7 +3296,6 @@ fn cleanupForReconnect(self: *Client) void {
 /// Returns true on success, error on failure.
 pub fn tryConnect(
     self: *Client,
-    allocator: Allocator,
     server: *connection.server_pool.Server,
 ) !void {
     const raw_host = server.getHost();
@@ -3383,11 +3364,11 @@ pub fn tryConnect(
 
     // TLS-first mode: upgrade to TLS before NATS protocol
     if (self.use_tls and self.options.tls_handshake_first) {
-        try self.upgradeTls(allocator, self.options);
+        try self.upgradeTls(self.options);
     }
 
     // Perform handshake (includes TLS upgrade after INFO if needed)
-    try self.handshake(allocator, self.options, parsed);
+    try self.handshake(self.options, parsed);
 
     // Initialize health check timestamps (atomics)
     const now_ns = getNowNs(self.io);
@@ -3438,7 +3419,7 @@ pub fn waitBackoff(self: *Client) void {
 
 /// Attempt reconnection with exponential backoff.
 /// Can be called automatically (from io_task) or manually by user.
-pub fn reconnect(self: *Client, allocator: Allocator) !void {
+pub fn reconnect(self: *Client) !void {
     if (self.state != .disconnected and self.state != .reconnecting) {
         if (self.state == .connected) return;
         return error.InvalidState;
@@ -3489,7 +3470,7 @@ pub fn reconnect(self: *Client, allocator: Allocator) !void {
         );
 
         // Attempt connection
-        if (self.tryConnect(allocator, server)) {
+        if (self.tryConnect(server)) {
             // Connection succeeded
             self.restoreSubscriptions() catch |err| {
                 dbg.print(
@@ -3665,22 +3646,15 @@ pub const Subscription = struct {
 
     /// Blocks until a message is available or connection is closed.
     ///
-    /// Arguments:
-    ///     allocator: Allocator (unused, kept for API compat)
-    ///     io: Io interface for blocking operations
-    ///
     /// Only valid for manual-mode subscriptions (not callback).
     /// Returns owned Message that caller must free via msg.deinit().
     pub fn next(
         self: *Subscription,
-        allocator: Allocator,
-        io: Io,
     ) !Message {
-        _ = allocator;
         assert(self.mode == .manual);
         if (self.mode != .manual)
             return error.SubscriptionModeConflict;
-        return self.nextRaw(io);
+        return self.nextRaw(self.client.io);
     }
 
     /// Try receive without blocking. Returns null if no message.
@@ -3764,17 +3738,14 @@ pub const Subscription = struct {
     /// Receive with timeout using timer-based polling.
     ///
     /// Arguments:
-    ///     allocator: Allocator (unused, kept for API compat)
     ///     timeout_ms: Maximum wait time in milliseconds
     ///
     /// Only valid for manual-mode subscriptions.
     /// Returns null on timeout. Uses lock-free polling with timer.
     pub fn nextWithTimeout(
         self: *Subscription,
-        allocator: Allocator,
         timeout_ms: u32,
     ) !?Message {
-        _ = allocator;
         assert(self.mode == .manual);
         if (self.mode != .manual)
             return error.SubscriptionModeConflict;
@@ -4194,7 +4165,8 @@ pub const Subscription = struct {
     ///
     /// If not yet unsubscribed, calls unsubscribe() and ignores errors.
     /// Safe to use in defer blocks (like Rust's Drop trait).
-    pub fn deinit(self: *Subscription, allocator: Allocator) void {
+    pub fn deinit(self: *Subscription) void {
+        const allocator = self.client.allocator;
         // Cancel callback drain task before unsubscribe
         if (self.callback_future) |*future| {
             _ = future.cancel(self.client.io);
@@ -4216,7 +4188,7 @@ pub const Subscription = struct {
         while (true) {
             const n = self.queue.popBatch(&drain_buf);
             if (n == 0) break;
-            drain_buf[0].deinit(allocator);
+            drain_buf[0].deinit();
         }
 
         // Free subscription resources

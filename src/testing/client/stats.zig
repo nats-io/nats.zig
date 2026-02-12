@@ -28,7 +28,7 @@ pub fn testClientStats(allocator: std.mem.Allocator) void {
         reportResult("client_stats", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const initial_stats = client.getStats();
     if (initial_stats.msgs_out != 0) {
@@ -62,7 +62,7 @@ pub fn testStatsIncrement(allocator: std.mem.Allocator) void {
         reportResult("stats_increment", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const before = client.getStats();
 
@@ -95,7 +95,7 @@ pub fn testStatsBytesAccuracy(allocator: std.mem.Allocator) void {
         reportResult("stats_bytes", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const before = client.getStats();
 
@@ -127,13 +127,13 @@ pub fn testStatsMsgsIn(allocator: std.mem.Allocator) void {
         reportResult("stats_msgs_in", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "msgsin.test") catch {
+    const sub = client.subscribe("msgsin.test") catch {
         reportResult("stats_msgs_in", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const before = client.getStats();
 
@@ -143,9 +143,9 @@ pub fn testStatsMsgsIn(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..30) |_| {
-        const msg = sub.nextWithTimeout(allocator, 200) catch break;
+        const msg = sub.nextWithTimeout(200) catch break;
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
             received += 1;
         } else break;
     }
@@ -182,13 +182,13 @@ pub fn testStatsBytesIn(allocator: std.mem.Allocator) void {
         reportResult("stats_bytes_in", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "bytesin.test") catch {
+    const sub = client.subscribe("bytesin.test") catch {
         reportResult("stats_bytes_in", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const before = client.getStats();
 
@@ -198,9 +198,9 @@ pub fn testStatsBytesIn(allocator: std.mem.Allocator) void {
     }
 
     for (0..15) |_| {
-        const msg = sub.nextWithTimeout(allocator, 200) catch break;
+        const msg = sub.nextWithTimeout(200) catch break;
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
         } else break;
     }
 
@@ -236,7 +236,7 @@ pub fn testConnectsCounter(allocator: std.mem.Allocator) void {
         reportResult("stats_connects", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     const stats = client.getStats();
     if (stats.connects >= 1) {
@@ -262,13 +262,13 @@ pub fn testSubStats(allocator: std.mem.Allocator) void {
         reportResult("sub_stats", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "substats.test") catch {
+    const sub = client.subscribe("substats.test") catch {
         reportResult("sub_stats", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Initially should have 0 pending
     const initial = sub.getSubStats();
@@ -310,13 +310,13 @@ pub fn testPendingBytes(allocator: std.mem.Allocator) void {
         reportResult("pending_bytes", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "pending.bytes") catch {
+    const sub = client.subscribe("pending.bytes") catch {
         reportResult("pending_bytes", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Publish messages
     const payload = "0123456789";
@@ -332,9 +332,9 @@ pub fn testPendingBytes(allocator: std.mem.Allocator) void {
 
     // Receive all messages
     for (0..10) |_| {
-        const msg = sub.nextWithTimeout(allocator, 100) catch break;
+        const msg = sub.nextWithTimeout(100) catch break;
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
         } else break;
     }
 
@@ -370,13 +370,13 @@ pub fn testMaxPending(allocator: std.mem.Allocator) void {
         reportResult("max_pending", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "max.pending") catch {
+    const sub = client.subscribe("max.pending") catch {
         reportResult("max_pending", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     // Activate flow control so max_pending_msgs watermark is tracked
     sub.setPendingLimits(1000);
@@ -398,9 +398,9 @@ pub fn testMaxPending(allocator: std.mem.Allocator) void {
 
     // Receive all messages
     for (0..25) |_| {
-        const msg = sub.nextWithTimeout(allocator, 100) catch break;
+        const msg = sub.nextWithTimeout(100) catch break;
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
         } else break;
     }
 

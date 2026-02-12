@@ -28,13 +28,13 @@ pub fn testClientPubSub(allocator: std.mem.Allocator) void {
         reportResult("client_pubsub", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "pubsub") catch {
+    const sub = client.subscribe("pubsub") catch {
         reportResult("client_pubsub", false, "sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish("pubsub", "test-message") catch {
         reportResult("client_pubsub", false, "pub failed");
@@ -43,9 +43,9 @@ pub fn testClientPubSub(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |msg| msg.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |msg| msg.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (std.mem.eql(u8, msg.data, "test-message")) {
@@ -73,13 +73,13 @@ pub fn testClientPublishReply(allocator: std.mem.Allocator) void {
         reportResult("client_pub_reply", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "req") catch {
+    const sub = client.subscribe("req") catch {
         reportResult("client_pub_reply", false, "sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publishRequest("req", "reply.inbox", "request") catch {
         reportResult("client_pub_reply", false, "pub failed");
@@ -88,9 +88,9 @@ pub fn testClientPublishReply(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.reply_to) |rt| {
@@ -120,13 +120,13 @@ pub fn testPublishEmptyPayload(allocator: std.mem.Allocator) void {
         reportResult("publish_empty_payload", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "empty") catch {
+    const sub = client.subscribe("empty") catch {
         reportResult("publish_empty_payload", false, "sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish("empty", "") catch {
         reportResult("publish_empty_payload", false, "pub failed");
@@ -135,9 +135,9 @@ pub fn testPublishEmptyPayload(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.data.len == 0) {
@@ -165,13 +165,13 @@ pub fn testPublishLargePayload(allocator: std.mem.Allocator) void {
         reportResult("publish_large_payload", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "large") catch {
+    const sub = client.subscribe("large") catch {
         reportResult("publish_large_payload", false, "sub failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     const payload = allocator.alloc(u8, 8 * 1024) catch {
         reportResult("publish_large_payload", false, "alloc failed");
@@ -187,9 +187,9 @@ pub fn testPublishLargePayload(allocator: std.mem.Allocator) void {
 
     var future = io.io().async(
         nats.Client.Sub.next,
-        .{ sub, allocator, io.io() },
+        .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit(allocator) else |_| {};
+    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
 
     if (future.await(io.io())) |msg| {
         if (msg.data.len == 8 * 1024) {
@@ -217,7 +217,7 @@ pub fn testPublishRapidFire(allocator: std.mem.Allocator) void {
         reportResult("publish_rapid_fire", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     for (0..1000) |_| {
         client.publish("rapid", "msg") catch {
@@ -250,7 +250,7 @@ pub fn testPublishNoSubscribers(allocator: std.mem.Allocator) void {
         reportResult("publish_no_subscribers", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     client.publish("nosub", "message") catch {
         reportResult("publish_no_subscribers", false, "pub failed");
@@ -276,15 +276,14 @@ pub fn testPublishAfterDisconnect(allocator: std.mem.Allocator) void {
         reportResult("publish_after_disconnect", false, "connect failed");
         return;
     };
+    defer client.deinit();
 
-    _ = client.drain(allocator) catch {
+    _ = client.drain() catch {
         reportResult("publish_after_disconnect", false, "drain failed");
-        client.deinit(allocator);
         return;
     };
 
     const result = client.publish("test.subject", "data");
-    client.deinit(allocator);
 
     if (result) |_| {
         reportResult("publish_after_disconnect", false, "should have failed");
@@ -309,13 +308,13 @@ pub fn testPublishBatching(allocator: std.mem.Allocator) void {
         reportResult("publish_batching", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "batch.test") catch {
+    const sub = client.subscribe("batch.test") catch {
         reportResult("publish_batching", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     client.publish("batch.test", "data1") catch {};
     client.publish("batch.test", "data2") catch {};
@@ -323,8 +322,8 @@ pub fn testPublishBatching(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..3) |_| {
-        if (sub.nextWithTimeout(allocator, 500) catch null) |m| {
-            m.deinit(allocator);
+        if (sub.nextWithTimeout(500) catch null) |m| {
+            m.deinit();
             received += 1;
         }
     }
@@ -355,13 +354,13 @@ pub fn testFlushAfterEachPublish(allocator: std.mem.Allocator) void {
         reportResult("flush_after_each", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = client.subscribe(allocator, "flush.each") catch {
+    const sub = client.subscribe("flush.each") catch {
         reportResult("flush_after_each", false, "subscribe failed");
         return;
     };
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     for (0..50) |_| {
         client.publish("flush.each", "msg") catch {
@@ -372,11 +371,11 @@ pub fn testFlushAfterEachPublish(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..50) |_| {
-        const msg = sub.nextWithTimeout(allocator, 500) catch {
+        const msg = sub.nextWithTimeout(500) catch {
             break;
         };
         if (msg) |m| {
-            m.deinit(allocator);
+            m.deinit();
             received += 1;
         } else break;
     }
@@ -410,7 +409,7 @@ pub fn testPublishToWildcardFails(allocator: std.mem.Allocator) void {
         reportResult("pub_wildcard_fails", false, "connect failed");
         return;
     };
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Wildcards are only valid for subscribe, not publish
     const result1 = client.publish("foo.*", "data");

@@ -49,17 +49,9 @@ const DoublerService = struct {
     }
 };
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var threaded: std.Io.Threaded = .init(
-        allocator,
-        .{ .environ = .empty },
-    );
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     // Service client
     const service_client = try nats.Client.connect(
@@ -68,7 +60,7 @@ pub fn main() !void {
         "nats://localhost:4222",
         .{ .name = "doubler-service" },
     );
-    defer service_client.deinit(allocator);
+    defer service_client.deinit();
 
     // Requester client
     const requester = try nats.Client.connect(
@@ -77,7 +69,7 @@ pub fn main() !void {
         "nats://localhost:4222",
         .{ .name = "requester" },
     );
-    defer requester.deinit(allocator);
+    defer requester.deinit();
 
     std.debug.print("Connected to NATS!\n\n", .{});
 
@@ -85,11 +77,10 @@ pub fn main() !void {
     var svc = DoublerService{ .client = service_client };
 
     const sub = try service_client.subscribeWithCallback(
-        allocator,
         "math.double",
         nats.MsgHandler.init(DoublerService, &svc),
     );
-    defer sub.deinit(allocator);
+    defer sub.deinit();
 
     std.debug.print("Service listening on 'math.double'\n\n", .{});
 
@@ -100,8 +91,8 @@ pub fn main() !void {
     const numbers = [_][]const u8{ "21", "50", "100" };
     for (numbers) |n| {
         std.debug.print("Requesting: {s} * 2\n", .{n});
-        if (try requester.request(allocator, "math.double", n, 1000)) |reply| {
-            defer reply.deinit(allocator);
+        if (try requester.request("math.double", n, 1000)) |reply| {
+            defer reply.deinit();
             std.debug.print("  Reply: {s}\n\n", .{reply.data});
         } else {
             std.debug.print("  Timed out\n\n", .{});

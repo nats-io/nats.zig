@@ -32,12 +32,7 @@ const Payload = struct {
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
-    var threaded: Io.Threaded = .init(
-        allocator,
-        .{ .environ = .empty },
-    );
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = init.io;
 
     var stdout_buf: [4096]u8 = undefined;
     var stdout_writer = Io.File.stdout().writer(
@@ -52,10 +47,10 @@ pub fn main(init: std.process.Init) !void {
         "nats://localhost:4222",
         .{},
     );
-    defer client.deinit(allocator);
+    defer client.deinit();
 
-    const sub = try client.subscribe(allocator, "greet");
-    defer sub.deinit(allocator);
+    const sub = try client.subscribe("greet");
+    defer sub.deinit();
 
     // Create a payload and serialize it to JSON.
     // Stringify.value writes JSON into a fixed buffer writer -
@@ -78,8 +73,8 @@ pub fn main(init: std.process.Init) !void {
 
     // Receive the first message - valid JSON.
     // parseFromSlice deserializes it back into a Payload struct.
-    if (try sub.nextWithTimeout(allocator, 1000)) |msg| {
-        defer msg.deinit(allocator);
+    if (try sub.nextWithTimeout(1000)) |msg| {
+        defer msg.deinit();
         if (std.json.parseFromSlice(
             Payload,
             allocator,
@@ -102,8 +97,8 @@ pub fn main(init: std.process.Init) !void {
 
     // Receive the second message - invalid JSON.
     // parseFromSlice returns an error, so we print raw data.
-    if (try sub.nextWithTimeout(allocator, 1000)) |msg| {
-        defer msg.deinit(allocator);
+    if (try sub.nextWithTimeout(1000)) |msg| {
+        defer msg.deinit();
         if (std.json.parseFromSlice(
             Payload,
             allocator,

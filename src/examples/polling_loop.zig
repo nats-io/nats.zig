@@ -17,16 +17,9 @@
 const std = @import("std");
 const nats = @import("nats");
 
-const Io = std.Io;
-
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     const client = try nats.Client.connect(
         allocator,
@@ -34,19 +27,19 @@ pub fn main() !void {
         "nats://localhost:4222",
         .{ .name = "polling-loop-example" },
     );
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     std.debug.print("Connected to NATS!\n", .{});
 
     // Subscribe to multiple subjects
-    const high_priority = try client.subscribe(allocator, "priority.high");
-    defer high_priority.deinit(allocator);
+    const high_priority = try client.subscribe("priority.high");
+    defer high_priority.deinit();
 
-    const normal = try client.subscribe(allocator, "priority.normal");
-    defer normal.deinit(allocator);
+    const normal = try client.subscribe("priority.normal");
+    defer normal.deinit();
 
-    const low_priority = try client.subscribe(allocator, "priority.low");
-    defer low_priority.deinit(allocator);
+    const low_priority = try client.subscribe("priority.low");
+    defer low_priority.deinit();
 
     std.debug.print("Subscribed to: priority.high, priority.normal, priority.low\n\n", .{});
 
@@ -77,7 +70,7 @@ pub fn main() !void {
 
         // Always check high priority first (drain completely)
         while (high_priority.tryNext()) |msg| {
-            defer msg.deinit(allocator);
+            defer msg.deinit();
             high_count += 1;
             processed_any = true;
             std.debug.print("  [HIGH] {s}\n", .{msg.data});
@@ -85,7 +78,7 @@ pub fn main() !void {
 
         // Then check normal priority (one at a time)
         if (normal.tryNext()) |msg| {
-            defer msg.deinit(allocator);
+            defer msg.deinit();
             normal_count += 1;
             processed_any = true;
             std.debug.print("  [NORMAL] {s}\n", .{msg.data});
@@ -93,7 +86,7 @@ pub fn main() !void {
 
         // Finally check low priority (one at a time)
         if (low_priority.tryNext()) |msg| {
-            defer msg.deinit(allocator);
+            defer msg.deinit();
             low_count += 1;
             processed_any = true;
             std.debug.print("  [LOW] {s}\n", .{msg.data});
@@ -147,7 +140,7 @@ pub fn main() !void {
 
     while (total < 9) {
         if (subs[idx].tryNext()) |msg| {
-            defer msg.deinit(allocator);
+            defer msg.deinit();
             total += 1;
             std.debug.print("  [{s}] {s}\n", .{ names[idx], msg.data });
         }
