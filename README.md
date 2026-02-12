@@ -6,7 +6,7 @@
 
 A [Zig](https://ziglang.org/) client for the [NATS messaging system](https://nats.io).
 
-Native Zig. Zero dependencies. Built on `std.Io`.
+Native Zig. Built on `std.Io`.
 
 ## Requirements
 
