@@ -5,14 +5,14 @@
 //!
 //! Example:
 //! ```zig
-//! var headers = HeaderMap{};
-//! defer headers.deinit(allocator);
-//! try headers.set(allocator, "Content-Type", "application/json");
-//! try headers.add(allocator, "X-Tag", "important");
-//! try headers.add(allocator, "X-Tag", "urgent");  // Multiple values
+//! var headers = HeaderMap.init(allocator);
+//! defer headers.deinit();
+//! try headers.set("Content-Type", "application/json");
+//! try headers.add("X-Tag", "important");
+//! try headers.add("X-Tag", "urgent");  // Multiple values
 //!
 //! // Encode to NATS format
-//! const encoded = try headers.encode(allocator);
+//! const encoded = try headers.encode();
 //! defer allocator.free(encoded);
 //! ```
 
@@ -22,67 +22,72 @@ const Allocator = std.mem.Allocator;
 
 /// Builder for NATS message headers.
 /// Supports multiple values per key.
+/// Stores allocator for connection-scoped lifetime.
 pub const HeaderMap = struct {
+    allocator: Allocator,
     /// Keys (owned, case-preserved).
     keys: std.ArrayList([]u8) = .{},
     /// Values (owned). Same index as key.
     values: std.ArrayList([]u8) = .{},
 
+    /// Creates a new HeaderMap with the given allocator.
+    pub fn init(allocator: Allocator) HeaderMap {
+        return .{ .allocator = allocator };
+    }
+
     /// Frees all memory.
-    pub fn deinit(self: *HeaderMap, allocator: Allocator) void {
+    pub fn deinit(self: *HeaderMap) void {
         for (self.keys.items) |key| {
-            allocator.free(key);
+            self.allocator.free(key);
         }
-        self.keys.deinit(allocator);
+        self.keys.deinit(self.allocator);
 
         for (self.values.items) |value| {
-            allocator.free(value);
+            self.allocator.free(value);
         }
-        self.values.deinit(allocator);
+        self.values.deinit(self.allocator);
     }
 
     /// Sets a header, replacing any existing values for this key.
     /// Key comparison is case-insensitive.
     pub fn set(
         self: *HeaderMap,
-        allocator: Allocator,
         key: []const u8,
         value: []const u8,
     ) Allocator.Error!void {
         assert(key.len > 0);
 
         // Remove existing values for this key
-        self.deleteInternal(allocator, key);
+        self.deleteInternal(key);
 
         // Add new entry
-        const owned_key = try allocator.dupe(u8, key);
-        errdefer allocator.free(owned_key);
+        const owned_key = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(owned_key);
 
-        const owned_value = try allocator.dupe(u8, value);
-        errdefer allocator.free(owned_value);
+        const owned_value = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(owned_value);
 
-        try self.keys.append(allocator, owned_key);
-        try self.values.append(allocator, owned_value);
+        try self.keys.append(self.allocator, owned_key);
+        try self.values.append(self.allocator, owned_value);
     }
 
     /// Adds a value to a header (allows multiple values for same key).
     /// Key comparison is case-insensitive for grouping.
     pub fn add(
         self: *HeaderMap,
-        allocator: Allocator,
         key: []const u8,
         value: []const u8,
     ) Allocator.Error!void {
         assert(key.len > 0);
 
-        const owned_key = try allocator.dupe(u8, key);
-        errdefer allocator.free(owned_key);
+        const owned_key = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(owned_key);
 
-        const owned_value = try allocator.dupe(u8, value);
-        errdefer allocator.free(owned_value);
+        const owned_value = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(owned_value);
 
-        try self.keys.append(allocator, owned_key);
-        try self.values.append(allocator, owned_value);
+        try self.keys.append(self.allocator, owned_key);
+        try self.values.append(self.allocator, owned_value);
     }
 
     /// Gets the first value for a header (case-insensitive lookup).
@@ -115,7 +120,6 @@ pub const HeaderMap = struct {
     /// Caller owns returned slice, must free with allocator.
     pub fn getAll(
         self: *const HeaderMap,
-        allocator: Allocator,
         key: []const u8,
     ) Allocator.Error!?[]const []const u8 {
         assert(key.len > 0);
@@ -129,7 +133,10 @@ pub const HeaderMap = struct {
 
         if (match_count == 0) return null;
 
-        const result = try allocator.alloc([]const u8, match_count);
+        const result = try self.allocator.alloc(
+            []const u8,
+            match_count,
+        );
         var idx: usize = 0;
         for (self.keys.items, 0..) |k, i| {
             if (std.ascii.eqlIgnoreCase(k, key)) {
@@ -142,17 +149,24 @@ pub const HeaderMap = struct {
     }
 
     /// Deletes all values for a header (case-insensitive).
-    pub fn delete(self: *HeaderMap, allocator: Allocator, key: []const u8) void {
+    pub fn delete(self: *HeaderMap, key: []const u8) void {
         assert(key.len > 0);
-        self.deleteInternal(allocator, key);
+        self.deleteInternal(key);
     }
 
-    fn deleteInternal(self: *HeaderMap, allocator: Allocator, key: []const u8) void {
+    fn deleteInternal(self: *HeaderMap, key: []const u8) void {
         var i: usize = 0;
         while (i < self.keys.items.len) {
-            if (std.ascii.eqlIgnoreCase(self.keys.items[i], key)) {
-                allocator.free(self.keys.orderedRemove(i));
-                allocator.free(self.values.orderedRemove(i));
+            if (std.ascii.eqlIgnoreCase(
+                self.keys.items[i],
+                key,
+            )) {
+                self.allocator.free(
+                    self.keys.orderedRemove(i),
+                );
+                self.allocator.free(
+                    self.values.orderedRemove(i),
+                );
             } else {
                 i += 1;
             }
@@ -178,7 +192,7 @@ pub const HeaderMap = struct {
 
     /// Encodes headers to NATS/1.0 format.
     /// Caller owns returned memory.
-    pub fn encode(self: *const HeaderMap, allocator: Allocator) ![]u8 {
+    pub fn encode(self: *const HeaderMap) ![]u8 {
         if (self.keys.items.len == 0) {
             return error.EmptyHeaders;
         }
@@ -191,8 +205,8 @@ pub const HeaderMap = struct {
         }
         size += 2; // final "\r\n"
 
-        const buf = try allocator.alloc(u8, size);
-        errdefer allocator.free(buf);
+        const buf = try self.allocator.alloc(u8, size);
+        errdefer self.allocator.free(buf);
 
         var pos: usize = 0;
         @memcpy(buf[pos..][0..10], "NATS/1.0\r\n");
@@ -234,11 +248,11 @@ pub const HeaderMap = struct {
 
 test "header map set and get" {
     const allocator = std.testing.allocator;
-    var hm: HeaderMap = .{};
-    defer hm.deinit(allocator);
+    var hm = HeaderMap.init(allocator);
+    defer hm.deinit();
 
-    try hm.set(allocator, "Content-Type", "application/json");
-    try hm.set(allocator, "X-Request-Id", "abc123");
+    try hm.set("Content-Type", "application/json");
+    try hm.set("X-Request-Id", "abc123");
 
     try std.testing.expectEqualStrings(
         "application/json",
@@ -248,15 +262,18 @@ test "header map set and get" {
         "abc123",
         hm.get("X-Request-Id").?,
     );
-    try std.testing.expectEqual(@as(?[]const u8, null), hm.get("Not-Found"));
+    try std.testing.expectEqual(
+        @as(?[]const u8, null),
+        hm.get("Not-Found"),
+    );
 }
 
 test "header map case insensitive get" {
     const allocator = std.testing.allocator;
-    var hm: HeaderMap = .{};
-    defer hm.deinit(allocator);
+    var hm = HeaderMap.init(allocator);
+    defer hm.deinit();
 
-    try hm.set(allocator, "Content-Type", "text/plain");
+    try hm.set("Content-Type", "text/plain");
 
     try std.testing.expect(hm.get("content-type") != null);
     try std.testing.expect(hm.get("CONTENT-TYPE") != null);
@@ -265,28 +282,31 @@ test "header map case insensitive get" {
 
 test "header map set replaces existing" {
     const allocator = std.testing.allocator;
-    var hm: HeaderMap = .{};
-    defer hm.deinit(allocator);
+    var hm = HeaderMap.init(allocator);
+    defer hm.deinit();
 
-    try hm.set(allocator, "Key", "value1");
-    try hm.set(allocator, "Key", "value2");
+    try hm.set("Key", "value1");
+    try hm.set("Key", "value2");
 
-    try std.testing.expectEqualStrings("value2", hm.get("Key").?);
+    try std.testing.expectEqualStrings(
+        "value2",
+        hm.get("Key").?,
+    );
     try std.testing.expectEqual(@as(usize, 1), hm.count());
 }
 
 test "header map add multiple values" {
     const allocator = std.testing.allocator;
-    var hm: HeaderMap = .{};
-    defer hm.deinit(allocator);
+    var hm = HeaderMap.init(allocator);
+    defer hm.deinit();
 
-    try hm.add(allocator, "X-Tag", "important");
-    try hm.add(allocator, "X-Tag", "urgent");
-    try hm.add(allocator, "X-Tag", "review");
+    try hm.add("X-Tag", "important");
+    try hm.add("X-Tag", "urgent");
+    try hm.add("X-Tag", "review");
 
     try std.testing.expectEqual(@as(usize, 3), hm.count());
 
-    const all = try hm.getAll(allocator, "X-Tag");
+    const all = try hm.getAll("X-Tag");
     defer allocator.free(all.?);
 
     try std.testing.expectEqual(@as(usize, 3), all.?.len);
@@ -297,95 +317,137 @@ test "header map add multiple values" {
 
 test "header map getLast" {
     const allocator = std.testing.allocator;
-    var hm: HeaderMap = .{};
-    defer hm.deinit(allocator);
+    var hm = HeaderMap.init(allocator);
+    defer hm.deinit();
 
-    try hm.add(allocator, "X-Tag", "first");
-    try hm.add(allocator, "X-Tag", "second");
-    try hm.add(allocator, "X-Tag", "third");
+    try hm.add("X-Tag", "first");
+    try hm.add("X-Tag", "second");
+    try hm.add("X-Tag", "third");
 
     // get() returns first, getLast() returns last
-    try std.testing.expectEqualStrings("first", hm.get("X-Tag").?);
-    try std.testing.expectEqualStrings("third", hm.getLast("X-Tag").?);
+    try std.testing.expectEqualStrings(
+        "first",
+        hm.get("X-Tag").?,
+    );
+    try std.testing.expectEqualStrings(
+        "third",
+        hm.getLast("X-Tag").?,
+    );
 
     // Case insensitive
-    try std.testing.expectEqualStrings("third", hm.getLast("x-tag").?);
+    try std.testing.expectEqualStrings(
+        "third",
+        hm.getLast("x-tag").?,
+    );
 
     // Non-existent key returns null
-    try std.testing.expectEqual(@as(?[]const u8, null), hm.getLast("Not-Found"));
+    try std.testing.expectEqual(
+        @as(?[]const u8, null),
+        hm.getLast("Not-Found"),
+    );
 }
 
 test "header map delete" {
     const allocator = std.testing.allocator;
-    var hm: HeaderMap = .{};
-    defer hm.deinit(allocator);
+    var hm = HeaderMap.init(allocator);
+    defer hm.deinit();
 
-    try hm.add(allocator, "X-Tag", "value1");
-    try hm.add(allocator, "X-Tag", "value2");
-    try hm.add(allocator, "Other", "keep");
+    try hm.add("X-Tag", "value1");
+    try hm.add("X-Tag", "value2");
+    try hm.add("Other", "keep");
 
-    hm.delete(allocator, "X-Tag");
+    hm.delete("X-Tag");
 
-    try std.testing.expectEqual(@as(?[]const u8, null), hm.get("X-Tag"));
-    try std.testing.expectEqualStrings("keep", hm.get("Other").?);
+    try std.testing.expectEqual(
+        @as(?[]const u8, null),
+        hm.get("X-Tag"),
+    );
+    try std.testing.expectEqualStrings(
+        "keep",
+        hm.get("Other").?,
+    );
     try std.testing.expectEqual(@as(usize, 1), hm.count());
 }
 
 test "header map encode" {
     const allocator = std.testing.allocator;
-    var hm: HeaderMap = .{};
-    defer hm.deinit(allocator);
+    var hm = HeaderMap.init(allocator);
+    defer hm.deinit();
 
-    try hm.set(allocator, "Foo", "bar");
-    try hm.set(allocator, "Baz", "123");
+    try hm.set("Foo", "bar");
+    try hm.set("Baz", "123");
 
-    const encoded = try hm.encode(allocator);
+    const encoded = try hm.encode();
     defer allocator.free(encoded);
 
-    // Order may vary, but should contain both headers
-    try std.testing.expect(std.mem.startsWith(u8, encoded, "NATS/1.0\r\n"));
-    try std.testing.expect(std.mem.endsWith(u8, encoded, "\r\n\r\n"));
-    try std.testing.expect(std.mem.indexOf(u8, encoded, "Foo: bar\r\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, encoded, "Baz: 123\r\n") != null);
+    try std.testing.expect(
+        std.mem.startsWith(u8, encoded, "NATS/1.0\r\n"),
+    );
+    try std.testing.expect(
+        std.mem.endsWith(u8, encoded, "\r\n\r\n"),
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, encoded, "Foo: bar\r\n") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, encoded, "Baz: 123\r\n") != null,
+    );
 }
 
 test "header map encoded size" {
     const allocator = std.testing.allocator;
-    var hm: HeaderMap = .{};
-    defer hm.deinit(allocator);
+    var hm = HeaderMap.init(allocator);
+    defer hm.deinit();
 
-    try hm.set(allocator, "Foo", "bar");
+    try hm.set("Foo", "bar");
 
     // "NATS/1.0\r\n" (10) + "Foo: bar\r\n" (10) + "\r\n" (2) = 22
-    try std.testing.expectEqual(@as(usize, 22), hm.encodedSize());
+    try std.testing.expectEqual(
+        @as(usize, 22),
+        hm.encodedSize(),
+    );
 
-    const encoded = try hm.encode(allocator);
+    const encoded = try hm.encode();
     defer allocator.free(encoded);
 
-    try std.testing.expectEqual(hm.encodedSize(), encoded.len);
+    try std.testing.expectEqual(
+        hm.encodedSize(),
+        encoded.len,
+    );
 }
 
 test "header map empty" {
     const allocator = std.testing.allocator;
-    var hm: HeaderMap = .{};
-    defer hm.deinit(allocator);
+    var hm = HeaderMap.init(allocator);
+    defer hm.deinit();
 
     try std.testing.expect(hm.isEmpty());
-    try std.testing.expectEqual(@as(usize, 0), hm.count());
-    try std.testing.expectEqual(@as(usize, 0), hm.encodedSize());
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        hm.count(),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        hm.encodedSize(),
+    );
 }
 
 test "header map with empty value" {
     const allocator = std.testing.allocator;
-    var hm: HeaderMap = .{};
-    defer hm.deinit(allocator);
+    var hm = HeaderMap.init(allocator);
+    defer hm.deinit();
 
-    try hm.set(allocator, "Empty", "");
+    try hm.set("Empty", "");
 
-    try std.testing.expectEqualStrings("", hm.get("Empty").?);
+    try std.testing.expectEqualStrings(
+        "",
+        hm.get("Empty").?,
+    );
 
-    const encoded = try hm.encode(allocator);
+    const encoded = try hm.encode();
     defer allocator.free(encoded);
 
-    try std.testing.expect(std.mem.indexOf(u8, encoded, "Empty: \r\n") != null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, encoded, "Empty: \r\n") != null,
+    );
 }
