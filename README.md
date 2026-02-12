@@ -44,7 +44,7 @@ b.installArtifact(exe);
 ## Quick Start
 
 Zig does not have closures, so to pass state into a callback we use a
-`MsgHandler` — a type-erased interface that pairs your handler struct
+`MsgHandler` - a type-erased interface that pairs your handler struct
 with its `onMessage` method:
 
 ```zig
@@ -70,7 +70,7 @@ pub fn main(init: std.process.Init) !void {
     );
     defer client.deinit();
 
-    // State lives in main — handler captures a pointer to it
+    // State lives in main - handler captures a pointer to it
     var count: u32 = 0;
     var handler = Handler{ .counter = &count };
     const sub = try client.subscribe(
@@ -270,7 +270,7 @@ const sub = try client.subscribeFn(
 defer sub.deinit();
 ```
 
-**Queue group** (load balancing — only one subscriber in the group
+**Queue group** (load balancing - only one subscriber in the group
 receives each message):
 
 ```zig
