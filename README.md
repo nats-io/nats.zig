@@ -43,27 +43,61 @@ b.installArtifact(exe);
 
 ## Quick Start
 
+Zig does not have closures, so to pass state into a callback we use a
+`MsgHandler` — a type-erased interface that pairs your handler struct
+with its `onMessage` method:
+
+```zig
+const std = @import("std");
+const nats = @import("nats");
+
+const Handler = struct {
+    pub fn onMessage(_: *@This(), msg: *const nats.Message) void {
+        std.debug.print("Received: {s}\n", .{msg.data});
+    }
+};
+
+pub fn main(init: std.process.Init) !void {
+    const client = try nats.Client.connect(
+        init.gpa,
+        init.io,
+        "nats://localhost:4222",
+        .{},
+    );
+    defer client.deinit();
+
+    var handler = Handler{};
+    const sub = try client.subscribe(
+        "greet.*",
+        nats.MsgHandler.init(Handler, &handler),
+    );
+    defer sub.deinit();
+
+    try client.publish("greet.hello", "Hello, NATS!");
+    init.io.sleep(.fromSeconds(1), .awake) catch {};
+}
+```
+
+When no state is needed, use `subscribeFn()` with a plain function:
+
 ```zig
 const std = @import("std");
 const nats = @import("nats");
 
 pub fn main(init: std.process.Init) !void {
-    const allocator = init.gpa;
-    const io = init.io;
-
-    // Connect
-    const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .{});
+    const client = try nats.Client.connect(
+        init.gpa,
+        init.io,
+        "nats://localhost:4222",
+        .{},
+    );
     defer client.deinit();
 
-    // Subscribe with callback - messages dispatched automatically
     const sub = try client.subscribeFn("greet.*", onMessage);
     defer sub.deinit();
 
-    // Publish (auto-flushed to network)
     try client.publish("greet.hello", "Hello, NATS!");
-
-    // Keep running (callbacks fire on the io thread)
-    io.sleep(.fromSeconds(1), .awake) catch {};
+    init.io.sleep(.fromSeconds(1), .awake) catch {};
 }
 
 fn onMessage(msg: *const nats.Message) void {
