@@ -112,6 +112,9 @@ fn onMessage(msg: *const nats.Message) void {
 }
 ```
 
+> **Note:** Callback messages are freed automatically after your handler
+> returns. No `msg.deinit()` needed.
+
 ## Examples
 
 Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
