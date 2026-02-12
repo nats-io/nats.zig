@@ -43,9 +43,10 @@ b.installArtifact(exe);
 
 ## Quick Start
 
-Zig does not have closures, so to pass state into a callback we use a
-`MsgHandler` - a type-erased interface that pairs your handler struct
-with its `onMessage` method:
+Subscriptions use callbacks - messages are dispatched automatically,
+no manual receive loop needed. There are three ways to subscribe:
+
+**`subscribe()` with a MsgHandler** - captures state, like a closure:
 
 ```zig
 const std = @import("std");
@@ -87,7 +88,7 @@ pub fn main(init: std.process.Init) !void {
 }
 ```
 
-When no state is needed, use `subscribeFn()` with a plain function:
+**`subscribeFn()` with a plain function** - when no state is needed:
 
 ```zig
 const std = @import("std");
@@ -116,6 +117,24 @@ fn onMessage(msg: *const nats.Message) void {
 
 > **Note:** Callback messages are freed automatically after your handler
 > returns. No `msg.deinit()` needed.
+
+**`subscribeSync()` for manual receive** - you control the receive loop:
+
+```zig
+const sub = try client.subscribeSync("greet.*");
+defer sub.deinit();
+
+try client.publish("greet.hello", "Hello, NATS!");
+
+if (try sub.nextWithTimeout(5000)) |msg| {
+    defer msg.deinit();
+    std.debug.print("Received: {s}\n", .{msg.data});
+}
+```
+
+See [Examples](#examples) and the full [API Reference](#api-quick-reference)
+below for more patterns including request/reply, queue groups, headers,
+and async I/O.
 
 ## Examples
 
