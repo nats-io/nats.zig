@@ -52,10 +52,10 @@ const std = @import("std");
 const nats = @import("nats");
 
 const Handler = struct {
-    count: u32 = 0,
+    counter: *u32,
     pub fn onMessage(self: *@This(), msg: *const nats.Message) void {
-        self.count += 1;
-        std.debug.print("[{d}] {s}\n", .{ self.count, msg.data });
+        self.counter.* += 1;
+        std.debug.print("[{d}] {s}\n", .{ self.counter.*, msg.data });
     }
 };
 
@@ -68,7 +68,9 @@ pub fn main(init: std.process.Init) !void {
     );
     defer client.deinit();
 
-    var handler = Handler{};
+    // State lives in main — handler captures a pointer to it
+    var count: u32 = 0;
+    var handler = Handler{ .counter = &count };
     const sub = try client.subscribe(
         "greet.*",
         nats.MsgHandler.init(Handler, &handler),
@@ -77,6 +79,9 @@ pub fn main(init: std.process.Init) !void {
 
     try client.publish("greet.hello", "Hello, NATS!");
     init.io.sleep(.fromSeconds(1), .awake) catch {};
+
+    // Main sees the mutations made by the callback
+    std.debug.print("Total: {d}\n", .{count});
 }
 ```
 
