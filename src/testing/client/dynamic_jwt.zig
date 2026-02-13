@@ -317,7 +317,7 @@ pub fn testDynamicJwtPubSub(
 
     client.flush(500_000_000) catch {};
 
-    if (sub.nextWithTimeout(
+    if (sub.nextMsgTimeout(
         1000,
     ) catch null) |m| {
         defer m.deinit();

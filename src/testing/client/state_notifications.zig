@@ -31,7 +31,7 @@ pub fn testLastErrorInitialNull(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     // Initially should be null
-    const err = client.getLastError();
+    const err = client.lastError();
     if (err != null) {
         reportResult("last_error_initial", false, "expected null");
         return;
@@ -61,7 +61,7 @@ pub fn testClearLastError(allocator: std.mem.Allocator) void {
 
     // Clear and verify null
     client.clearLastError();
-    const err = client.getLastError();
+    const err = client.lastError();
     if (err != null) {
         reportResult("clear_last_error", false, "expected null after clear");
         return;
@@ -179,7 +179,7 @@ pub fn testSubscriptionCompleteEvent(allocator: std.mem.Allocator) void {
 
     // Receive messages to trigger the delivered count
     for (0..3) |_| {
-        const msg = sub.nextWithTimeout(500) catch break;
+        const msg = sub.nextMsgTimeout(500) catch break;
         if (msg) |m| {
             m.deinit();
         }

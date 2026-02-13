@@ -84,7 +84,7 @@ pub fn testMessageOrdering(allocator: std.mem.Allocator) void {
     var in_order = true;
     for (0..5) |expected| {
         var future = io.io().async(
-            nats.Client.Sub.next,
+            nats.Client.Sub.nextMsg,
             .{sub},
         );
         defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -144,7 +144,7 @@ pub fn testBinaryPayload(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -191,7 +191,7 @@ pub fn testLongSubjectName(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(1000) catch null) |m| {
+    if (sub.nextMsgTimeout(1000) catch null) |m| {
         m.deinit();
         reportResult("long_subject_name", true, "");
     } else {
@@ -230,7 +230,7 @@ pub fn testSubjectWithNumbersHyphens(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(1000) catch null) |m| {
+    if (sub.nextMsgTimeout(1000) catch null) |m| {
         m.deinit();
         reportResult("subject_nums_hyphens", true, "");
     } else {
@@ -459,7 +459,7 @@ pub fn testInterleavedPubSub(allocator: std.mem.Allocator) void {
             return;
         };
 
-        const msg = sub.nextWithTimeout(500) catch {
+        const msg = sub.nextMsgTimeout(500) catch {
             continue;
         };
         if (msg) |m| {
@@ -511,7 +511,7 @@ pub fn testReceiveOnlyAfterSubscribe(allocator: std.mem.Allocator) void {
 
     client.publish("timing.test", "after") catch {};
 
-    const msg = sub.nextWithTimeout(500) catch {
+    const msg = sub.nextMsgTimeout(500) catch {
         reportResult("receive_after_sub", false, "receive error");
         return;
     };
@@ -563,7 +563,7 @@ pub fn testDataIntegrityPattern(allocator: std.mem.Allocator) void {
         return;
     };
 
-    const msg = sub.nextWithTimeout(500) catch {
+    const msg = sub.nextMsgTimeout(500) catch {
         reportResult("data_integrity", false, "receive failed");
         return;
     };
@@ -615,7 +615,7 @@ pub fn testCompletePubSubRoundTrip(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit();
 
-    const before = client.getStats();
+    const before = client.stats();
 
     const test_data = "Test100-RoundTrip-Verification";
     client.publish("roundtrip.100", test_data) catch {
@@ -623,7 +623,7 @@ pub fn testCompletePubSubRoundTrip(allocator: std.mem.Allocator) void {
         return;
     };
 
-    const msg = sub.nextWithTimeout(1000) catch {
+    const msg = sub.nextMsgTimeout(1000) catch {
         reportResult("complete_roundtrip", false, "receive failed");
         return;
     };
@@ -646,7 +646,7 @@ pub fn testCompletePubSubRoundTrip(allocator: std.mem.Allocator) void {
         return;
     }
 
-    const after = client.getStats();
+    const after = client.stats();
 
     if (after.msgs_out <= before.msgs_out) {
         reportResult("complete_roundtrip", false, "msgs_out not updated");
@@ -692,7 +692,7 @@ pub fn testQueueExactCapacity(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..QUEUE_SIZE) |_| {
-        if (sub.nextWithTimeout(200) catch null) |m| {
+        if (sub.nextMsgTimeout(200) catch null) |m| {
             m.deinit();
             received += 1;
         } else break;
@@ -755,7 +755,7 @@ pub fn testQueueOverflow(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub_reader.nextWithTimeout(2000) catch null) |m| {
+    if (sub_reader.nextMsgTimeout(2000) catch null) |m| {
         m.deinit();
     } else {
         reportResult("queue_overflow", false, "reader timeout");
@@ -763,7 +763,7 @@ pub fn testQueueOverflow(allocator: std.mem.Allocator) void {
     }
 
     var received: u32 = 0;
-    while (sub_target.tryNext()) |m| {
+    while (sub_target.tryNextMsg()) |m| {
         m.deinit();
         received += 1;
     }
@@ -871,7 +871,7 @@ pub fn testLargePayloadHandling(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(5000) catch null) |m| {
+    if (sub.nextMsgTimeout(5000) catch null) |m| {
         defer m.deinit();
         if (m.data.len == payload_size) {
             reportResult("large_payload_handling", true, "");
@@ -927,7 +927,7 @@ pub fn testSubjectLengthBoundary(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(1000) catch null) |m| {
+    if (sub.nextMsgTimeout(1000) catch null) |m| {
         m.deinit();
         reportResult("subject_len_boundary", true, "");
     } else {
@@ -964,7 +964,7 @@ pub fn testZeroLengthPayload(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(1000) catch null) |m| {
+    if (sub.nextMsgTimeout(1000) catch null) |m| {
         defer m.deinit();
         if (m.data.len == 0) {
             reportResult("zero_len_payload", true, "");
@@ -1005,7 +1005,7 @@ pub fn testSingleBytePayload(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(1000) catch null) |m| {
+    if (sub.nextMsgTimeout(1000) catch null) |m| {
         defer m.deinit();
         if (m.data.len == 1 and m.data[0] == 'X') {
             reportResult("single_byte_payload", true, "");

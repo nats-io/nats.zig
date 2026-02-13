@@ -91,7 +91,7 @@ pub fn testNKeyPubSub(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(1000) catch null) |m| {
+    if (sub.nextMsgTimeout(1000) catch null) |m| {
         m.deinit();
         reportResult("nkey_pubsub", true, "");
     } else {

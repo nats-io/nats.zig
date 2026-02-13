@@ -58,7 +58,7 @@ pub fn testStress500Messages(allocator: std.mem.Allocator) void {
     var received: usize = 0;
     for (0..NUM_MSGS) |_| {
         var future = io.io().async(
-            nats.Client.Sub.next,
+            nats.Client.Sub.nextMsg,
             .{sub},
         );
         defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -112,7 +112,7 @@ pub fn testStress1000Messages(allocator: std.mem.Allocator) void {
 
     var received: usize = 0;
     for (0..NUM_MSGS) |_| {
-        if (sub.nextWithTimeout(100) catch null) |m| {
+        if (sub.nextMsgTimeout(100) catch null) |m| {
             m.deinit();
             received += 1;
         } else break;
@@ -162,7 +162,7 @@ pub fn testStress2000Messages(allocator: std.mem.Allocator) void {
 
     var received: usize = 0;
     for (0..NUM_MSGS) |_| {
-        if (sub.nextWithTimeout(100) catch null) |m| {
+        if (sub.nextMsgTimeout(100) catch null) |m| {
             m.deinit();
             received += 1;
         } else break;
@@ -214,7 +214,7 @@ pub fn testPayload30KB(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(3000) catch null) |m| {
+    if (sub.nextMsgTimeout(3000) catch null) |m| {
         defer m.deinit();
         if (m.data.len == 30 * 1024) {
             reportResult("payload_30kb", true, "");
@@ -314,7 +314,7 @@ pub fn testPayloadBoundary(allocator: std.mem.Allocator) void {
             break;
         };
 
-        const msg = sub.nextWithTimeout(2000) catch {
+        const msg = sub.nextMsgTimeout(2000) catch {
             all_passed = false;
             break;
         };

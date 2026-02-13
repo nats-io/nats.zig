@@ -41,7 +41,7 @@ pub const Client = @import("Client.zig");
 pub const Subscription = Client.Subscription;
 pub const Message = Client.Message;
 pub const Options = Client.Options;
-pub const Stats = Client.Stats;
+pub const Statistics = Client.Statistics;
 
 // Event callback types (nested in Client)
 pub const Event = Client.Event;

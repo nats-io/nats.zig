@@ -52,7 +52,7 @@ pub fn testTlsConnection(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     if (client.isConnected()) {
-        const info = client.getServerInfo();
+        const info = client.serverInfo();
         if (info != null and info.?.tls_required) {
             reportResult("tls_connection", true, "");
         } else {
@@ -130,7 +130,7 @@ pub fn testTlsPubSub(allocator: std.mem.Allocator) void {
 
     client.flush(500_000_000) catch {};
 
-    if (sub.nextWithTimeout(1000) catch null) |m| {
+    if (sub.nextMsgTimeout(1000) catch null) |m| {
         defer m.deinit();
         if (std.mem.eql(u8, m.data, test_msg)) {
             reportResult("tls_pubsub", true, "");
@@ -227,7 +227,7 @@ pub fn testTlsServerInfo(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const info = client.getServerInfo();
+    const info = client.serverInfo();
     if (info == null) {
         reportResult("tls_server_info", false, "no server info");
         return;
@@ -287,7 +287,7 @@ pub fn testTlsMultipleMessages(allocator: std.mem.Allocator) void {
 
     var received: usize = 0;
     for (0..msg_count) |_| {
-        if (sub.nextWithTimeout(100) catch null) |m| {
+        if (sub.nextMsgTimeout(100) catch null) |m| {
             m.deinit();
             received += 1;
         } else {

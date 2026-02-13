@@ -30,7 +30,7 @@ pub fn testClientStats(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const initial_stats = client.getStats();
+    const initial_stats = client.stats();
     if (initial_stats.msgs_out != 0) {
         reportResult("client_stats", false, "initial msgs_out != 0");
         return;
@@ -38,7 +38,7 @@ pub fn testClientStats(allocator: std.mem.Allocator) void {
 
     client.publish("async.stats", "test") catch {};
 
-    const stats = client.getStats();
+    const stats = client.stats();
     if (stats.msgs_out >= 1) {
         reportResult("client_stats", true, "");
     } else {
@@ -64,13 +64,13 @@ pub fn testStatsIncrement(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const before = client.getStats();
+    const before = client.stats();
 
     for (0..10) |_| {
         client.publish("async.stats.inc", "msg") catch {};
     }
 
-    const after = client.getStats();
+    const after = client.stats();
 
     if (after.msgs_out >= before.msgs_out + 10) {
         reportResult("stats_increment", true, "");
@@ -97,12 +97,12 @@ pub fn testStatsBytesAccuracy(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const before = client.getStats();
+    const before = client.stats();
 
     const payload = "0123456789" ** 10;
     client.publish("async.stats.bytes", payload) catch {};
 
-    const after = client.getStats();
+    const after = client.stats();
 
     if (after.bytes_out >= before.bytes_out + 100) {
         reportResult("stats_bytes", true, "");
@@ -135,7 +135,7 @@ pub fn testStatsMsgsIn(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit();
 
-    const before = client.getStats();
+    const before = client.stats();
 
     for (0..25) |_| {
         client.publish("msgsin.test", "data") catch {};
@@ -143,14 +143,14 @@ pub fn testStatsMsgsIn(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..30) |_| {
-        const msg = sub.nextWithTimeout(200) catch break;
+        const msg = sub.nextMsgTimeout(200) catch break;
         if (msg) |m| {
             m.deinit();
             received += 1;
         } else break;
     }
 
-    const after = client.getStats();
+    const after = client.stats();
     const msgs_in = after.msgs_in - before.msgs_in;
 
     if (msgs_in == 25 and received == 25) {
@@ -190,7 +190,7 @@ pub fn testStatsBytesIn(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit();
 
-    const before = client.getStats();
+    const before = client.stats();
 
     const payload = "01234567890123456789012345678901234567890123456789";
     for (0..10) |_| {
@@ -198,13 +198,13 @@ pub fn testStatsBytesIn(allocator: std.mem.Allocator) void {
     }
 
     for (0..15) |_| {
-        const msg = sub.nextWithTimeout(200) catch break;
+        const msg = sub.nextMsgTimeout(200) catch break;
         if (msg) |m| {
             m.deinit();
         } else break;
     }
 
-    const after = client.getStats();
+    const after = client.stats();
     const bytes_in = after.bytes_in - before.bytes_in;
 
     if (bytes_in == 500) {
@@ -238,7 +238,7 @@ pub fn testConnectsCounter(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const stats = client.getStats();
+    const stats = client.stats();
     if (stats.connects >= 1) {
         reportResult("stats_connects", true, "");
     } else {
@@ -271,7 +271,7 @@ pub fn testSubStats(allocator: std.mem.Allocator) void {
     defer sub.deinit();
 
     // Initially should have 0 pending
-    const initial = sub.getSubStats();
+    const initial = sub.subStats();
     if (initial.pending_msgs != 0) {
         reportResult("sub_stats", false, "initial pending != 0");
         return;
@@ -286,7 +286,7 @@ pub fn testSubStats(allocator: std.mem.Allocator) void {
     io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Check pending increased
-    const after = sub.getSubStats();
+    const after = sub.subStats();
     if (after.pending_msgs >= 5 or after.pending_bytes > 0) {
         reportResult("sub_stats", true, "");
     } else {
@@ -332,7 +332,7 @@ pub fn testPendingBytes(allocator: std.mem.Allocator) void {
 
     // Receive all messages
     for (0..10) |_| {
-        const msg = sub.nextWithTimeout(100) catch break;
+        const msg = sub.nextMsgTimeout(100) catch break;
         if (msg) |m| {
             m.deinit();
         } else break;
@@ -398,7 +398,7 @@ pub fn testMaxPending(allocator: std.mem.Allocator) void {
 
     // Receive all messages
     for (0..25) |_| {
-        const msg = sub.nextWithTimeout(100) catch break;
+        const msg = sub.nextMsgTimeout(100) catch break;
         if (msg) |m| {
             m.deinit();
         } else break;

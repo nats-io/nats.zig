@@ -1,8 +1,8 @@
 //! Batch Receiving Patterns
 //!
 //! Demonstrates efficient batch message retrieval:
-//! - nextBatch(): blocking batch receive (waits for at least 1 message)
-//! - tryNextBatch(): non-blocking batch receive for polling
+//! - nextMsgBatch(): blocking batch receive (waits for at least 1 message)
+//! - tryNextMsgBatch(): non-blocking batch receive for polling
 //! - Stats monitoring: track messages and detect drops
 //!
 //! Run with: zig build run-batch-receiving
@@ -58,7 +58,7 @@ pub fn main(init: std.process.Init) !void {
 
     while (total_received < message_count) {
         // nextBatch waits for at least 1 message, returns up to 32
-        const count = sub.nextBatch(io, &batch_buf) catch break;
+        const count = sub.nextMsgBatch(io, &batch_buf) catch break;
         batch_count += 1;
 
         for (batch_buf[0..count]) |*msg| {
@@ -67,7 +67,7 @@ pub fn main(init: std.process.Init) !void {
         }
 
         // Check for dropped messages
-        const dropped = sub.getDroppedCount();
+        const dropped = sub.dropped();
         if (dropped > 0) {
             std.debug.print(
                 "  Warning: {d} messages dropped (consumer too slow)\n",
@@ -105,7 +105,7 @@ pub fn main(init: std.process.Init) !void {
     io.sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Non-blocking batch receive
-    const available = sub.tryNextBatch(&batch_buf);
+    const available = sub.tryNextMsgBatch(&batch_buf);
     std.debug.print("  tryNextBatch returned {d} messages immediately\n", .{available});
 
     for (batch_buf[0..available]) |*msg| {
@@ -116,9 +116,9 @@ pub fn main(init: std.process.Init) !void {
     // STATS SUMMARY
     std.debug.print("\nStats summary:\n", .{});
     std.debug.print("  Messages received: {d}\n", .{sub.received_msgs});
-    std.debug.print("  Messages dropped: {d}\n", .{sub.getDroppedCount()});
+    std.debug.print("  Messages dropped: {d}\n", .{sub.dropped()});
 
-    const stats = client.getStats();
+    const stats = client.stats();
     std.debug.print("  Total bytes out: {d}\n", .{stats.bytes_out});
     std.debug.print("  Total bytes in: {d}\n", .{stats.bytes_in});
 

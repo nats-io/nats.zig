@@ -126,7 +126,7 @@ defer sub.deinit();
 
 try client.publish("greet.hello", "Hello, NATS!");
 
-if (try sub.nextWithTimeout(5000)) |msg| {
+if (try sub.nextMsgTimeout(5000)) |msg| {
     defer msg.deinit();
     std.debug.print("Received: {s}\n", .{msg.data});
 }
@@ -145,9 +145,9 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 | simple | `run-simple` | Basic pub/sub - connect, `subscribeSync`, publish, receive |
 | request_reply | `run-request-reply` | RPC pattern with automatic inbox handling |
 | queue_groups | `run-queue-groups` | Load-balanced workers with `io.concurrent()` |
-| polling_loop | `run-polling-loop` | Non-blocking `tryNext()` with priority scheduling |
+| polling_loop | `run-polling-loop` | Non-blocking `tryNextMsg()` with priority scheduling |
 | select | `run-select` | Race subscription against timeout with `io.select()` |
-| batch_receiving | `run-batch-receiving` | `nextBatch()` for bulk receives, stats monitoring |
+| batch_receiving | `run-batch-receiving` | `nextMsgBatch()` for bulk receives, stats monitoring |
 | reconnection | `run-reconnection` | Auto-reconnect, backoff, buffer during disconnect |
 | events | `run-events` | EventHandler callbacks with external state |
 | callback | `run-callback` | `subscribe()` and `subscribeFn()` callback subscriptions |
@@ -173,11 +173,11 @@ Ports of [natsbyexample.com](https://natsbyexample.com) examples.
 
 ## Memory Ownership
 
-Messages returned by `next()`, `tryNext()`, and `nextWithTimeout()` are **owned**.
+Messages returned by `nextMsg()`, `tryNextMsg()`, and `nextMsgTimeout()` are **owned**.
 You **must** call `deinit()` to free memory:
 
 ```zig
-const msg = try sub.next();
+const msg = try sub.nextMsg();
 defer msg.deinit();
 
 // Access message fields (valid until deinit)
@@ -293,7 +293,7 @@ defer sub.deinit();
 receives each message):
 
 ```zig
-const sub = try client.subscribeQueue(
+const sub = try client.queueSubscribe(
     "tasks.*",
     "workers",
     handler,
@@ -303,17 +303,17 @@ const sub = try client.subscribeQueue(
 | Method | Handler | Queue Group |
 |--------|---------|-------------|
 | `subscribe` | MsgHandler | No |
-| `subscribeQueue` | MsgHandler | Yes |
+| `queueSubscribe` | MsgHandler | Yes |
 | `subscribeFn` | plain fn | No |
-| `subscribeFnQueue` | plain fn | Yes |
+| `queueSubscribeFn` | plain fn | Yes |
 
-> **Warning:** Do not call `next()`, `tryNext()`, or other receive methods on
+> **Warning:** Do not call `nextMsg()`, `tryNextMsg()`, or other receive methods on
 > a callback subscription. They assert `mode == .manual` and will trap.
 
 ### Subscribe Sync (Manual Receive)
 
 For manual control over message receiving, use `subscribeSync()`. You call
-`next()`, `tryNext()`, or `nextBatch()` yourself:
+`nextMsg()`, `tryNextMsg()`, or `nextMsgBatch()` yourself:
 
 ```zig
 const sub = try client.subscribeSync("events.>");
@@ -324,7 +324,7 @@ defer sub.deinit();
 // > matches remainder: "events.>" matches "events.click" and "events.user.login"
 
 while (true) {
-    const msg = try sub.next();
+    const msg = try sub.nextMsg();
     defer msg.deinit();
     std.debug.print("{s}: {s}\n", .{ msg.subject, msg.data });
 }
@@ -333,8 +333,8 @@ while (true) {
 **Queue group** variant:
 
 ```zig
-const sub1 = try client.subscribeSyncQueue("tasks.*", "workers");
-const sub2 = try client.subscribeSyncQueue("tasks.*", "workers");
+const sub1 = try client.queueSubscribeSync("tasks.*", "workers");
+const sub2 = try client.queueSubscribeSync("tasks.*", "workers");
 // Message goes to either sub1 OR sub2, not both
 ```
 
@@ -401,11 +401,11 @@ sub.deinit();  // Still needed to free memory
 
 ### Receiving Messages
 
-**Blocking:** `next()` blocks until a message arrives. For use in dedicated receiver loops:
+**Blocking:** `nextMsg()` blocks until a message arrives. For use in dedicated receiver loops:
 
 ```zig
 while (true) {
-    const msg = try sub.next();
+    const msg = try sub.nextMsg();
     defer msg.deinit();  // ALWAYS defer deinit
 
     std.debug.print("Subject: {s}\n", .{msg.subject});
@@ -416,21 +416,21 @@ while (true) {
 }
 ```
 
-**Non-Blocking:** `tryNext()` returns immediately. Use for event loops or polling:
+**Non-Blocking:** `tryNextMsg()` returns immediately. Use for event loops or polling:
 
 ```zig
 // Process all available messages without waiting
-while (sub.tryNext()) |msg| {
+while (sub.tryNextMsg()) |msg| {
     defer msg.deinit();
     processMessage(msg);
 }
 // No more messages - continue with other work
 ```
 
-**With Timeout:** `nextWithTimeout()` returns `null` on timeout:
+**With Timeout:** `nextMsgTimeout()` returns `null` on timeout:
 
 ```zig
-if (try sub.nextWithTimeout(5000)) |msg| {
+if (try sub.nextMsgTimeout(5000)) |msg| {
     defer msg.deinit();
     std.debug.print("Got: {s}\n", .{msg.data});
 } else {
@@ -438,20 +438,20 @@ if (try sub.nextWithTimeout(5000)) |msg| {
 }
 ```
 
-**Batch:** `nextBatch()` / `tryNextBatch()` receive multiple messages at once:
+**Batch:** `nextMsgBatch()` / `tryNextMsgBatch()` receive multiple messages at once:
 
 ```zig
 var buf: [64]Message = undefined;
 
 // Blocking - waits for at least 1 message, returns up to 64
-const count = try sub.nextBatch(io, &buf);
+const count = try sub.nextMsgBatch(io, &buf);
 for (buf[0..count]) |*msg| {
     defer msg.deinit();
     processMessage(msg.*);
 }
 
 // Non-blocking - returns immediately with available messages
-const available = sub.tryNextBatch(&buf);
+const available = sub.tryNextMsgBatch(&buf);
 for (buf[0..available]) |*msg| {
     defer msg.deinit();
     processMessage(msg.*);
@@ -462,11 +462,11 @@ for (buf[0..available]) |*msg| {
 
 | Method | Blocks | Returns | Use Case |
 |--------|--------|---------|----------|
-| `next()` | Yes | `!Message` | Dedicated receiver loop |
-| `tryNext()` | No | `?Message` | Polling, event loops |
-| `nextWithTimeout()` | Yes (bounded) | `!?Message` | Request/reply, timed waits |
-| `nextBatch()` | Yes | `!usize` | High-throughput batching |
-| `tryNextBatch()` | No | `usize` | Drain queue without blocking |
+| `nextMsg()` | Yes | `!Message` | Dedicated receiver loop |
+| `tryNextMsg()` | No | `?Message` | Polling, event loops |
+| `nextMsgTimeout()` | Yes (bounded) | `!?Message` | Request/reply, timed waits |
+| `nextMsgBatch()` | Yes | `!usize` | High-throughput batching |
+| `tryNextMsgBatch()` | No | `usize` | Drain queue without blocking |
 
 ### Subscription Control
 
@@ -480,7 +480,7 @@ try sub.autoUnsubscribe(10);
 
 // Process messages (subscription closes after 10th)
 while (sub.isValid()) {
-    if (sub.tryNext()) |msg| {
+    if (sub.tryNextMsg()) |msg| {
         defer msg.deinit();
         processMessage(msg);
     }
@@ -537,7 +537,7 @@ const service = try client.subscribeSync("math.double");
 defer service.deinit();
 
 while (true) {
-    const req = try service.next();
+    const req = try service.nextMsg();
     defer req.deinit();
 
     // Parse request
@@ -559,7 +559,7 @@ while (true) {
 Convenience method for the request/reply pattern:
 
 ```zig
-const msg = try sub.next();
+const msg = try sub.nextMsg();
 defer msg.deinit();
 
 // Respond using the message's reply_to (auto-flushed)
@@ -586,7 +586,7 @@ defer reply_sub.deinit();
 try client.publishRequest("service", inbox, "request data");
 
 // Wait for response with timeout
-if (try reply_sub.nextWithTimeout(5000)) |reply| {
+if (try reply_sub.nextMsgTimeout(5000)) |reply| {
     defer reply.deinit();
     // Process reply
 } else {
@@ -608,7 +608,7 @@ if (reply) |msg| {
         std.debug.print("No responders for request\n", .{});
     } else {
         // Normal response - check status code if needed
-        if (msg.getStatus()) |status| {
+        if (msg.status()) |status| {
             std.debug.print("Status: {d}\n", .{status});
         }
     }
@@ -670,7 +670,7 @@ if (try client.requestWithHeaders("service.api", &hdrs, "data", 5000)) |reply| {
 ### Receiving and Parsing Headers
 
 ```zig
-const msg = try sub.next();
+const msg = try sub.nextMsg();
 defer msg.deinit();
 
 if (msg.headers) |raw_headers| {
@@ -787,7 +787,7 @@ fn sleepMs(io_ctx: std.Io, ms: i64) void {
     io_ctx.sleep(.fromMilliseconds(ms), .awake) catch {};
 }
 
-var recv_future = io.async(nats.Client.Sub.next, .{sub});
+var recv_future = io.async(nats.Client.Sub.nextMsg, .{sub});
 var timeout_future = io.async(sleepMs, .{ io, 5000 });
 
 const result = io.select(.{
@@ -818,7 +818,7 @@ switch (result) {
 When using `io.async()` to receive messages, handle ownership carefully:
 
 ```zig
-var future = io.async(nats.Client.Sub.next, .{sub});
+var future = io.async(nats.Client.Sub.nextMsg, .{sub});
 defer if (future.cancel(io)) |m| m.deinit() else |_| {};
 
 if (future.await(io)) |msg| {
@@ -857,7 +857,7 @@ var queue: Io.Queue(WorkResult) = .init(&queue_buf);
 // Worker thread: push results
 fn worker(io: Io, sub: *Sub, q: *Io.Queue(WorkResult)) void {
     while (true) {
-        const msg = sub.next() catch return;
+        const msg = sub.nextMsg() catch return;
         q.putOne(io, .{ .worker_id = 1, .msg = msg }) catch return;
     }
 }
@@ -999,7 +999,7 @@ All callbacks are **optional** - only implement the ones you need.
 ```zig
 const State = @import("nats").connection.State;
 
-const status = client.getStatus();
+const status = client.status();
 switch (status) {
     .connected => std.debug.print("Connected\n", .{}),
     .reconnecting => std.debug.print("Reconnecting...\n", .{}),
@@ -1021,33 +1021,33 @@ const num_subs = client.numSubscriptions();
 
 ```zig
 // Server details (from INFO response)
-if (client.getConnectedUrl()) |url| {
+if (client.connectedUrl()) |url| {
     std.debug.print("Connected to: {s}\n", .{url});
 }
-if (client.getConnectedServerId()) |id| {
+if (client.connectedServerId()) |id| {
     std.debug.print("Server ID: {s}\n", .{id});
 }
-if (client.getConnectedServerName()) |name| {
+if (client.connectedServerName()) |name| {
     std.debug.print("Server name: {s}\n", .{name});
 }
-if (client.getConnectedServerVersion()) |version| {
+if (client.connectedServerVersion()) |version| {
     std.debug.print("Server version: {s}\n", .{version});
 }
 
 // Payload and feature info
-const max_payload = client.getMaxPayload();
+const max_payload = client.maxPayload();
 const supports_headers = client.headersSupported();
 
 // Server pool (for cluster connections)
-const server_count = client.getServerCount();
+const server_count = client.serverCount();
 for (0..server_count) |i| {
-    if (client.getServerUrl(@intCast(i))) |url| {
+    if (client.serverUrl(@intCast(i))) |url| {
         std.debug.print("Known server: {s}\n", .{url});
     }
 }
 
 // RTT measurement
-const rtt_ns = try client.getRtt();
+const rtt_ns = try client.rtt();
 const rtt_ms = @as(f64, @floatFromInt(rtt_ns)) / 1_000_000.0;
 std.debug.print("RTT: {d:.2}ms\n", .{rtt_ms});
 ```
@@ -1057,7 +1057,7 @@ std.debug.print("RTT: {d:.2}ms\n", .{rtt_ms});
 Monitor throughput and connection health:
 
 ```zig
-const stats = client.getStats();
+const stats = client.stats();
 std.debug.print("Messages: in={d} out={d}\n", .{stats.msgs_in, stats.msgs_out});
 std.debug.print("Bytes: in={d} out={d}\n", .{stats.bytes_in, stats.bytes_out});
 std.debug.print("Reconnects: {d}\n", .{stats.reconnects});
@@ -1111,11 +1111,11 @@ When messages arrive faster than you process them, the queue fills up and messag
 
 ```zig
 while (true) {
-    const msg = try sub.next();
+    const msg = try sub.nextMsg();
     defer msg.deinit();
 
     // Check for dropped messages periodically
-    const dropped = sub.getDroppedCount();
+    const dropped = sub.dropped();
     if (dropped > 0) {
         std.log.warn("Dropped {d} messages - consumer too slow", .{dropped});
     }
@@ -1438,7 +1438,7 @@ if (client.checkCompatibility(2, 10, 0)) {
 }
 
 // Get the actual version string
-if (client.getConnectedServerVersion()) |version| {
+if (client.connectedServerVersion()) |version| {
     std.debug.print("Connected to NATS {s}\n", .{version});
 }
 ```
@@ -1453,22 +1453,22 @@ if (client.getConnectedServerVersion()) |version| {
 | Publish with reply-to | `client.publishRequest(subject, reply_to, data)` | `!void` |
 | Flush buffer to socket | `client.flushBuffer()` | `!void` |
 | Subscribe | `client.subscribeSync(subject)` | `!*Sub` |
-| Queue subscribe (sync) | `client.subscribeSyncQueue(subject, group)` | `!*Sub` |
+| Queue subscribe (sync) | `client.queueSubscribeSync(subject, group)` | `!*Sub` |
 | Callback subscribe | `client.subscribe(subject, handler)` | `!*Sub` |
-| Callback queue sub | `client.subscribeQueue(subject, group, handler)` | `!*Sub` |
+| Callback queue sub | `client.queueSubscribe(subject, group, handler)` | `!*Sub` |
 | Callback fn sub | `client.subscribeFn(subject, fn)` | `!*Sub` |
-| Callback fn queue sub | `client.subscribeFnQueue(subject, group, fn)` | `!*Sub` |
+| Callback fn queue sub | `client.queueSubscribeFn(subject, group, fn)` | `!*Sub` |
 | Unsubscribe | `sub.unsubscribe()` | `!void` |
 | Free subscription | `sub.deinit()` | `void` |
 | Request/reply | `client.request(subject, data, timeout_ms)` | `!?Message` |
 | Publish with headers | `client.publishWithHeaders(subject, hdrs, data)` | `!void` |
 | Publish+reply+headers | `client.publishRequestWithHeaders(subject, reply, hdrs, data)` | `!void` |
 | Request with headers | `client.requestWithHeaders(subject, hdrs, data, timeout_ms)` | `!?Message` |
-| Receive (blocking) | `sub.next()` | `!Message` |
-| Receive (non-blocking) | `sub.tryNext()` | `?Message` |
-| Receive (with timeout) | `sub.nextWithTimeout(timeout_ms)` | `!?Message` |
-| Batch receive | `sub.nextBatch(io, buf)` | `!usize` |
-| Check drops | `sub.getDroppedCount()` | `u64` |
+| Receive (blocking) | `sub.nextMsg()` | `!Message` |
+| Receive (non-blocking) | `sub.tryNextMsg()` | `?Message` |
+| Receive (with timeout) | `sub.nextMsgTimeout(timeout_ms)` | `!?Message` |
+| Batch receive | `sub.nextMsgBatch(io, buf)` | `!usize` |
+| Check drops | `sub.dropped()` | `u64` |
 | Auto-unsubscribe | `sub.autoUnsubscribe(max_msgs)` | `!void` |
 | Check pending | `sub.pending()` | `usize` |
 | Check pending bytes | `sub.pendingBytes()` | `u64` |
@@ -1477,20 +1477,20 @@ if (client.getConnectedServerVersion()) |version| {
 | Check sub draining | `sub.isDraining()` | `bool` |
 | Get subscription ID | `sub.getSid()` | `u64` |
 | Get subject | `sub.getSubject()` | `[]const u8` |
-| Get queue group | `sub.getQueueGroup()` | `?[]const u8` |
+| Get queue group | `sub.queueGroup()` | `?[]const u8` |
 | Set pending limits | `sub.setPendingLimits(msg_limit)` | `void` |
-| Get pending limits | `sub.getPendingLimits()` | `usize` |
-| Subscription stats | `sub.getSubStats()` | `SubStats` |
+| Get pending limits | `sub.pendingLimits()` | `usize` |
+| Subscription stats | `sub.subStats()` | `SubStats` |
 | Respond to message | `msg.respond(client, data)` | `!void` |
 | Message size | `msg.size()` | `usize` |
 | No-responders check | `msg.isNoResponders()` | `bool` |
-| Status code | `msg.getStatus()` | `?u16` |
+| Status code | `msg.status()` | `?u16` |
 | Create inbox | `client.newInbox()` | `![]u8` |
-| Connection status | `client.getStatus()` | `State` |
-| Connection stats | `client.getStats()` | `Stats` |
-| Server RTT | `client.getRtt()` | `!u64` |
-| Server URL | `client.getConnectedUrl()` | `?[]const u8` |
-| Server ID | `client.getConnectedServerId()` | `?[]const u8` |
+| Connection status | `client.status()` | `State` |
+| Connection stats | `client.stats()` | `Statistics` |
+| Server RTT | `client.rtt()` | `!u64` |
+| Server URL | `client.connectedUrl()` | `?[]const u8` |
+| Server ID | `client.connectedServerId()` | `?[]const u8` |
 | Flush confirmed | `client.flush(timeout_ns)` | `!void` |
 | Force reconnect | `client.forceReconnect()` | `!void` |
 | Generate NKey keypair | `auth.KeyPair.generate(io, key_type)` | `KeyPair` |

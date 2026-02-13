@@ -73,7 +73,7 @@ pub fn testAuthenticatedPubSub(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(1000) catch null) |m| {
+    if (sub.nextMsgTimeout(1000) catch null) |m| {
         m.deinit();
         reportResult("auth_pubsub", true, "");
     } else {
@@ -197,7 +197,7 @@ pub fn testAuthRequiredDetection(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const info = client.getServerInfo();
+    const info = client.serverInfo();
     if (info == null) {
         reportResult("auth_required_detect", false, "no server info");
         return;

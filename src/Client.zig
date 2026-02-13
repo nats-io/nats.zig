@@ -5,7 +5,7 @@
 //!
 //! Key features:
 //! - Dedicated reader task routes messages to per-subscription Io.Queue
-//! - Multiple subscriptions can call next() concurrently
+//! - Multiple subscriptions can call nextMsg() concurrently
 //! - Reader task starts automatically on connect
 //! - Colorblind async: works blocking or async based on Io implementation
 //!
@@ -156,7 +156,7 @@ pub const Message = struct {
     /// Extracts HTTP-like status code from headers (on-demand parsing).
     /// Returns null if no headers or no status code present.
     /// Common codes: 503 (no responders), 408 (timeout), 404 (not found).
-    pub fn getStatus(self: *const Message) ?u16 {
+    pub fn status(self: *const Message) ?u16 {
         const hdrs = self.headers orelse return null;
         return headers.extractStatus(hdrs);
     }
@@ -164,7 +164,7 @@ pub const Message = struct {
     /// Returns true if this is a no-responders message (status 503).
     /// Used to detect when a request has no available responders.
     pub fn isNoResponders(self: *const Message) bool {
-        return self.getStatus() == 503;
+        return self.status() == 503;
     }
 };
 
@@ -316,7 +316,7 @@ pub const Options = struct {
 /// Thread ownership: io_task exclusively writes msgs_in/bytes_in,
 /// main thread exclusively writes msgs_out/bytes_out. No concurrent
 /// modifications to same counter, so atomics are not needed.
-pub const Stats = struct {
+pub const Statistics = struct {
     /// Total messages received (written by io_task only).
     msgs_in: u64 = 0,
     /// Total messages sent (written by main thread only).
@@ -360,7 +360,7 @@ pub const SubBackup = struct {
     }
 
     /// Get queue group as optional slice.
-    pub fn getQueueGroup(self: *const SubBackup) ?[]const u8 {
+    pub fn queueGroup(self: *const SubBackup) ?[]const u8 {
         if (self.queue_group_len == 0) return null;
         return self.queue_group_buf[0..self.queue_group_len];
     }
@@ -488,7 +488,7 @@ sub_ptrs: [MAX_SUBSCRIPTIONS]?*Sub = [_]?*Sub{null} ** MAX_SUBSCRIPTIONS,
 free_count: u16 = MAX_SUBSCRIPTIONS,
 next_sid: u64 = 1,
 read_mutex: Io.Mutex = .init,
-stats: Stats = .{},
+statistics: Statistics = .{},
 
 // Connection diagnostics
 tcp_nodelay_set: bool = false,
@@ -613,7 +613,7 @@ pub fn connect(
     client.free_count = MAX_SUBSCRIPTIONS;
     client.next_sid = 1;
     client.read_mutex = .init;
-    client.stats = .{};
+    client.statistics = .{};
     client.cached_sub = null;
     client.max_payload = 1024 * 1024;
 
@@ -1138,7 +1138,7 @@ fn handshake(
                 self.server_info = parsed_info;
                 self.max_payload = parsed_info.max_payload;
                 self.state = .connected;
-                self.stats.connects += 1;
+                self.statistics.connects += 1;
             },
             else => return error.UnexpectedCommand,
         }
@@ -1394,7 +1394,7 @@ pub fn subscribeSync(
     self: *Client,
     subject: []const u8,
 ) !*Sub {
-    return self.subscribeSyncQueue(subject, null);
+    return self.queueSubscribeSync(subject, null);
 }
 
 /// Subscribes with queue group for load balancing.
@@ -1405,7 +1405,7 @@ pub fn subscribeSync(
 ///
 /// Queue groups allow multiple subscribers to share the message load.
 /// Only one subscriber in the group receives each message.
-pub fn subscribeSyncQueue(
+pub fn queueSubscribeSync(
     self: *Client,
     subject: []const u8,
     queue_group: ?[]const u8,
@@ -1513,13 +1513,13 @@ pub fn subscribeSyncQueue(
 /// Messages are dispatched to handler.onMessage() automatically.
 /// The drain task frees each message after dispatch.
 ///
-/// Do NOT call next()/tryNext() on the returned subscription.
+/// Do NOT call nextMsg()/tryNextMsg() on the returned subscription.
 pub fn subscribe(
     self: *Client,
     subject: []const u8,
     handler: MsgHandler,
 ) !*Sub {
-    return self.subscribeQueue(
+    return self.queueSubscribe(
         subject,
         null,
         handler,
@@ -1527,13 +1527,13 @@ pub fn subscribe(
 }
 
 /// Subscribes with a MsgHandler callback and queue group.
-pub fn subscribeQueue(
+pub fn queueSubscribe(
     self: *Client,
     subject: []const u8,
     queue_group: ?[]const u8,
     handler: MsgHandler,
 ) !*Sub {
-    const sub = try self.subscribeSyncQueue(
+    const sub = try self.queueSubscribeSync(
         subject,
         queue_group,
     );
@@ -1553,7 +1553,7 @@ pub fn subscribeFn(
     subject: []const u8,
     cb: *const fn (*const Message) void,
 ) !*Sub {
-    return self.subscribeFnQueue(
+    return self.queueSubscribeFn(
         subject,
         null,
         cb,
@@ -1561,13 +1561,13 @@ pub fn subscribeFn(
 }
 
 /// Subscribes with a plain function callback and queue group.
-pub fn subscribeFnQueue(
+pub fn queueSubscribeFn(
     self: *Client,
     subject: []const u8,
     queue_group: ?[]const u8,
     cb: *const fn (*const Message) void,
 ) !*Sub {
-    const sub = try self.subscribeSyncQueue(
+    const sub = try self.queueSubscribeSync(
         subject,
         queue_group,
     );
@@ -1613,8 +1613,8 @@ pub fn publish(
         return error.EncodingFailed;
     };
 
-    self.stats.msgs_out += 1;
-    self.stats.bytes_out += payload.len;
+    self.statistics.msgs_out += 1;
+    self.statistics.bytes_out += payload.len;
     self.flush_requested.store(true, .release);
 }
 
@@ -1648,8 +1648,8 @@ pub fn publishRequest(
         return error.EncodingFailed;
     };
 
-    self.stats.msgs_out += 1;
-    self.stats.bytes_out += payload.len;
+    self.statistics.msgs_out += 1;
+    self.statistics.bytes_out += payload.len;
     self.flush_requested.store(true, .release);
 }
 
@@ -1692,8 +1692,8 @@ pub fn publishWithHeaders(
         return error.EncodingFailed;
     };
 
-    self.stats.msgs_out += 1;
-    self.stats.bytes_out += payload.len;
+    self.statistics.msgs_out += 1;
+    self.statistics.bytes_out += payload.len;
     self.flush_requested.store(true, .release);
 }
 
@@ -1739,8 +1739,8 @@ pub fn publishRequestWithHeaders(
         return error.EncodingFailed;
     };
 
-    self.stats.msgs_out += 1;
-    self.stats.bytes_out += payload.len;
+    self.statistics.msgs_out += 1;
+    self.statistics.bytes_out += payload.len;
     self.flush_requested.store(true, .release);
 }
 
@@ -1786,8 +1786,8 @@ pub fn publishWithHeaderMap(
         return error.EncodingFailed;
     };
 
-    self.stats.msgs_out += 1;
-    self.stats.bytes_out += payload.len;
+    self.statistics.msgs_out += 1;
+    self.statistics.bytes_out += payload.len;
     self.flush_requested.store(true, .release);
 }
 
@@ -1834,8 +1834,8 @@ pub fn publishMsg(self: *Client, msg: *const Message) !void {
         }) catch return error.EncodingFailed;
     }
 
-    self.stats.msgs_out += 1;
-    self.stats.bytes_out += msg.data.len;
+    self.statistics.msgs_out += 1;
+    self.statistics.bytes_out += msg.data.len;
     self.flush_requested.store(true, .release);
 }
 
@@ -1882,7 +1882,7 @@ pub fn requestWithHeaders(
 
     // Wait for reply using io.select()
     var response_future = self.io.async(
-        Subscription.next,
+        Subscription.nextMsg,
         .{sub},
     );
     var timeout_future = self.io.async(
@@ -2154,7 +2154,7 @@ pub fn request(
 
     // Wait for reply using io.select()
     var response_future = self.io.async(
-        Subscription.next,
+        Subscription.nextMsg,
         .{sub},
     );
     var timeout_future = self.io.async(
@@ -2251,8 +2251,8 @@ pub fn requestMsg(
             }) catch return error.EncodingFailed;
         }
 
-        self.stats.msgs_out += 1;
-        self.stats.bytes_out += msg.data.len;
+        self.statistics.msgs_out += 1;
+        self.statistics.bytes_out += msg.data.len;
 
         // Signal auto-flush to send request promptly
         self.flush_requested.store(true, .release);
@@ -2260,7 +2260,7 @@ pub fn requestMsg(
 
     // Wait for reply using io.select()
     var response_future = self.io.async(
-        Subscription.next,
+        Subscription.nextMsg,
         .{sub},
     );
     var timeout_future = self.io.async(
@@ -2355,7 +2355,7 @@ pub fn drain(self: *Client) !DrainResult {
     var result: DrainResult = .{};
     const writer = self.active_writer;
 
-    // Acquire mutex for subscription cleanup (prevents races with next())
+    // Acquire mutex for subscription cleanup (prevents races with nextMsg())
     self.read_mutex.lockUncancelable(self.io);
 
     // Unsubscribe all active subscriptions
@@ -2437,13 +2437,13 @@ pub fn isConnected(self: *const Client) bool {
 }
 
 /// Returns connection statistics.
-pub fn getStats(self: *const Client) Stats {
+pub fn stats(self: *const Client) Statistics {
     assert(self.next_sid >= 1);
-    return self.stats;
+    return self.statistics;
 }
 
 /// Returns server info.
-pub fn getServerInfo(self: *const Client) ?*const ServerInfo {
+pub fn serverInfo(self: *const Client) ?*const ServerInfo {
     assert(self.next_sid >= 1);
     if (self.server_info) |*info| {
         return info;
@@ -2471,7 +2471,7 @@ pub fn isTcpRcvBufSet(self: *const Client) bool {
 
 /// Returns the currently connected server URL.
 /// Returns the original URL used to connect, or null if not connected.
-pub fn getConnectedUrl(self: *const Client) ?[]const u8 {
+pub fn connectedUrl(self: *const Client) ?[]const u8 {
     assert(self.next_sid >= 1);
     if (self.original_url_len == 0) return null;
     return self.original_url[0..self.original_url_len];
@@ -2479,7 +2479,7 @@ pub fn getConnectedUrl(self: *const Client) ?[]const u8 {
 
 /// Returns the connected server's unique ID.
 /// This is the `server_id` from the INFO response.
-pub fn getConnectedServerId(self: *const Client) ?[]const u8 {
+pub fn connectedServerId(self: *const Client) ?[]const u8 {
     assert(self.next_sid >= 1);
     if (self.server_info) |info| {
         if (info.server_id.len > 0) return info.server_id;
@@ -2489,7 +2489,7 @@ pub fn getConnectedServerId(self: *const Client) ?[]const u8 {
 
 /// Returns the connected server's name.
 /// This is the `server_name` from the INFO response.
-pub fn getConnectedServerName(self: *const Client) ?[]const u8 {
+pub fn connectedServerName(self: *const Client) ?[]const u8 {
     assert(self.next_sid >= 1);
     if (self.server_info) |info| {
         if (info.server_name.len > 0) return info.server_name;
@@ -2499,7 +2499,7 @@ pub fn getConnectedServerName(self: *const Client) ?[]const u8 {
 
 /// Returns the connected server's version string.
 /// This is the `version` from the INFO response (e.g., "2.10.0").
-pub fn getConnectedServerVersion(self: *const Client) ?[]const u8 {
+pub fn connectedServerVersion(self: *const Client) ?[]const u8 {
     assert(self.next_sid >= 1);
     if (self.server_info) |info| {
         if (info.version.len > 0) return info.version;
@@ -2525,7 +2525,7 @@ pub fn checkCompatibility(
     min_patch: u16,
 ) bool {
     assert(self.next_sid >= 1);
-    const version = self.getConnectedServerVersion() orelse return false;
+    const version = self.connectedServerVersion() orelse return false;
 
     // Parse version string (e.g., "2.10.0" or "2.10.0-beta")
     var parts = std.mem.splitScalar(u8, version, '.');
@@ -2556,7 +2556,7 @@ pub fn checkCompatibility(
 
 /// Returns the maximum payload size allowed by the server.
 /// Defaults to 1MB if not yet connected.
-pub fn getMaxPayload(self: *const Client) usize {
+pub fn maxPayload(self: *const Client) usize {
     assert(self.next_sid >= 1);
     return self.max_payload;
 }
@@ -2572,7 +2572,7 @@ pub fn headersSupported(self: *const Client) bool {
 
 /// Returns the number of known servers in the connection pool.
 /// This includes the original server and any discovered via cluster INFO.
-pub fn getServerCount(self: *const Client) u8 {
+pub fn serverCount(self: *const Client) u8 {
     assert(self.next_sid >= 1);
     if (self.server_pool_initialized) {
         return self.server_pool.serverCount();
@@ -2581,8 +2581,8 @@ pub fn getServerCount(self: *const Client) u8 {
 }
 
 /// Returns a server URL from the pool at the given index.
-/// Use with getServerCount() to iterate all known servers.
-pub fn getServerUrl(self: *const Client, index: u8) ?[]const u8 {
+/// Use with serverCount() to iterate all known servers.
+pub fn serverUrl(self: *const Client, index: u8) ?[]const u8 {
     assert(self.next_sid >= 1);
     if (!self.server_pool_initialized) return null;
     if (index >= self.server_pool.count) return null;
@@ -2591,7 +2591,7 @@ pub fn getServerUrl(self: *const Client, index: u8) ?[]const u8 {
 
 /// Returns the count of discovered servers from cluster INFO.
 /// These are additional servers beyond the original connection URL.
-pub fn getDiscoveredServerCount(self: *const Client) u8 {
+pub fn discoveredServerCount(self: *const Client) u8 {
     assert(self.next_sid >= 1);
     if (self.server_info) |info| {
         return info.connect_urls_count;
@@ -2600,8 +2600,8 @@ pub fn getDiscoveredServerCount(self: *const Client) u8 {
 }
 
 /// Returns a discovered server URL at the given index.
-/// Use with getDiscoveredServerCount() to iterate discovered servers.
-pub fn getDiscoveredServerUrl(self: *const Client, index: u8) ?[]const u8 {
+/// Use with discoveredServerCount() to iterate discovered servers.
+pub fn discoveredServerUrl(self: *const Client, index: u8) ?[]const u8 {
     assert(self.next_sid >= 1);
     if (self.server_info) |info| {
         return info.getConnectUrl(index);
@@ -2611,7 +2611,7 @@ pub fn getDiscoveredServerUrl(self: *const Client, index: u8) ?[]const u8 {
 
 /// Returns the connected server's cluster name.
 /// This is the `cluster` from the INFO response.
-pub fn getConnectedClusterName(self: *const Client) ?[]const u8 {
+pub fn connectedClusterName(self: *const Client) ?[]const u8 {
     assert(self.next_sid >= 1);
     if (self.server_info) |info| {
         return info.cluster;
@@ -2641,14 +2641,14 @@ pub fn tlsRequired(self: *const Client) bool {
 
 /// Returns the client name from options.
 /// This is the name used in the CONNECT command.
-pub fn getName(self: *const Client) ?[]const u8 {
+pub fn name(self: *const Client) ?[]const u8 {
     assert(self.next_sid >= 1);
     return self.options.name;
 }
 
 /// Returns the client ID assigned by the server.
 /// This is the `client_id` from the INFO response.
-pub fn getClientID(self: *const Client) ?u64 {
+pub fn clientId(self: *const Client) ?u64 {
     assert(self.next_sid >= 1);
     if (self.server_info) |info| {
         return info.client_id;
@@ -2658,7 +2658,7 @@ pub fn getClientID(self: *const Client) ?u64 {
 
 /// Returns the client IP as seen by the server.
 /// This is the `client_ip` from the INFO response.
-pub fn getClientIP(self: *const Client) ?[]const u8 {
+pub fn clientIp(self: *const Client) ?[]const u8 {
     assert(self.next_sid >= 1);
     if (self.server_info) |info| {
         return info.client_ip;
@@ -2669,7 +2669,7 @@ pub fn getClientIP(self: *const Client) ?[]const u8 {
 /// Returns the connected server address as "host:port" string.
 /// Writes to the provided buffer and returns the slice.
 /// Returns null if not connected or buffer too small.
-pub fn getConnectedAddr(
+pub fn connectedAddr(
     self: *const Client,
     buf: []u8,
 ) ?[]const u8 {
@@ -2691,7 +2691,7 @@ pub fn getConnectedAddr(
 /// Returns the connected URL with password redacted.
 /// Replaces password with "***" for safe logging.
 /// Writes to the provided buffer and returns the slice.
-pub fn getConnectedUrlRedacted(
+pub fn connectedUrlRedacted(
     self: *const Client,
     buf: []u8,
 ) ?[]const u8 {
@@ -2750,7 +2750,7 @@ pub fn getConnectedUrlRedacted(
     return buf[0..new_len];
 }
 
-/// Last error info returned by getLastError().
+/// Last error info returned by lastError().
 pub const LastErrorInfo = struct {
     err: anyerror,
     msg: ?[]const u8,
@@ -2760,7 +2760,7 @@ pub const LastErrorInfo = struct {
 /// This includes server -ERR messages and other async errors.
 /// The error message is from the server (e.g., permission violation).
 /// Returns null if no error has occurred since last clear.
-pub fn getLastError(self: *const Client) ?LastErrorInfo {
+pub fn lastError(self: *const Client) ?LastErrorInfo {
     assert(self.next_sid >= 1);
     if (self.last_error) |err| {
         const msg: ?[]const u8 = if (self.last_error_msg_len > 0)
@@ -2784,7 +2784,7 @@ pub fn clearLastError(self: *Client) void {
 
 /// Returns the current connection state.
 /// Thread-safe: uses atomic load for cross-thread visibility.
-pub fn getStatus(self: *const Client) State {
+pub fn status(self: *const Client) State {
     assert(self.next_sid >= 1);
     return State.atomicLoad(&self.state);
 }
@@ -2819,7 +2819,7 @@ pub fn numSubscriptions(self: *const Client) usize {
 /// Measures round-trip time to the server by sending PING and waiting for PONG.
 /// Returns RTT in nanoseconds.
 /// This is a blocking operation that waits for the server to respond.
-pub fn getRtt(self: *Client) !u64 {
+pub fn rtt(self: *Client) !u64 {
     if (!self.state.canSend()) return error.NotConnected;
     assert(self.next_sid >= 1);
 
@@ -3182,7 +3182,7 @@ pub fn restoreSubscriptions(self: *Client) !void {
         if (backup.sid == 0) continue;
 
         const subject = backup.getSubject();
-        const queue_group = backup.getQueueGroup();
+        const queue_group = backup.queueGroup();
 
         // Send SUB with SAME SID
         protocol.Encoder.encodeSub(writer, .{
@@ -3492,13 +3492,13 @@ pub fn reconnect(self: *Client) !void {
 
             State.atomicStore(&self.state, .connected);
             self.reconnect_attempt = 0;
-            self.stats.reconnects += 1;
+            self.statistics.reconnects += 1;
             self.server_pool.resetFailures();
 
             dbg.stateChange("reconnecting", "connected");
             dbg.print(
                 "Reconnect successful (total reconnects: {d})",
-                .{self.stats.reconnects},
+                .{self.statistics.reconnects},
             );
             return;
         } else |err| {
@@ -3538,12 +3538,12 @@ pub const SubscriptionMode = enum {
 /// Subscription with Io.Queue for async message delivery.
 ///
 /// Supports multiple concurrent consumers via inline routing:
-/// - First subscriber to call next() reads from socket
+/// - First subscriber to call nextMsg() reads from socket
 /// - Messages for other subscriptions are routed to their queues
 /// - Io.Mutex ensures only one reader at a time
 ///
-/// Use next() for blocking receive, nextWithTimeout() for bounded waits,
-/// or tryNext() for non-blocking poll.
+/// Use nextMsg() for blocking receive, nextMsgTimeout() for bounded waits,
+/// or tryNextMsg() for non-blocking poll.
 pub const Subscription = struct {
     client: *Client,
     sid: u64,
@@ -3590,7 +3590,7 @@ pub const Subscription = struct {
     max_pending_bytes: u64 = 0,
 
     /// Spin-yield loop to pop next message from queue.
-    /// Internal: used by both next() and callback drain tasks.
+    /// Internal: used by both nextMsg() and callback drain tasks.
     fn nextRaw(self: *Subscription, io: Io) !Message {
         assert(self.state == .active or self.state == .draining);
 
@@ -3646,7 +3646,7 @@ pub const Subscription = struct {
     ///
     /// Only valid for manual-mode subscriptions (not callback).
     /// Returns owned Message that caller must free via msg.deinit().
-    pub fn next(
+    pub fn nextMsg(
         self: *Subscription,
     ) !Message {
         assert(self.mode == .manual);
@@ -3657,7 +3657,7 @@ pub const Subscription = struct {
 
     /// Try receive without blocking. Returns null if no message.
     /// Only valid for manual-mode subscriptions.
-    pub fn tryNext(self: *Subscription) ?Message {
+    pub fn tryNextMsg(self: *Subscription) ?Message {
         assert(self.mode == .manual);
         if (self.mode != .manual) return null;
         if (self.queue.pop()) |msg| {
@@ -3671,7 +3671,7 @@ pub const Subscription = struct {
 
     /// Batch receive - waits for at least 1, returns up to buf.len.
     /// Only valid for manual-mode subscriptions.
-    pub fn nextBatch(
+    pub fn nextMsgBatch(
         self: *Subscription,
         io: Io,
         buf: []Message,
@@ -3721,7 +3721,7 @@ pub const Subscription = struct {
 
     /// Non-blocking batch receive.
     /// Only valid for manual-mode subscriptions.
-    pub fn tryNextBatch(self: *Subscription, buf: []Message) usize {
+    pub fn tryNextMsgBatch(self: *Subscription, buf: []Message) usize {
         assert(self.mode == .manual);
         if (self.mode != .manual) return 0;
         const count = self.queue.popBatch(buf);
@@ -3740,7 +3740,7 @@ pub const Subscription = struct {
     ///
     /// Only valid for manual-mode subscriptions.
     /// Returns null on timeout. Uses lock-free polling with timer.
-    pub fn nextWithTimeout(
+    pub fn nextMsgTimeout(
         self: *Subscription,
         timeout_ms: u32,
     ) !?Message {
@@ -3787,19 +3787,19 @@ pub const Subscription = struct {
     }
 
     /// Returns queue capacity.
-    pub fn getCapacity(self: *const Subscription) usize {
+    pub fn capacity(self: *const Subscription) usize {
         return self.queue.capacity;
     }
 
     /// Returns count of messages dropped due to queue overflow.
     /// Only incremented when other subscriptions route messages to this one
     /// and the queue is full. The reading subscription bypasses its queue.
-    pub fn getDroppedCount(self: *const Subscription) u64 {
+    pub fn dropped(self: *const Subscription) u64 {
         return self.dropped_msgs;
     }
 
     /// Returns count of messages dropped due to allocation failure.
-    pub fn getAllocFailedCount(self: *const Subscription) u64 {
+    pub fn allocFailed(self: *const Subscription) u64 {
         return self.alloc_failed_msgs;
     }
 
@@ -3870,7 +3870,7 @@ pub const Subscription = struct {
     /// Example:
     /// ```
     /// try sub.drain();
-    /// // ... consume messages with next() ...
+    /// // ... consume messages with nextMsg() ...
     /// try sub.waitDrained(5000); // Wait up to 5 seconds
     /// sub.deinit(allocator);     // Clean up
     /// ```
@@ -3930,7 +3930,7 @@ pub const Subscription = struct {
     }
 
     /// Returns the current pending message limit. 0 means no limit.
-    pub fn getPendingLimits(self: *const Subscription) usize {
+    pub fn pendingLimits(self: *const Subscription) usize {
         return self.pending_limit;
     }
 
@@ -3942,7 +3942,7 @@ pub const Subscription = struct {
     }
 
     /// Returns the current pending bytes limit. 0 means no limit.
-    pub fn getPendingBytesLimit(self: *const Subscription) usize {
+    pub fn pendingBytesLimit(self: *const Subscription) usize {
         return self.pending_bytes_limit;
     }
 
@@ -3970,7 +3970,7 @@ pub const Subscription = struct {
 
     /// Returns the queue group name if subscribed as a queue subscriber.
     /// Returns null for regular subscriptions.
-    pub fn getQueueGroup(self: *const Subscription) ?[]const u8 {
+    pub fn queueGroup(self: *const Subscription) ?[]const u8 {
         return self.queue_group;
     }
 
@@ -4023,7 +4023,7 @@ pub const Subscription = struct {
     }
 
     /// Returns a snapshot of subscription statistics.
-    pub fn getSubStats(self: *const Subscription) SubStats {
+    pub fn subStats(self: *const Subscription) SubStats {
         return .{
             .pending_msgs = self.queue.len(),
             .pending_bytes = self.pending_bytes,
@@ -4291,10 +4291,10 @@ test "options defaults" {
 }
 
 test "stats defaults" {
-    const stats: Stats = .{};
-    try std.testing.expectEqual(@as(u64, 0), stats.msgs_in);
-    try std.testing.expectEqual(@as(u64, 0), stats.msgs_out);
-    try std.testing.expectEqual(@as(u64, 0), stats.bytes_in);
-    try std.testing.expectEqual(@as(u64, 0), stats.bytes_out);
-    try std.testing.expectEqual(@as(u32, 0), stats.reconnects);
+    const s: Statistics = .{};
+    try std.testing.expectEqual(@as(u64, 0), s.msgs_in);
+    try std.testing.expectEqual(@as(u64, 0), s.msgs_out);
+    try std.testing.expectEqual(@as(u64, 0), s.bytes_in);
+    try std.testing.expectEqual(@as(u64, 0), s.bytes_out);
+    try std.testing.expectEqual(@as(u32, 0), s.reconnects);
 }

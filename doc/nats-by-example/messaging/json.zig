@@ -73,7 +73,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Receive the first message - valid JSON.
     // parseFromSlice deserializes it back into a Payload struct.
-    if (try sub.nextWithTimeout(1000)) |msg| {
+    if (try sub.nextMsgTimeout(1000)) |msg| {
         defer msg.deinit();
         if (std.json.parseFromSlice(
             Payload,
@@ -97,7 +97,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Receive the second message - invalid JSON.
     // parseFromSlice returns an error, so we print raw data.
-    if (try sub.nextWithTimeout(1000)) |msg| {
+    if (try sub.nextMsgTimeout(1000)) |msg| {
         defer msg.deinit();
         if (std.json.parseFromSlice(
             Payload,

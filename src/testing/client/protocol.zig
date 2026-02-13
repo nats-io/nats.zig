@@ -33,7 +33,7 @@ pub fn testServerInfoParsing(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const info = client.getServerInfo();
+    const info = client.serverInfo();
     if (info == null) {
         reportResult("server_info_parsing", false, "no server info");
         return;
@@ -103,7 +103,7 @@ pub fn testPingPongKeepAlive(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..5) |_| {
-        if (sub.nextWithTimeout(200) catch null) |m| {
+        if (sub.nextMsgTimeout(200) catch null) |m| {
             m.deinit();
             received += 1;
         }
@@ -192,7 +192,7 @@ pub fn testUnknownSidHandling(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub2.nextWithTimeout(500) catch null) |m| {
+    if (sub2.nextMsgTimeout(500) catch null) |m| {
         m.deinit();
         if (client.isConnected()) {
             reportResult("unknown_sid_handling", true, "");
@@ -379,7 +379,7 @@ pub fn testMaxPayloadLimit(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const info = client.getServerInfo();
+    const info = client.serverInfo();
     if (info == null) {
         reportResult("max_payload_limit", false, "no server info");
         return;
@@ -474,7 +474,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
     var received: u32 = 0;
     for (0..5) |i| {
         if (subs[i]) |sub| {
-            if (sub.nextWithTimeout(500) catch null) |m| {
+            if (sub.nextMsgTimeout(500) catch null) |m| {
                 m.deinit();
                 received += 1;
             }

@@ -76,7 +76,7 @@ pub fn testPublishMsg(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(500) catch null) |msg| {
+    if (sub.nextMsgTimeout(500) catch null) |msg| {
         defer msg.deinit();
         if (std.mem.eql(u8, msg.data, "republished-data")) {
             reportResult("publish_msg", true, "");
@@ -118,7 +118,7 @@ pub fn testNoRespondersStatus(allocator: std.mem.Allocator) void {
     if (reply) |msg| {
         defer msg.deinit();
         // Check status via getStatus()
-        const status = msg.getStatus();
+        const status = msg.status();
         if (status == 503 and msg.isNoResponders()) {
             reportResult("no_responders_status", true, "");
         } else {
@@ -190,7 +190,7 @@ fn responderTask(
     sub: **nats.Subscription,
     client: *nats.Client,
 ) void {
-    if (sub.*.nextWithTimeout(500) catch null) |msg| {
+    if (sub.*.nextMsgTimeout(500) catch null) |msg| {
         defer msg.deinit();
         if (msg.reply_to) |reply_to| {
             client.publish(reply_to, "response-data") catch {};

@@ -212,7 +212,7 @@ pub fn testCallbackQueueGroup(
     var h1 = QueueHandler{ .count = &count1 };
     var h2 = QueueHandler{ .count = &count2 };
 
-    const sub1 = client.subscribeQueue(
+    const sub1 = client.queueSubscribe(
         "cb.queue.test",
         "workers",
         nats.MsgHandler.init(QueueHandler, &h1),
@@ -226,7 +226,7 @@ pub fn testCallbackQueueGroup(
     };
     defer sub1.deinit();
 
-    const sub2 = client.subscribeQueue(
+    const sub2 = client.queueSubscribe(
         "cb.queue.test",
         "workers",
         nats.MsgHandler.init(QueueHandler, &h2),
@@ -696,7 +696,7 @@ pub fn testCallbackMixedModes(
 
     // Drain manual sub
     var manual_count: u32 = 0;
-    while (man_sub.tryNext()) |_| {
+    while (man_sub.tryNextMsg()) |_| {
         manual_count += 1;
     }
 

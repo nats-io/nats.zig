@@ -139,7 +139,7 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..NUM_MSGS) |_| {
-        if (sub.nextWithTimeout(100) catch null) |m| {
+        if (sub.nextMsgTimeout(100) catch null) |m| {
             m.deinit();
             received += 1;
         } else break;
@@ -258,7 +258,7 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..2) |_| {
-        if (sub.nextWithTimeout(500) catch null) |m| {
+        if (sub.nextMsgTimeout(500) catch null) |m| {
             m.deinit();
             received += 1;
         }
@@ -432,7 +432,7 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..2) |_| {
-        if (sub.nextWithTimeout(500) catch null) |m| {
+        if (sub.nextMsgTimeout(500) catch null) |m| {
             m.deinit();
             received += 1;
         }
@@ -491,17 +491,17 @@ pub fn testParallelReceive(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
 
-    if (sub1.nextWithTimeout(1000) catch null) |m| {
+    if (sub1.nextMsgTimeout(1000) catch null) |m| {
         m.deinit();
         received += 1;
     }
 
-    if (sub2.nextWithTimeout(1000) catch null) |m| {
+    if (sub2.nextMsgTimeout(1000) catch null) |m| {
         m.deinit();
         received += 1;
     }
 
-    if (sub3.nextWithTimeout(1000) catch null) |m| {
+    if (sub3.nextMsgTimeout(1000) catch null) |m| {
         m.deinit();
         received += 1;
     }
@@ -592,7 +592,7 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit();
 
-    const before = client.getStats();
+    const before = client.stats();
 
     const NUM_MSGS: u64 = 100;
     for (0..NUM_MSGS) |_| {
@@ -602,12 +602,12 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
     client.flush(500_000_000) catch {};
 
     for (0..NUM_MSGS) |_| {
-        if (sub.nextWithTimeout(100) catch null) |m| {
+        if (sub.nextMsgTimeout(100) catch null) |m| {
             m.deinit();
         } else break;
     }
 
-    const after = client.getStats();
+    const after = client.stats();
 
     const msgs_out_diff = after.msgs_out - before.msgs_out;
     const msgs_in_diff = after.msgs_in - before.msgs_in;

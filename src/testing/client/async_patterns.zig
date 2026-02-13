@@ -49,7 +49,7 @@ fn testAsyncSelectTimeout(allocator: Allocator) void {
     defer sub.deinit();
 
     // Do NOT publish - we want timeout to win
-    var recv_future = io.async(Sub.next, .{sub});
+    var recv_future = io.async(Sub.nextMsg, .{sub});
     var timeout_future = io.async(sleepMs, .{ io, 50 });
 
     var winner: enum { none, message, timeout } = .none;
@@ -107,7 +107,7 @@ fn testAsyncSelectMessage(allocator: Allocator) void {
         return;
     };
 
-    var recv_future = io.async(Sub.next, .{sub});
+    var recv_future = io.async(Sub.nextMsg, .{sub});
     var timeout_future = io.async(sleepMs, .{ io, 500 });
 
     var winner: enum { none, message, timeout } = .none;
@@ -164,7 +164,7 @@ fn workerTask(
     done: *std.atomic.Value(bool),
 ) void {
     while (!done.load(.acquire)) {
-        const msg = sub.nextWithTimeout(100) catch return orelse continue;
+        const msg = sub.nextMsgTimeout(100) catch return orelse continue;
         queue.putOne(io, .{ .worker_id = worker_id, .msg = msg }) catch {
             msg.deinit();
             return;
@@ -190,7 +190,7 @@ fn testAsyncConcurrentWorkers(allocator: Allocator) void {
     defer client.deinit();
 
     // Create 3 workers in queue group
-    const w1_sub = client.subscribeSyncQueue(
+    const w1_sub = client.queueSubscribeSync(
         "async.workers",
         "workers",
     ) catch {
@@ -199,7 +199,7 @@ fn testAsyncConcurrentWorkers(allocator: Allocator) void {
     };
     defer w1_sub.deinit();
 
-    const w2_sub = client.subscribeSyncQueue(
+    const w2_sub = client.queueSubscribeSync(
         "async.workers",
         "workers",
     ) catch {
@@ -208,7 +208,7 @@ fn testAsyncConcurrentWorkers(allocator: Allocator) void {
     };
     defer w2_sub.deinit();
 
-    const w3_sub = client.subscribeSyncQueue(
+    const w3_sub = client.queueSubscribeSync(
         "async.workers",
         "workers",
     ) catch {
@@ -346,13 +346,13 @@ fn testAsyncParallelSubscriptions(allocator: Allocator) void {
     client.publish("async.parallel.c", "msg-c") catch {};
 
     // Launch parallel receives
-    var future_a = io.async(Sub.next, .{sub_a});
+    var future_a = io.async(Sub.nextMsg, .{sub_a});
     defer if (future_a.cancel(io)) |m| m.deinit() else |_| {};
 
-    var future_b = io.async(Sub.next, .{sub_b});
+    var future_b = io.async(Sub.nextMsg, .{sub_b});
     defer if (future_b.cancel(io)) |m| m.deinit() else |_| {};
 
-    var future_c = io.async(Sub.next, .{sub_c});
+    var future_c = io.async(Sub.nextMsg, .{sub_c});
     defer if (future_c.cancel(io)) |m| m.deinit() else |_| {};
 
     var received: u8 = 0;
@@ -408,7 +408,7 @@ fn testAsyncCancellation(allocator: Allocator) void {
     defer sub.deinit();
 
     // Start async receive but cancel immediately (no message published)
-    var future = io.async(Sub.next, .{sub});
+    var future = io.async(Sub.nextMsg, .{sub});
 
     // Small delay then cancel
     io.sleep(.fromMilliseconds(10), .awake) catch {};
@@ -457,7 +457,7 @@ fn testAsyncCancelWithPendingMessage(allocator: Allocator) void {
     io.sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Async receive - should get message quickly
-    var future = io.async(Sub.next, .{sub});
+    var future = io.async(Sub.nextMsg, .{sub});
     defer if (future.cancel(io)) |m| m.deinit() else |_| {};
 
     // DON'T defer deinit after await - outer defer handles cleanup
@@ -507,7 +507,7 @@ fn testBatchReceive(allocator: Allocator) void {
 
     // Batch receive
     var batch_buf: [32]nats.Message = undefined;
-    const count = sub.nextBatch(io, &batch_buf) catch {
+    const count = sub.nextMsgBatch(io, &batch_buf) catch {
         reportResult("batch_receive", false, "nextBatch failed");
         return;
     };
@@ -518,7 +518,7 @@ fn testBatchReceive(allocator: Allocator) void {
     }
 
     // Drain any remaining
-    const remaining = sub.tryNextBatch(&batch_buf);
+    const remaining = sub.tryNextMsgBatch(&batch_buf);
     for (batch_buf[0..remaining]) |*msg| {
         msg.deinit();
     }
@@ -564,7 +564,7 @@ fn testTryNextBatch(allocator: Allocator) void {
     var batch_buf: [32]nats.Message = undefined;
 
     // Empty queue should return 0
-    const empty_count = sub.tryNextBatch(&batch_buf);
+    const empty_count = sub.tryNextMsgBatch(&batch_buf);
     if (empty_count != 0) {
         reportResult("try_next_batch", false, "expected 0 on empty");
         return;
@@ -580,19 +580,19 @@ fn testTryNextBatch(allocator: Allocator) void {
     io.sleep(.fromMilliseconds(50), .awake) catch {};
 
     // Should get some messages
-    const first_count = sub.tryNextBatch(&batch_buf);
+    const first_count = sub.tryNextMsgBatch(&batch_buf);
     for (batch_buf[0..first_count]) |*msg| {
         msg.deinit();
     }
 
     // Drain remaining
-    const second_count = sub.tryNextBatch(&batch_buf);
+    const second_count = sub.tryNextMsgBatch(&batch_buf);
     for (batch_buf[0..second_count]) |*msg| {
         msg.deinit();
     }
 
     // Call again on drained queue
-    const third_count = sub.tryNextBatch(&batch_buf);
+    const third_count = sub.tryNextMsgBatch(&batch_buf);
 
     if (first_count > 0 and third_count == 0) {
         reportResult("try_next_batch", true, "");
@@ -612,7 +612,7 @@ fn innerAsyncWithEarlyReturn(
     io: Io,
     sub: *Sub,
 ) bool {
-    var future = io.async(Sub.next, .{sub});
+    var future = io.async(Sub.nextMsg, .{sub});
     defer if (future.cancel(io)) |m| m.deinit() else |_| {};
 
     // Simulate early return (e.g., error condition)
@@ -688,8 +688,8 @@ fn testSelectMultipleSubs(allocator: Allocator) void {
         return;
     };
 
-    var fast_future = io.async(Sub.next, .{fast_sub});
-    var slow_future = io.async(Sub.next, .{slow_sub});
+    var fast_future = io.async(Sub.nextMsg, .{fast_sub});
+    var slow_future = io.async(Sub.nextMsg, .{slow_sub});
 
     var winner: enum { none, fast, slow } = .none;
     defer if (winner != .fast) {

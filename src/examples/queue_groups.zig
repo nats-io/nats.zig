@@ -34,7 +34,7 @@ fn workerTask(
     done: *std.atomic.Value(bool),
 ) void {
     while (!done.load(.acquire)) {
-        const msg = sub.nextWithTimeout(100) catch return orelse continue;
+        const msg = sub.nextMsgTimeout(100) catch return orelse continue;
         queue.putOne(io, .{
             .worker_id = worker_id,
             .data = msg.data,
@@ -61,13 +61,13 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Connected to NATS!\n", .{});
 
     // Create 3 workers in queue group
-    const worker1 = try client.subscribeSyncQueue("tasks", "workers");
+    const worker1 = try client.queueSubscribeSync("tasks", "workers");
     defer worker1.deinit();
 
-    const worker2 = try client.subscribeSyncQueue("tasks", "workers");
+    const worker2 = try client.queueSubscribeSync("tasks", "workers");
     defer worker2.deinit();
 
-    const worker3 = try client.subscribeSyncQueue("tasks", "workers");
+    const worker3 = try client.queueSubscribeSync("tasks", "workers");
     defer worker3.deinit();
 
     std.debug.print("Created 3 workers in queue group 'workers'\n", .{});

@@ -113,7 +113,7 @@ pub fn main(init: std.process.Init) !void {
     var empty_cycles: u32 = 0;
 
     while (total < TOTAL_MSGS) {
-        if (subs[idx].tryNext()) |msg| {
+        if (subs[idx].tryNextMsg()) |msg| {
             defer msg.deinit();
             total += 1;
             empty_cycles = 0;

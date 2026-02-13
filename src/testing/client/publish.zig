@@ -42,7 +42,7 @@ pub fn testClientPubSub(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |msg| msg.deinit() else |_| {};
@@ -87,7 +87,7 @@ pub fn testClientPublishReply(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -134,7 +134,7 @@ pub fn testPublishEmptyPayload(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -186,7 +186,7 @@ pub fn testPublishLargePayload(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -226,7 +226,7 @@ pub fn testPublishRapidFire(allocator: std.mem.Allocator) void {
         };
     }
 
-    const stats = client.getStats();
+    const stats = client.stats();
     if (stats.msgs_out >= 1000) {
         reportResult("publish_rapid_fire", true, "");
     } else {
@@ -322,7 +322,7 @@ pub fn testPublishBatching(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..3) |_| {
-        if (sub.nextWithTimeout(500) catch null) |m| {
+        if (sub.nextMsgTimeout(500) catch null) |m| {
             m.deinit();
             received += 1;
         }
@@ -371,7 +371,7 @@ pub fn testFlushAfterEachPublish(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..50) |_| {
-        const msg = sub.nextWithTimeout(500) catch {
+        const msg = sub.nextMsgTimeout(500) catch {
             break;
         };
         if (msg) |m| {

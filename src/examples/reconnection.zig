@@ -88,7 +88,7 @@ pub fn main(init: std.process.Init) !void {
         }
 
         // Try to receive any messages
-        while (sub.tryNext()) |recv_msg| {
+        while (sub.tryNextMsg()) |recv_msg| {
             defer recv_msg.deinit();
             std.debug.print("      Received: {s}\n", .{recv_msg.data});
         }
@@ -110,7 +110,7 @@ fn printConnectionInfo(client: *nats.Client) void {
     std.debug.print("Connection info:\n", .{});
     std.debug.print("  Connected: {}\n", .{client.isConnected()});
 
-    if (client.getServerInfo()) |info| {
+    if (client.serverInfo()) |info| {
         if (info.server_name.len > 0) {
             std.debug.print("  Server: {s}\n", .{info.server_name});
         }
@@ -122,7 +122,7 @@ fn printConnectionInfo(client: *nats.Client) void {
 }
 
 fn printStats(client: *nats.Client) void {
-    const stats = client.getStats();
+    const stats = client.stats();
     std.debug.print("  Stats: {d} msgs out, {d} msgs in, {d} reconnects\n", .{
         stats.msgs_out,
         stats.msgs_in,

@@ -94,7 +94,7 @@ fn testAutoflushBasicDelivery(
         return;
     };
 
-    if (sub.nextWithTimeout(
+    if (sub.nextMsgTimeout(
         100,
     ) catch null) |msg| {
         defer msg.deinit();
@@ -188,7 +188,7 @@ fn testAutoflushMultipleMessages(
 
     var received: u8 = 0;
     while (received < msg_count) {
-        if (sub.nextWithTimeout(
+        if (sub.nextMsgTimeout(
             200,
         ) catch null) |msg| {
             msg.deinit();
@@ -280,7 +280,7 @@ fn testAutoflushHighThroughput(
     // Receive all - TCP on localhost must be lossless
     var received: u32 = 0;
     while (received < msg_count) {
-        if (sub.nextWithTimeout(
+        if (sub.nextMsgTimeout(
             200,
         ) catch null) |msg| {
             msg.deinit();
@@ -510,7 +510,7 @@ fn testAutoflushTLS(
         return;
     };
 
-    if (sub.nextWithTimeout(
+    if (sub.nextMsgTimeout(
         200,
     ) catch null) |msg| {
         defer msg.deinit();
@@ -588,7 +588,7 @@ fn testAutoflushLatencyBound(
         return;
     };
 
-    if (sub.nextWithTimeout(
+    if (sub.nextMsgTimeout(
         50,
     ) catch null) |msg| {
         msg.deinit();
@@ -679,7 +679,7 @@ fn testAutoflushWithSubscribe(
         return;
     };
 
-    if (sub.nextWithTimeout(
+    if (sub.nextMsgTimeout(
         200,
     ) catch null) |msg| {
         msg.deinit();
@@ -749,7 +749,7 @@ fn testAutoflushNoBatching(
         return;
     };
 
-    if (sub.nextWithTimeout(
+    if (sub.nextMsgTimeout(
         30,
     ) catch null) |msg| {
         msg.deinit();
@@ -891,19 +891,19 @@ fn testAutoflushMultiClient(
 
     var received: u8 = 0;
 
-    if (sub1.nextWithTimeout(
+    if (sub1.nextMsgTimeout(
         200,
     ) catch null) |msg| {
         msg.deinit();
         received += 1;
     }
-    if (sub2.nextWithTimeout(
+    if (sub2.nextMsgTimeout(
         200,
     ) catch null) |msg| {
         msg.deinit();
         received += 1;
     }
-    if (sub3.nextWithTimeout(
+    if (sub3.nextMsgTimeout(
         200,
     ) catch null) |msg| {
         msg.deinit();
@@ -1013,7 +1013,7 @@ fn testAutoflushPublishRequest(
         return;
     };
 
-    if (sub.nextWithTimeout(
+    if (sub.nextMsgTimeout(
         200,
     ) catch null) |msg| {
         defer msg.deinit();
@@ -1118,7 +1118,7 @@ fn testAutoflushPublishWithHeaders(
         return;
     };
 
-    if (sub.nextWithTimeout(
+    if (sub.nextMsgTimeout(
         200,
     ) catch null) |msg| {
         defer msg.deinit();
@@ -1244,7 +1244,7 @@ fn testAutoflushPubReqWithHeaders(
         return;
     };
 
-    if (sub.nextWithTimeout(
+    if (sub.nextMsgTimeout(
         200,
     ) catch null) |msg| {
         defer msg.deinit();
@@ -1378,7 +1378,7 @@ fn testAutoflushPubWithHeaderMap(
         return;
     };
 
-    if (sub.nextWithTimeout(
+    if (sub.nextMsgTimeout(
         200,
     ) catch null) |msg| {
         defer msg.deinit();
@@ -1493,7 +1493,7 @@ fn testAutoflushPublishMsg(
         return;
     };
 
-    if (sub_dst.nextWithTimeout(
+    if (sub_dst.nextMsgTimeout(
         200,
     ) catch null) |msg| {
         defer msg.deinit();
@@ -1618,7 +1618,7 @@ fn testAutoflushAutoUnsubscribe(
 
     var received: u8 = 0;
     while (received < 5) {
-        if (sub.nextWithTimeout(
+        if (sub.nextMsgTimeout(
             200,
         ) catch null) |msg| {
             msg.deinit();
@@ -1734,7 +1734,7 @@ fn testAutoflushDrain(
     // Receive the 3 pre-drain messages
     var pre_drain: u8 = 0;
     while (pre_drain < 3) {
-        if (sub.nextWithTimeout(
+        if (sub.nextMsgTimeout(
             200,
         ) catch null) |msg| {
             msg.deinit();
@@ -1783,7 +1783,7 @@ fn testAutoflushDrain(
     };
 
     // Verify no new messages arrive
-    if (sub.nextWithTimeout(
+    if (sub.nextMsgTimeout(
         100,
     ) catch null) |msg| {
         msg.deinit();
@@ -1890,7 +1890,7 @@ fn testAutoflushUnsubscribe(
         return;
     };
 
-    if (sub.nextWithTimeout(
+    if (sub.nextMsgTimeout(
         200,
     ) catch null) |msg| {
         msg.deinit();
@@ -1944,7 +1944,7 @@ fn testAutoflushUnsubscribe(
     };
 
     // Control sub must receive (proves msgs are flowing)
-    if (ctrl.nextWithTimeout(
+    if (ctrl.nextMsgTimeout(
         200,
     ) catch null) |msg| {
         msg.deinit();

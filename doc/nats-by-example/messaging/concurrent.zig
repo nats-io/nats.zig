@@ -76,7 +76,7 @@ pub fn main(init: std.process.Init) !void {
     var items: [NUM_MSGS]WorkItem = @splat(WorkItem{});
     var received: usize = 0;
     for (0..NUM_MSGS) |_| {
-        if (try sub.nextWithTimeout(
+        if (try sub.nextMsgTimeout(
             1000,
         )) |msg| {
             defer msg.deinit();

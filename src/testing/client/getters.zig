@@ -28,31 +28,31 @@ pub fn testConnectionInfoGetters(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    // Test getName()
-    const name = client.getName();
+    // Test name()
+    const name = client.name();
     if (name == null or !std.mem.eql(u8, name.?, "test-client")) {
-        reportResult("connection_info_getters", false, "getName failed");
+        reportResult("connection_info_getters", false, "name failed");
         return;
     }
 
-    // Test getConnectedUrl()
-    const conn_url = client.getConnectedUrl();
+    // Test connectedUrl()
+    const conn_url = client.connectedUrl();
     if (conn_url == null) {
-        reportResult("connection_info_getters", false, "getConnectedUrl null");
+        reportResult("connection_info_getters", false, "connectedUrl null");
         return;
     }
 
-    // Test getConnectedServerId() - should have a value
-    const server_id = client.getConnectedServerId();
+    // Test connectedServerId() - should have a value
+    const server_id = client.connectedServerId();
     if (server_id == null or server_id.?.len == 0) {
-        reportResult("connection_info_getters", false, "getConnectedServerId");
+        reportResult("connection_info_getters", false, "connectedServerId");
         return;
     }
 
-    // Test getConnectedServerVersion() - should have a value
-    const version = client.getConnectedServerVersion();
+    // Test connectedServerVersion() - should have a value
+    const version = client.connectedServerVersion();
     if (version == null or version.?.len == 0) {
-        reportResult("connection_info_getters", false, "getServerVersion");
+        reportResult("connection_info_getters", false, "connectedServerVersion");
         return;
     }
 
@@ -62,9 +62,9 @@ pub fn testConnectionInfoGetters(allocator: std.mem.Allocator) void {
         return;
     }
 
-    // Test getMaxPayload() - should be > 0
-    if (client.getMaxPayload() == 0) {
-        reportResult("connection_info_getters", false, "getMaxPayload");
+    // Test maxPayload() - should be > 0
+    if (client.maxPayload() == 0) {
+        reportResult("connection_info_getters", false, "maxPayload");
         return;
     }
 
@@ -96,16 +96,16 @@ pub fn testServerInfoGetters(allocator: std.mem.Allocator) void {
     // Test authRequired() - default server may or may not require auth
     _ = client.authRequired();
 
-    // Test getClientID() - should be set by server
-    const client_id = client.getClientID();
+    // Test clientId() - should be set by server
+    const client_id = client.clientId();
     if (client_id == null or client_id.? == 0) {
-        reportResult("server_info_getters", false, "getClientID");
+        reportResult("server_info_getters", false, "clientId");
         return;
     }
 
-    // Test getServerCount() - should be at least 1
-    if (client.getServerCount() < 1) {
-        reportResult("server_info_getters", false, "getServerCount");
+    // Test serverCount() - should be at least 1
+    if (client.serverCount() < 1) {
+        reportResult("server_info_getters", false, "serverCount");
         return;
     }
 
@@ -131,9 +131,9 @@ pub fn testConnectedAddrGetter(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     var addr_buf: [64]u8 = undefined;
-    const addr = client.getConnectedAddr(&addr_buf);
+    const addr = client.connectedAddr(&addr_buf);
     if (addr == null) {
-        reportResult("connected_addr_getter", false, "getConnectedAddr null");
+        reportResult("connected_addr_getter", false, "connectedAddr null");
         return;
     }
 
@@ -166,14 +166,14 @@ pub fn testUrlRedaction(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     var redact_buf: [256]u8 = undefined;
-    const redacted = client.getConnectedUrlRedacted(&redact_buf);
+    const redacted = client.connectedUrlRedacted(&redact_buf);
     if (redacted == null) {
-        reportResult("url_redaction", false, "getConnectedUrlRedacted null");
+        reportResult("url_redaction", false, "connectedUrlRedacted null");
         return;
     }
 
     // URL without credentials should be unchanged
-    const orig = client.getConnectedUrl().?;
+    const orig = client.connectedUrl().?;
     if (!std.mem.eql(u8, redacted.?, orig)) {
         reportResult("url_redaction", false, "mismatch for no-creds url");
         return;
@@ -219,9 +219,9 @@ pub fn testSubscriptionInfoGetters(allocator: std.mem.Allocator) void {
         return;
     }
 
-    // Test getQueueGroup() - should be null for regular sub
-    if (sub.getQueueGroup() != null) {
-        reportResult("subscription_info_getters", false, "getQueueGroup");
+    // Test queueGroup() - should be null for regular sub
+    if (sub.queueGroup() != null) {
+        reportResult("subscription_info_getters", false, "queueGroup");
         return;
     }
 
@@ -253,7 +253,7 @@ pub fn testQueueSubGetters(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     // Create a queue subscription
-    const sub = client.subscribeSyncQueue(
+    const sub = client.queueSubscribeSync(
         "test.queue.getters",
         "workers",
     ) catch {
@@ -262,10 +262,10 @@ pub fn testQueueSubGetters(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit();
 
-    // Test getQueueGroup() - should return "workers"
-    const qg = sub.getQueueGroup();
+    // Test queueGroup() - should return "workers"
+    const qg = sub.queueGroup();
     if (qg == null or !std.mem.eql(u8, qg.?, "workers")) {
-        reportResult("queue_sub_getters", false, "getQueueGroup");
+        reportResult("queue_sub_getters", false, "queueGroup");
         return;
     }
 

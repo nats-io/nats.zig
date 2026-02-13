@@ -28,7 +28,7 @@ pub fn testServerInfo(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const info = client.getServerInfo();
+    const info = client.serverInfo();
     if (info == null) {
         reportResult("server_info", false, "no server info");
         return;
@@ -56,7 +56,7 @@ pub fn testServerInfoFields(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const info = client.getServerInfo();
+    const info = client.serverInfo();
     if (info == null) {
         reportResult("server_info_fields", false, "no server info");
         return;
@@ -94,7 +94,7 @@ pub fn testServerVersion(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const info = client.getServerInfo();
+    const info = client.serverInfo();
     if (info == null) {
         reportResult("server_version", false, "no server info");
         return;
@@ -126,7 +126,7 @@ pub fn testServerMaxPayloadEnforced(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const info = client.getServerInfo();
+    const info = client.serverInfo();
     if (info == null) {
         reportResult("max_payload_enforced", false, "no server info");
         return;
@@ -158,7 +158,7 @@ pub fn testMaxPayloadRespected(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const info = client.getServerInfo();
+    const info = client.serverInfo();
     if (info == null) {
         reportResult("max_payload_respected", false, "no server info");
         return;
@@ -195,7 +195,7 @@ pub fn testProtocolVersion(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const info = client.getServerInfo();
+    const info = client.serverInfo();
     if (info == null) {
         reportResult("proto_version", false, "no server info");
         return;

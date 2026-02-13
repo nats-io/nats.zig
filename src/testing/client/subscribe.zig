@@ -68,7 +68,7 @@ pub fn testClientManySubs(allocator: std.mem.Allocator) void {
     var received: usize = 0;
     for (subs) |s| {
         var future = io.io().async(
-            nats.Client.Sub.next,
+            nats.Client.Sub.nextMsg,
             .{s},
         );
         defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -145,7 +145,7 @@ pub fn testClientWildcard(allocator: std.mem.Allocator) void {
     var received: usize = 0;
     for (0..NUM_MSGS) |_| {
         var future = io.io().async(
-            nats.Client.Sub.next,
+            nats.Client.Sub.nextMsg,
             .{sub},
         );
         defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -210,13 +210,13 @@ pub fn testClientDuplicateSubs(allocator: std.mem.Allocator) void {
     publisher.publish("dup", "hello") catch {};
 
     var future1 = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub1},
     );
     defer if (future1.cancel(io.io())) |m| m.deinit() else |_| {};
 
     var future2 = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub2},
     );
     defer if (future2.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -260,7 +260,7 @@ pub fn testClientQueueGroup(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const sub = client.subscribeSyncQueue("qg", "workers") catch {
+    const sub = client.queueSubscribeSync("qg", "workers") catch {
         reportResult("client_queue_group", false, "sub failed");
         return;
     };
@@ -271,7 +271,7 @@ pub fn testClientQueueGroup(allocator: std.mem.Allocator) void {
     publisher.publish("qg", "task") catch {};
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -311,7 +311,7 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
     client.publish("wc.test", "msg") catch {};
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -351,7 +351,7 @@ pub fn testWildcardGreater(allocator: std.mem.Allocator) void {
     client.publish("gt.a.b.c", "msg") catch {};
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -391,7 +391,7 @@ pub fn testSubjectCaseSensitivity(allocator: std.mem.Allocator) void {
     client.publish("case.test", "msg") catch {};
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -471,7 +471,7 @@ pub fn testHierarchicalSubject(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -588,7 +588,7 @@ pub fn testSubscriptionQueueCapacity(allocator: std.mem.Allocator) void {
 
     var received: u32 = 0;
     for (0..NUM_MSGS) |_| {
-        const msg = sub.nextWithTimeout(200) catch break;
+        const msg = sub.nextMsgTimeout(200) catch break;
         if (msg) |m| {
             m.deinit();
             received += 1;
