@@ -1349,11 +1349,10 @@ fn testAutoflushPubWithHeaderMap(
     };
     defer sub.deinit();
 
-    var hdr_map = nats.Client.HeaderMap{};
-    defer hdr_map.deinit(allocator);
+    var hdr_map = nats.Client.HeaderMap.init(allocator);
+    defer hdr_map.deinit();
 
     hdr_map.set(
-        allocator,
         "X-Route",
         "autoflush-map",
     ) catch {
@@ -1367,7 +1366,6 @@ fn testAutoflushPubWithHeaderMap(
 
     // publishWithHeaderMap: no explicit flush
     client.publishWithHeaderMap(
-        allocator,
         "autoflush.hdrmap",
         &hdr_map,
         "map-payload",

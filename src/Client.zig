@@ -1747,7 +1747,6 @@ pub fn publishRequestWithHeaders(
 /// Publishes with a HeaderMap builder.
 ///
 /// Arguments:
-///     allocator: Allocator for temporary header encoding
 ///     subject: Destination subject (no wildcards allowed)
 ///     header_map: HeaderMap containing headers to include
 ///     payload: Message data
@@ -1756,7 +1755,6 @@ pub fn publishRequestWithHeaders(
 /// Thread-safe: protected by write_mutex for concurrent publish.
 pub fn publishWithHeaderMap(
     self: *Client,
-    allocator: Allocator,
     subject: []const u8,
     header_map: *const protocol.HeaderMap,
     payload: []const u8,
@@ -1767,8 +1765,8 @@ pub fn publishWithHeaderMap(
     try pubsub.validatePublish(subject);
 
     // Encode headers to NATS format
-    const hdr_bytes = try header_map.encode(allocator);
-    defer allocator.free(hdr_bytes);
+    const hdr_bytes = try header_map.encode();
+    defer header_map.allocator.free(hdr_bytes);
 
     if (hdr_bytes.len + payload.len > self.max_payload) {
         return error.PayloadTooLarge;

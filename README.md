@@ -727,16 +727,16 @@ For programmatic header construction:
 ```zig
 const nats = @import("nats");
 
-var headers: nats.Client.HeaderMap = .{};
-defer headers.deinit(allocator);
+var headers = nats.Client.HeaderMap.init(allocator);
+defer headers.deinit();
 
 // Set headers (replaces existing)
-try headers.set(allocator, "Content-Type", "application/json");
-try headers.set(allocator, "X-Request-Id", "req-123");
+try headers.set("Content-Type", "application/json");
+try headers.set("X-Request-Id", "req-123");
 
 // Add headers (allows multiple values for same key)
-try headers.add(allocator, "X-Tag", "important");
-try headers.add(allocator, "X-Tag", "urgent");
+try headers.add("X-Tag", "important");
+try headers.add("X-Tag", "urgent");
 
 // Get values
 if (headers.get("Content-Type")) |ct| {
@@ -744,7 +744,7 @@ if (headers.get("Content-Type")) |ct| {
 }
 
 // Get all values for a key
-if (try headers.getAll(allocator, "X-Tag")) |tags| {
+if (try headers.getAll("X-Tag")) |tags| {
     defer allocator.free(tags);
     for (tags) |tag| {
         std.debug.print("Tag: {s}\n", .{tag});
@@ -752,10 +752,10 @@ if (try headers.getAll(allocator, "X-Tag")) |tags| {
 }
 
 // Delete headers
-headers.delete(allocator, "X-Tag");
+headers.delete("X-Tag");
 
 // Publish with HeaderMap (auto-flushed)
-try client.publishWithHeaderMap(allocator, "subject", &headers, "payload");
+try client.publishWithHeaderMap("subject", &headers, "payload");
 ```
 
 ### Header Notes
