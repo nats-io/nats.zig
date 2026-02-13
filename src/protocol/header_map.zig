@@ -22,7 +22,7 @@ const Allocator = std.mem.Allocator;
 
 /// Builder for NATS message headers.
 /// Supports multiple values per key.
-/// Stores allocator for connection-scoped lifetime.
+/// Stores allocator
 pub const HeaderMap = struct {
     allocator: Allocator,
     /// Keys (owned, case-preserved).
