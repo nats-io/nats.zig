@@ -133,7 +133,7 @@ pub fn testReplyToPreserved(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -192,7 +192,7 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
             r: *nats.Client,
             s: *nats.Subscription,
         ) void {
-            if (s.nextWithTimeout(1000) catch null) |req| {
+            if (s.nextMsgTimeout(1000) catch null) |req| {
                 defer req.deinit();
                 if (req.reply_to) |reply_inbox| {
                     r.publish(reply_inbox, "pong") catch {};
@@ -269,7 +269,7 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
             b: *nats.Client,
             s: *nats.Subscription,
         ) void {
-            if (s.nextWithTimeout(2000) catch null) |req| {
+            if (s.nextMsgTimeout(2000) catch null) |req| {
                 defer req.deinit();
                 if (req.reply_to) |inbox| {
                     b.publish(inbox, "response-from-B") catch {};
@@ -401,7 +401,7 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
             r: *nats.Client,
             s: *nats.Subscription,
         ) void {
-            if (s.nextWithTimeout(2000) catch null) |req| {
+            if (s.nextMsgTimeout(2000) catch null) |req| {
                 defer req.deinit();
                 if (req.reply_to) |reply_inbox| {
                     r.publish(reply_inbox, req.data) catch {};
@@ -486,7 +486,7 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
             s: *nats.Subscription,
         ) void {
             for (0..5) |_| {
-                if (s.nextWithTimeout(2000) catch null) |req| {
+                if (s.nextMsgTimeout(2000) catch null) |req| {
                     defer req.deinit();
                     if (req.reply_to) |reply_inbox| {
                         r.publish(reply_inbox, "response") catch {};

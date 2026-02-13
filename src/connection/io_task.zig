@@ -361,11 +361,11 @@ inline fn tryRouteBufferedMessages(
 
                 // Track and rate-limit protocol error notifications
                 client.protocol_errors += 1;
-                const msgs_since = client.stats.msgs_in -|
+                const msgs_since = client.statistics.msgs_in -|
                     client.last_parse_error_notified_at;
                 const interval = client.options.error_notify_interval_msgs;
                 if (client.protocol_errors == 1 or msgs_since >= interval) {
-                    client.last_parse_error_notified_at = client.stats.msgs_in;
+                    client.last_parse_error_notified_at = client.statistics.msgs_in;
                     client.pushEvent(.{
                         .protocol_error = .{
                             .bytes_skipped = bytes_skipped,
@@ -387,13 +387,13 @@ inline fn tryRouteBufferedMessages(
             switch (cmd) {
                 .msg => |args| {
                     routeMessageToSub(client, slab, args);
-                    client.stats.msgs_in += 1;
-                    client.stats.bytes_in += args.payload.len;
+                    client.statistics.msgs_in += 1;
+                    client.statistics.bytes_in += args.payload.len;
                 },
                 .hmsg => |args| {
                     routeHMessageToSub(client, slab, args);
-                    client.stats.msgs_in += 1;
-                    client.stats.bytes_in += args.total_len;
+                    client.statistics.msgs_in += 1;
+                    client.statistics.bytes_in += args.total_len;
                 },
                 .ping => {
                     client.write_mutex.lock(client.io) catch
@@ -464,10 +464,10 @@ inline fn routeMessageToSub(
     const buf = slab.alloc(total_size) orelse {
         sub.alloc_failed_msgs += 1;
         // Rate-limit: push event on 1st failure OR after interval msgs
-        const msgs_since = client.stats.msgs_in -| sub.last_alloc_notified_at;
+        const msgs_since = client.statistics.msgs_in -| sub.last_alloc_notified_at;
         const interval = client.options.error_notify_interval_msgs;
         if (sub.alloc_failed_msgs == 1 or msgs_since >= interval) {
-            sub.last_alloc_notified_at = client.stats.msgs_in;
+            sub.last_alloc_notified_at = client.statistics.msgs_in;
             client.pushEvent(.{
                 .alloc_failed = .{
                     .sid = args.sid,
@@ -543,10 +543,10 @@ inline fn routeHMessageToSub(
     const buf = slab.alloc(total_size) orelse {
         sub.alloc_failed_msgs += 1;
         // Rate-limit: push event on 1st failure OR after interval msgs
-        const msgs_since = client.stats.msgs_in -| sub.last_alloc_notified_at;
+        const msgs_since = client.statistics.msgs_in -| sub.last_alloc_notified_at;
         const interval = client.options.error_notify_interval_msgs;
         if (sub.alloc_failed_msgs == 1 or msgs_since >= interval) {
-            sub.last_alloc_notified_at = client.stats.msgs_in;
+            sub.last_alloc_notified_at = client.statistics.msgs_in;
             client.pushEvent(.{
                 .alloc_failed = .{
                     .sid = args.sid,
@@ -650,7 +650,7 @@ fn tryReconnectLoop(client: *Client) bool {
         for (client.server_pool.servers[0..client.server_pool.count]) |*server| {
             client.tryConnect(server) catch continue;
             @atomicStore(State, &client.state, .connected, .release);
-            client.stats.reconnects += 1;
+            client.statistics.reconnects += 1;
             client.reconnect_attempt = 0;
             return true;
         }

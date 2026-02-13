@@ -129,7 +129,7 @@ fn handleRequests(
     sub: *nats.Client.Sub,
 ) void {
     for (0..3) |_| {
-        const req = sub.nextWithTimeout(
+        const req = sub.nextMsgTimeout(
             2000,
         ) catch return;
         if (req) |r| {

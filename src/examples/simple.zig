@@ -35,7 +35,7 @@ pub fn main(init: std.process.Init) !void {
     try client.publish("hello", "Hello, NATS!");
 
     // Receive the message
-    if (try sub.nextWithTimeout(1000)) |msg| {
+    if (try sub.nextMsgTimeout(1000)) |msg| {
         defer msg.deinit();
         std.debug.print("Received: {s}\n", .{msg.data});
     }

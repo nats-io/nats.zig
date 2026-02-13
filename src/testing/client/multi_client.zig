@@ -55,7 +55,7 @@ pub fn testCrossClientRouting(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -172,7 +172,7 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
     for (0..NUM_MSGS) |i| {
         std.debug.print("[TEST] recv {d}: calling io.async()\n", .{i});
         var future = io.io().async(
-            nats.Client.Sub.next,
+            nats.Client.Sub.nextMsg,
             .{sub},
         );
         defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -265,7 +265,7 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
     };
 
     // B receives and forwards to step2
-    const msg_b = sub_b.nextWithTimeout(2000) catch {
+    const msg_b = sub_b.nextMsgTimeout(2000) catch {
         reportResult("three_client_chain", false, "B receive failed");
         return;
     };
@@ -281,7 +281,7 @@ pub fn testThreeClientChain(allocator: std.mem.Allocator) void {
     }
 
     // C receives final message
-    const msg_c = sub_c.nextWithTimeout(2000) catch {
+    const msg_c = sub_c.nextMsgTimeout(2000) catch {
         reportResult("three_client_chain", false, "C receive failed");
         return;
     };
@@ -342,15 +342,15 @@ pub fn testMultipleSubscribersSameSubject(allocator: std.mem.Allocator) void {
 
     var count: u32 = 0;
 
-    if (sub1.nextWithTimeout(500) catch null) |m| {
+    if (sub1.nextMsgTimeout(500) catch null) |m| {
         m.deinit();
         count += 1;
     }
-    if (sub2.nextWithTimeout(500) catch null) |m| {
+    if (sub2.nextMsgTimeout(500) catch null) |m| {
         m.deinit();
         count += 1;
     }
-    if (sub3.nextWithTimeout(500) catch null) |m| {
+    if (sub3.nextMsgTimeout(500) catch null) |m| {
         m.deinit();
         count += 1;
     }

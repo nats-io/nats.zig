@@ -43,7 +43,7 @@ pub fn testHeadersPublishSingle(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -107,7 +107,7 @@ pub fn testHeadersPublishMultiple(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -174,7 +174,7 @@ pub fn testHeadersPublishEmptyPayload(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -233,7 +233,7 @@ pub fn testHeadersPublishRequest(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -308,7 +308,7 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
             r: *nats.Client,
             s: *nats.Subscription,
         ) void {
-            if (s.nextWithTimeout(2000) catch null) |req| {
+            if (s.nextMsgTimeout(2000) catch null) |req| {
                 defer req.deinit();
                 if (req.reply_to) |reply_inbox| {
                     // Verify headers received
@@ -458,7 +458,7 @@ pub fn testHeadersCrossClient(allocator: std.mem.Allocator) void {
         return;
     };
 
-    if (sub.nextWithTimeout(2000) catch null) |msg| {
+    if (sub.nextMsgTimeout(2000) catch null) |msg| {
         defer msg.deinit();
         if (msg.headers == null) {
             reportResult("headers_cross_client", false, "no headers");
@@ -540,7 +540,7 @@ pub fn testHeadersManyEntries(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -619,7 +619,7 @@ pub fn testHeadersLargeValues(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -682,7 +682,7 @@ pub fn testHeadersSpecialChars(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -758,7 +758,7 @@ pub fn testHeadersBinaryPayload(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -816,7 +816,7 @@ pub fn testHeadersWellKnown(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -878,7 +878,7 @@ pub fn testHeadersCaseInsensitive(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};

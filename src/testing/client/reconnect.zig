@@ -164,7 +164,7 @@ fn testSubscriptionRestored(
         .{},
     );
 
-    if (sub.nextWithTimeout(500) catch null) |msg| {
+    if (sub.nextMsgTimeout(500) catch null) |msg| {
         defer msg.deinit();
         if (std.mem.eql(u8, msg.data, "after-reconnect")) {
             reportResult("reconnect_sub_restored", true, "");
@@ -230,17 +230,17 @@ fn testMultipleSubscriptionsRestored(
 
     var received: u8 = 0;
 
-    if (sub1.nextWithTimeout(500) catch null) |msg| {
+    if (sub1.nextMsgTimeout(500) catch null) |msg| {
         msg.deinit();
         received += 1;
     }
 
-    if (sub2.nextWithTimeout(500) catch null) |msg| {
+    if (sub2.nextMsgTimeout(500) catch null) |msg| {
         msg.deinit();
         received += 1;
     }
 
-    if (sub3.nextWithTimeout(500) catch null) |msg| {
+    if (sub3.nextMsgTimeout(500) catch null) |msg| {
         msg.deinit();
         received += 1;
     }
@@ -384,7 +384,7 @@ fn testPendingBufferFlush(
 
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    if (sub.tryNext()) |msg| {
+    if (sub.tryNextMsg()) |msg| {
         defer msg.deinit();
         if (std.mem.eql(u8, msg.data, "buffered-message")) {
             reportResult("pending_buffer_flush", true, "");
@@ -444,7 +444,7 @@ fn testPublishDuringReconnect(
 
     var received: u8 = 0;
     while (received < 10) {
-        if (sub.tryNext()) |msg| {
+        if (sub.tryNextMsg()) |msg| {
             msg.deinit();
             received += 1;
         } else {
@@ -481,7 +481,7 @@ fn testReconnectStatsIncrement(
     };
     defer client.deinit();
 
-    const initial_reconnects = client.getStats().reconnects;
+    const initial_reconnects = client.stats().reconnects;
 
     manager.stopAll(io.io());
 
@@ -495,7 +495,7 @@ fn testReconnectStatsIncrement(
 
     io.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
-    const final_reconnects = client.getStats().reconnects;
+    const final_reconnects = client.stats().reconnects;
 
     if (final_reconnects > initial_reconnects) {
         reportResult("reconnect_stats", true, "");
@@ -524,7 +524,7 @@ fn testReconnectWithQueueGroup(
     };
     defer client.deinit();
 
-    var sub = client.subscribeSyncQueue("queue.test", "workers") catch {
+    var sub = client.queueSubscribeSync("queue.test", "workers") catch {
         reportResult("reconnect_queue_group", false, "subscribe failed");
         return;
     };
@@ -545,7 +545,7 @@ fn testReconnectWithQueueGroup(
         return;
     };
 
-    if (sub.nextWithTimeout(500) catch null) |msg| {
+    if (sub.nextMsgTimeout(500) catch null) |msg| {
         msg.deinit();
         reportResult("reconnect_queue_group", true, "");
     } else {
@@ -696,7 +696,7 @@ fn testReconnectWildcardSub(
         return;
     };
 
-    if (sub.nextWithTimeout(500) catch null) |msg| {
+    if (sub.nextMsgTimeout(500) catch null) |msg| {
         msg.deinit();
         reportResult("reconnect_wildcard", true, "");
     } else {
@@ -916,7 +916,7 @@ fn testFailoverToSecondServer(
 
     client.publish("failover.test", "before") catch {};
 
-    if (sub.nextWithTimeout(500) catch null) |msg| {
+    if (sub.nextMsgTimeout(500) catch null) |msg| {
         msg.deinit();
     } else {
         server1.stop(io.io());
@@ -932,7 +932,7 @@ fn testFailoverToSecondServer(
         return;
     };
 
-    if (sub.nextWithTimeout(1000) catch null) |msg| {
+    if (sub.nextMsgTimeout(1000) catch null) |msg| {
         msg.deinit();
         reportResult("failover_to_second", true, "");
     } else {
@@ -1080,7 +1080,7 @@ fn testAllServersDownThenRecover(
         return;
     };
 
-    if (sub.nextWithTimeout(1000) catch null) |msg| {
+    if (sub.nextMsgTimeout(1000) catch null) |msg| {
         msg.deinit();
         reportResult("all_servers_down_recover", true, "");
     } else {
@@ -1197,23 +1197,23 @@ fn testMultipleSubsActivelyReceiving(
     client.publish("active.sub.five", "pre5") catch {};
 
     var pre_received: u8 = 0;
-    if (sub1.nextWithTimeout(200) catch null) |m| {
+    if (sub1.nextMsgTimeout(200) catch null) |m| {
         m.deinit();
         pre_received += 1;
     }
-    if (sub2.nextWithTimeout(200) catch null) |m| {
+    if (sub2.nextMsgTimeout(200) catch null) |m| {
         m.deinit();
         pre_received += 1;
     }
-    if (sub3.nextWithTimeout(200) catch null) |m| {
+    if (sub3.nextMsgTimeout(200) catch null) |m| {
         m.deinit();
         pre_received += 1;
     }
-    if (sub4.nextWithTimeout(200) catch null) |m| {
+    if (sub4.nextMsgTimeout(200) catch null) |m| {
         m.deinit();
         pre_received += 1;
     }
-    if (sub5.nextWithTimeout(200) catch null) |m| {
+    if (sub5.nextMsgTimeout(200) catch null) |m| {
         m.deinit();
         pre_received += 1;
     }
@@ -1246,23 +1246,23 @@ fn testMultipleSubsActivelyReceiving(
     client.publish("active.sub.five", "post5") catch {};
 
     var post_received: u8 = 0;
-    if (sub1.nextWithTimeout(500) catch null) |m| {
+    if (sub1.nextMsgTimeout(500) catch null) |m| {
         m.deinit();
         post_received += 1;
     }
-    if (sub2.nextWithTimeout(500) catch null) |m| {
+    if (sub2.nextMsgTimeout(500) catch null) |m| {
         m.deinit();
         post_received += 1;
     }
-    if (sub3.nextWithTimeout(500) catch null) |m| {
+    if (sub3.nextMsgTimeout(500) catch null) |m| {
         m.deinit();
         post_received += 1;
     }
-    if (sub4.nextWithTimeout(500) catch null) |m| {
+    if (sub4.nextMsgTimeout(500) catch null) |m| {
         m.deinit();
         post_received += 1;
     }
-    if (sub5.nextWithTimeout(500) catch null) |m| {
+    if (sub5.nextMsgTimeout(500) catch null) |m| {
         m.deinit();
         post_received += 1;
     }
@@ -1324,7 +1324,7 @@ fn testHighVolumePendingBuffer(
 
     var received_before: u32 = 0;
     while (received_before < 100) {
-        if (sub.nextWithTimeout(100) catch null) |msg| {
+        if (sub.nextMsgTimeout(100) catch null) |msg| {
             msg.deinit();
             received_before += 1;
         } else {
@@ -1351,7 +1351,7 @@ fn testHighVolumePendingBuffer(
 
     var received_after: u32 = 0;
     while (received_after < 100) {
-        if (sub.nextWithTimeout(200) catch null) |msg| {
+        if (sub.nextMsgTimeout(200) catch null) |msg| {
             msg.deinit();
             received_after += 1;
         } else {
@@ -1418,7 +1418,7 @@ fn testQueueGroupMultiClientReconnect(
     };
     defer client2.deinit();
 
-    var sub1 = client1.subscribeSyncQueue(
+    var sub1 = client1.queueSubscribeSync(
         "qgroup.test",
         "workers",
     ) catch {
@@ -1427,7 +1427,7 @@ fn testQueueGroupMultiClientReconnect(
     };
     defer sub1.deinit();
 
-    var sub2 = client2.subscribeSyncQueue(
+    var sub2 = client2.queueSubscribeSync(
         "qgroup.test",
         "workers",
     ) catch {
@@ -1446,10 +1446,10 @@ fn testQueueGroupMultiClientReconnect(
     var c1_before: u8 = 0;
     var c2_before: u8 = 0;
     while (c1_before + c2_before < 30) {
-        if (sub1.tryNext()) |m| {
+        if (sub1.tryNextMsg()) |m| {
             m.deinit();
             c1_before += 1;
-        } else if (sub2.tryNext()) |m| {
+        } else if (sub2.tryNextMsg()) |m| {
             m.deinit();
             c2_before += 1;
         } else {
@@ -1477,10 +1477,10 @@ fn testQueueGroupMultiClientReconnect(
     var c1_after: u8 = 0;
     var c2_after: u8 = 0;
     while (c1_after + c2_after < 30) {
-        if (sub1.tryNext()) |m| {
+        if (sub1.tryNextMsg()) |m| {
             m.deinit();
             c1_after += 1;
-        } else if (sub2.tryNext()) |m| {
+        } else if (sub2.tryNextMsg()) |m| {
             m.deinit();
             c2_after += 1;
         } else {
@@ -1558,9 +1558,9 @@ fn testRapidServerRestarts(
         return;
     };
 
-    if (sub.nextWithTimeout(500) catch null) |msg| {
+    if (sub.nextMsgTimeout(500) catch null) |msg| {
         msg.deinit();
-        const stats = client.getStats();
+        const stats = client.stats();
         if (stats.reconnects >= 3) {
             reportResult("rapid_restarts", true, "");
         } else {
@@ -1647,7 +1647,7 @@ fn testMultipleReconnectionCycles(
             return;
         };
 
-        if (sub.nextWithTimeout(500) catch null) |m| {
+        if (sub.nextMsgTimeout(500) catch null) |m| {
             m.deinit();
         } else {
             var buf: [32]u8 = undefined;
@@ -1661,7 +1661,7 @@ fn testMultipleReconnectionCycles(
         }
     }
 
-    const stats = client.getStats();
+    const stats = client.stats();
     if (stats.reconnects == 3) {
         reportResult("multiple_cycles", true, "");
     } else {
@@ -1710,7 +1710,7 @@ fn testLongDisconnectionRecovery(
 
     client.publish("long.test", "before") catch {};
 
-    if (sub.nextWithTimeout(500) catch null) |m| {
+    if (sub.nextMsgTimeout(500) catch null) |m| {
         m.deinit();
     } else {
         reportResult("long_disconnection", false, "no msg before");
@@ -1733,7 +1733,7 @@ fn testLongDisconnectionRecovery(
         return;
     };
 
-    if (sub.nextWithTimeout(1000) catch null) |msg| {
+    if (sub.nextMsgTimeout(1000) catch null) |msg| {
         msg.deinit();
         reportResult("long_disconnection", true, "");
     } else {

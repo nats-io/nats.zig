@@ -51,7 +51,7 @@ pub fn testFlushConfirmedBasic(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -113,7 +113,7 @@ pub fn testFlushConfirmedMultipleMessages(allocator: std.mem.Allocator) void {
     // Verify all 10 messages received
     var received: u32 = 0;
     for (0..10) |_| {
-        if (sub.nextWithTimeout(500) catch null) |m| {
+        if (sub.nextMsgTimeout(500) catch null) |m| {
             m.deinit();
             received += 1;
         }
@@ -183,7 +183,7 @@ pub fn testFlushConfirmedNoSideEffects(allocator: std.mem.Allocator) void {
     // Verify both messages received
     var received: u32 = 0;
     for (0..2) |_| {
-        if (sub.nextWithTimeout(500) catch null) |m| {
+        if (sub.nextMsgTimeout(500) catch null) |m| {
             m.deinit();
             received += 1;
         }
@@ -248,14 +248,14 @@ pub fn testFlushConfirmedVsFlush(allocator: std.mem.Allocator) void {
     };
 
     // Verify both arrive in order
-    const msg1 = sub.nextWithTimeout(500) catch null;
+    const msg1 = sub.nextMsgTimeout(500) catch null;
     if (msg1 == null) {
         reportResult("flush_confirmed_vs_flush", false, "no msg1");
         return;
     }
     defer msg1.?.deinit();
 
-    const msg2 = sub.nextWithTimeout(500) catch null;
+    const msg2 = sub.nextMsgTimeout(500) catch null;
     if (msg2 == null) {
         reportResult("flush_confirmed_vs_flush", false, "no msg2");
         return;
@@ -354,7 +354,7 @@ pub fn testFlushConfirmedLargePayload(allocator: std.mem.Allocator) void {
     };
 
     var future = io.io().async(
-        nats.Client.Sub.next,
+        nats.Client.Sub.nextMsg,
         .{sub},
     );
     defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
@@ -416,7 +416,7 @@ pub fn testFlushConfirmedRapidFire(allocator: std.mem.Allocator) void {
     // Verify all 20 messages received
     var received: u32 = 0;
     for (0..20) |_| {
-        if (sub.nextWithTimeout(500) catch null) |m| {
+        if (sub.nextMsgTimeout(500) catch null) |m| {
             m.deinit();
             received += 1;
         }

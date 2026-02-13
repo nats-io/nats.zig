@@ -58,7 +58,7 @@ pub fn main(init: std.process.Init) !void {
     // Try to receive the message published before subscribing.
     // The short timeout (10ms) confirms no message is available -
     // it was published before our subscription existed.
-    const msg = try sub.nextWithTimeout(10);
+    const msg = try sub.nextMsgTimeout(10);
     try stdout.print("subscribed after a publish...\n", .{});
     try stdout.print("msg is null? {}\n", .{msg == null});
     try stdout.flush();
@@ -70,14 +70,14 @@ pub fn main(init: std.process.Init) !void {
 
     // Receive both messages. The wildcard subscription
     // matches both "greet.joe" and "greet.pam".
-    if (try sub.nextWithTimeout(1000)) |m| {
+    if (try sub.nextMsgTimeout(1000)) |m| {
         defer m.deinit();
         try stdout.print(
             "msg data: \"{s}\" on subject \"{s}\"\n",
             .{ m.data, m.subject },
         );
     }
-    if (try sub.nextWithTimeout(1000)) |m| {
+    if (try sub.nextMsgTimeout(1000)) |m| {
         defer m.deinit();
         try stdout.print(
             "msg data: \"{s}\" on subject \"{s}\"\n",
@@ -89,7 +89,7 @@ pub fn main(init: std.process.Init) !void {
     // matches our wildcard pattern.
     try client.publish("greet.bob", "hello");
 
-    if (try sub.nextWithTimeout(1000)) |m| {
+    if (try sub.nextMsgTimeout(1000)) |m| {
         defer m.deinit();
         try stdout.print(
             "msg data: \"{s}\" on subject \"{s}\"\n",

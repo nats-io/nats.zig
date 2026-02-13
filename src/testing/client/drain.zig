@@ -221,7 +221,7 @@ pub fn testSubWaitDrained(allocator: std.mem.Allocator) void {
 
     // Consume all messages
     for (0..10) |_| {
-        const msg = sub.tryNext();
+        const msg = sub.tryNextMsg();
         if (msg) |m| {
             m.deinit();
         } else break;

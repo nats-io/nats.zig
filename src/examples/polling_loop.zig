@@ -1,6 +1,6 @@
 //! Non-Blocking Polling Pattern
 //!
-//! Demonstrates non-blocking message processing with tryNext():
+//! Demonstrates non-blocking message processing with tryNextMsg():
 //! - Event loop integration (check messages, do other work)
 //! - Multiple subscriptions with round-robin polling
 //! - Mixed workloads (NATS + other tasks)
@@ -69,7 +69,7 @@ pub fn main(init: std.process.Init) !void {
         var processed_any = false;
 
         // Always check high priority first (drain completely)
-        while (high_priority.tryNext()) |msg| {
+        while (high_priority.tryNextMsg()) |msg| {
             defer msg.deinit();
             high_count += 1;
             processed_any = true;
@@ -77,7 +77,7 @@ pub fn main(init: std.process.Init) !void {
         }
 
         // Then check normal priority (one at a time)
-        if (normal.tryNext()) |msg| {
+        if (normal.tryNextMsg()) |msg| {
             defer msg.deinit();
             normal_count += 1;
             processed_any = true;
@@ -85,7 +85,7 @@ pub fn main(init: std.process.Init) !void {
         }
 
         // Finally check low priority (one at a time)
-        if (low_priority.tryNext()) |msg| {
+        if (low_priority.tryNextMsg()) |msg| {
             defer msg.deinit();
             low_count += 1;
             processed_any = true;
@@ -139,7 +139,7 @@ pub fn main(init: std.process.Init) !void {
     var total: u32 = 0;
 
     while (total < 9) {
-        if (subs[idx].tryNext()) |msg| {
+        if (subs[idx].tryNextMsg()) |msg| {
             defer msg.deinit();
             total += 1;
             std.debug.print("  [{s}] {s}\n", .{ names[idx], msg.data });

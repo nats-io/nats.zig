@@ -38,12 +38,12 @@ test "SubBackup getQueueGroup returns correct slice" {
     @memcpy(backup.queue_group_buf[0..qg.len], qg);
     backup.queue_group_len = qg.len;
 
-    try std.testing.expectEqualStrings(qg, backup.getQueueGroup().?);
+    try std.testing.expectEqualStrings(qg, backup.queueGroup().?);
 }
 
 test "SubBackup getQueueGroup returns null when empty" {
     const backup: SubBackup = .{};
-    try std.testing.expect(backup.getQueueGroup() == null);
+    try std.testing.expect(backup.queueGroup() == null);
 }
 
 test "SubBackup max subject length" {
@@ -60,7 +60,7 @@ test "SubBackup max queue group length" {
     @memset(&backup.queue_group_buf, 'q');
     backup.queue_group_len = 64;
 
-    try std.testing.expectEqual(@as(usize, 64), backup.getQueueGroup().?.len);
+    try std.testing.expectEqual(@as(usize, 64), backup.queueGroup().?.len);
 }
 
 test "SubBackup preserves SID" {
@@ -242,7 +242,7 @@ test "aggressive health check" {
 // Stats Tests
 
 test "stats default reconnects zero" {
-    const stats: Client.Stats = .{};
+    const stats: Client.Statistics = .{};
     try std.testing.expectEqual(@as(u32, 0), stats.reconnects);
 }
 
@@ -348,7 +348,7 @@ test "queue group with hyphens and numbers" {
     @memcpy(backup.queue_group_buf[0..qg.len], qg);
     backup.queue_group_len = qg.len;
 
-    try std.testing.expectEqualStrings(qg, backup.getQueueGroup().?);
+    try std.testing.expectEqualStrings(qg, backup.queueGroup().?);
 }
 
 test "backup with all fields populated" {
@@ -369,7 +369,7 @@ test "backup with all fields populated" {
 
     try std.testing.expectEqual(@as(u64, 42), backup.sid);
     try std.testing.expectEqualStrings(subject, backup.getSubject());
-    try std.testing.expectEqualStrings(qg, backup.getQueueGroup().?);
+    try std.testing.expectEqualStrings(qg, backup.queueGroup().?);
     try std.testing.expectEqual(@as(u64, 1000), backup.max_msgs.?);
     try std.testing.expectEqual(@as(u64, 500), backup.received_msgs);
 }

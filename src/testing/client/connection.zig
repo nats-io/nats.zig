@@ -306,7 +306,7 @@ pub fn testConnectionOptions(allocator: std.mem.Allocator) void {
         return;
     }
 
-    const info = client.getServerInfo();
+    const info = client.serverInfo();
     if (info == null) {
         reportResult("connection_options", false, "no server info");
         return;

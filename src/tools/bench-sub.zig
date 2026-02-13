@@ -147,7 +147,7 @@ fn runBenchmark(
 
     var batch_buf: [64]nats.Client.Message = undefined;
     while (msg_count < config.msgs) {
-        const batch_count = sub.tryNextBatch(&batch_buf);
+        const batch_count = sub.tryNextMsgBatch(&batch_buf);
         if (batch_count > 0) {
             if (start_ts == null) {
                 start_ts = std.Io.Timestamp.now(io, .awake);
@@ -178,7 +178,7 @@ fn runBenchmark(
             continue;
         }
 
-        const msg = sub.nextWithTimeout(5000) catch |err| {
+        const msg = sub.nextMsgTimeout(5000) catch |err| {
             std.debug.print("Receive error: {}\n", .{err});
             std.process.exit(1);
         } orelse {
@@ -223,8 +223,8 @@ fn runBenchmark(
         };
         stats.print("subscriber");
 
-        const dropped = sub.getDroppedCount();
-        const alloc_failed = sub.getAllocFailedCount();
+        const dropped = sub.dropped();
+        const alloc_failed = sub.allocFailed();
         if (dropped > 0 or alloc_failed > 0) {
             std.debug.print(
                 "  WARNING: dropped={d}, alloc_failed={d}\n",

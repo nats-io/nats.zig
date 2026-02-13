@@ -66,7 +66,7 @@ pub fn testQueueGroupTooLong(allocator: std.mem.Allocator) void {
     var long_qg: [max_len + 1]u8 = undefined;
     @memset(&long_qg, 'q');
 
-    const result = client.subscribeSyncQueue("test.subject", &long_qg);
+    const result = client.queueSubscribeSync("test.subject", &long_qg);
     if (result) |sub| {
         sub.deinit();
         reportResult("queue_group_too_long", false, "should have failed");
@@ -202,7 +202,7 @@ pub fn testQueueGroupExactLimit(allocator: std.mem.Allocator) void {
     var qg_max: [max_len]u8 = undefined;
     @memset(&qg_max, 'q');
 
-    const sub = client.subscribeSyncQueue("test.subject", &qg_max) catch {
+    const sub = client.queueSubscribeSync("test.subject", &qg_max) catch {
         reportResult("qg_exact_limit", false, "subscribe failed");
         return;
     };

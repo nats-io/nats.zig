@@ -54,7 +54,7 @@ pub fn main(init: std.process.Init) !void {
 
     for (0..max_attempts) |attempt| {
         // Create futures for receive and timeout
-        var recv_future = io.async(Sub.next, .{sub});
+        var recv_future = io.async(Sub.nextMsg, .{sub});
         var timeout_future = io.async(sleepMs, .{ io, 500 });
 
         // Track winner to avoid double-free

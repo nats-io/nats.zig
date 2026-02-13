@@ -106,7 +106,7 @@ pub fn main(init: std.process.Init) !void {
 
     while (!app_state.should_shutdown and msg_count < max_msgs) {
         // Non-blocking message check with timeout
-        if (try sub.nextWithTimeout(1000)) |msg| {
+        if (try sub.nextMsgTimeout(1000)) |msg| {
             defer msg.deinit();
             std.debug.print("Received: {s}\n", .{msg.data});
             msg_count += 1;

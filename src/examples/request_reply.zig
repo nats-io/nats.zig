@@ -65,7 +65,7 @@ fn handleService(
     client: *nats.Client,
     service: *nats.Client.Sub,
 ) void {
-    const req = service.nextWithTimeout(2000) catch return;
+    const req = service.nextMsgTimeout(2000) catch return;
     if (req) |r| {
         defer r.deinit();
 

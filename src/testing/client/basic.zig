@@ -73,7 +73,7 @@ pub fn testClientTryNext(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit();
 
-    if (sub.tryNext() != null) {
+    if (sub.tryNextMsg() != null) {
         reportResult("client_try_next", false, "expected null");
         return;
     }
@@ -99,7 +99,7 @@ pub fn testClientServerInfo(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    if (client.getServerInfo()) |info| {
+    if (client.serverInfo()) |info| {
         if (info.port == test_port) {
             reportResult("client_server_info", true, "");
             return;

@@ -55,13 +55,13 @@ pub fn main(init: std.process.Init) !void {
     io.sleep(.fromMilliseconds(50), .awake) catch {};
 
     var orders_count: u32 = 0;
-    while (orders.tryNext()) |msg| {
+    while (orders.tryNextMsg()) |msg| {
         defer msg.deinit();
         orders_count += 1;
     }
 
     var events_count: u32 = 0;
-    while (events.tryNext()) |msg| {
+    while (events.tryNextMsg()) |msg| {
         defer msg.deinit();
         events_count += 1;
     }
@@ -74,8 +74,8 @@ pub fn main(init: std.process.Init) !void {
     // CHECK FOR DROPPED MESSAGES before shutdown
     std.debug.print("\nPre-shutdown health check:\n", .{});
 
-    const orders_dropped = orders.getDroppedCount();
-    const events_dropped = events.getDroppedCount();
+    const orders_dropped = orders.dropped();
+    const events_dropped = events.dropped();
 
     if (orders_dropped > 0 or events_dropped > 0) {
         std.debug.print("  WARNING: Messages were dropped!\n", .{});
@@ -113,7 +113,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // Final stats
-    const stats = client.getStats();
+    const stats = client.stats();
     std.debug.print("\nFinal statistics:\n", .{});
     std.debug.print("  Messages sent: {d}\n", .{stats.msgs_out});
     std.debug.print("  Messages received: {d}\n", .{stats.msgs_in});
