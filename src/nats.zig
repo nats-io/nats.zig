@@ -30,6 +30,7 @@ pub const connection = @import("connection.zig");
 pub const pubsub = @import("pubsub.zig");
 pub const memory = @import("memory.zig");
 pub const auth = @import("auth.zig");
+pub const jetstream = @import("jetstream.zig");
 
 // Configuration types
 pub const QueueSize = defaults.QueueSize;

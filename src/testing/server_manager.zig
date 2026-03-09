@@ -19,6 +19,8 @@ pub const ServerConfig = struct {
     config_file: ?[]const u8 = null,
     /// Enable debug/verbose output.
     debug: bool = false,
+    /// Enable JetStream.
+    jetstream: bool = false,
 };
 
 /// A self-contained NATS server for testing.
@@ -58,6 +60,10 @@ pub const TestServer = struct {
         if (config.config_file) |config_file| {
             try args.append(allocator, "-c");
             try args.append(allocator, config_file);
+        }
+
+        if (config.jetstream) {
+            try args.append(allocator, "-js");
         }
 
         if (config.debug) {

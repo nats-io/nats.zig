@@ -22,6 +22,7 @@ pub const test_jwt_seed =
 
 // Dynamic JWT test constants
 pub const dynamic_jwt_port: u16 = 14228;
+pub const jetstream_port: u16 = 14229;
 
 // TLS test constants
 pub const tls_port: u16 = 14226;
