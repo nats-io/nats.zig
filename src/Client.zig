@@ -725,7 +725,7 @@ pub fn connect(
     std.posix.setsockopt(
         client.stream.socket.handle,
         std.posix.IPPROTO.TCP,
-        std.os.linux.TCP.NODELAY,
+        std.posix.TCP.NODELAY,
         std.mem.asBytes(&enable),
     ) catch {
         client.tcp_nodelay_set = false;

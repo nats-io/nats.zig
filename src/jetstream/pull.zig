@@ -21,6 +21,7 @@ pub const PullSubscription = struct {
     stream: []const u8,
     consumer: []const u8,
 
+    /// Options for pull-based message fetching.
     pub const FetchOpts = struct {
         max_messages: u32 = 1,
         timeout_ms: u32 = 5000,

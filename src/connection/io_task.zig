@@ -207,7 +207,7 @@ const PollResult = enum {
 /// On Linux, POLLIN and POLLHUP can both be set when there's
 /// buffered data AND the connection is closing. POLLHUP is prioritized
 /// to detect dead connections even with buffered data.
-inline fn pollForData(fd: posix.fd_t, timeout_ms: i32) PollResult {
+inline fn pollForData(fd: posix.socket_t, timeout_ms: i32) PollResult {
     var fds = [_]posix.pollfd{.{
         .fd = fd,
         .events = posix.POLL.IN,

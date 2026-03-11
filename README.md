@@ -8,6 +8,10 @@ A [Zig](https://ziglang.org/) client for the [NATS messaging system](https://nat
 
 Native Zig. Built on `std.Io`.
 
+> **Work in Progress** - This library is under active development.
+> Core pub/sub and TLS are implemented and functional. JetStream, KV store,
+> and other advanced features are still being built. The API may change.
+
 ## Requirements
 
 - Zig 0.16.0-dev.2535 or later
@@ -766,6 +770,84 @@ try client.publishWithHeaderMap("subject", &headers, "payload");
 
 ---
 
+## JetStream
+
+JetStream is NATS' persistence and streaming layer. It provides
+at-least-once delivery, message replay, and durable consumers --
+all through a JSON request/reply API on `$JS.API.*` subjects.
+
+For the full guide with Go comparisons, see
+[docs/JetStream.md](docs/JetStream.md).
+
+### Quick Example
+
+```zig
+const nats = @import("nats");
+const js_mod = nats.jetstream;
+
+// Create a JetStream context (stack-allocated, no heap)
+var js = js_mod.JetStream.init(client, .{});
+
+// Create a stream
+var stream = try js.createStream(.{
+    .name = "ORDERS",
+    .subjects = &.{"orders.>"},
+    .storage = .memory,
+});
+defer stream.deinit();
+
+// Publish with ack confirmation
+var ack = try js.publish("orders.new", "order-1");
+defer ack.deinit();
+// ack.value.seq, ack.value.stream
+
+// Create a pull consumer
+var cons = try js.createConsumer("ORDERS", .{
+    .name = "processor",
+    .durable_name = "processor",
+    .ack_policy = .explicit,
+});
+defer cons.deinit();
+
+// Fetch messages
+var pull = js_mod.PullSubscription{
+    .js = &js,
+    .stream = "ORDERS",
+    .consumer = "processor",
+};
+var result = try pull.fetch(.{
+    .max_messages = 10,
+    .timeout_ms = 5000,
+});
+defer result.deinit();
+
+for (result.messages) |*msg| {
+    try msg.ack();
+}
+```
+
+### What's Included (Tier 1)
+
+- **Stream CRUD** -- create, update, delete, info, purge
+- **Consumer CRUD** -- create, update, delete, info
+- **JetStream publish** -- with ack confirmation, dedup
+  headers (`Nats-Msg-Id`), optimistic concurrency
+  (`Nats-Expected-Last-Sequence`)
+- **Pull subscribe** -- batch fetch with timeout, handles
+  404/408/409 status codes
+- **Message ack protocol** -- ack, nak, nak with delay,
+  in-progress, term, term with reason
+- **Error handling** -- Zig error unions + `lastApiError()`
+  for server-side JetStream error codes
+- **Domain support** -- multi-tenant via `domain` option
+
+### Not Yet Implemented
+
+Heartbeat-based idle detection, flow control, ordered consumers,
+Key-Value store, Object store.
+
+---
+
 ## Async Patterns with std.Io
 
 ### Cancellation Pattern
@@ -1502,6 +1584,27 @@ if (client.connectedServerVersion()) |version| {
 | Encode user JWT | `auth.jwt.encodeUserClaims(buf, sub, name, signer, iat, opts)` | `![]const u8` |
 | Format credentials | `auth.creds.format(buf, jwt, seed)` | `[]const u8` |
 | Parse credentials | `auth.creds.parse(content)` | `!Credentials` |
+| **JetStream** | | |
+| Create JS context | `jetstream.JetStream.init(client, opts)` | `JetStream` |
+| Create stream | `js.createStream(config)` | `!Response(StreamInfo)` |
+| Update stream | `js.updateStream(config)` | `!Response(StreamInfo)` |
+| Stream info | `js.streamInfo(name)` | `!Response(StreamInfo)` |
+| Purge stream | `js.purgeStream(name)` | `!Response(PurgeResponse)` |
+| Delete stream | `js.deleteStream(name)` | `!Response(DeleteResponse)` |
+| Create consumer | `js.createConsumer(stream, config)` | `!Response(ConsumerInfo)` |
+| Update consumer | `js.updateConsumer(stream, config)` | `!Response(ConsumerInfo)` |
+| Consumer info | `js.consumerInfo(stream, consumer)` | `!Response(ConsumerInfo)` |
+| Delete consumer | `js.deleteConsumer(stream, consumer)` | `!Response(DeleteResponse)` |
+| JS publish | `js.publish(subject, payload)` | `!Response(PubAck)` |
+| JS publish + opts | `js.publishWithOpts(subject, payload, opts)` | `!Response(PubAck)` |
+| Last API error | `js.lastApiError()` | `?ApiError` |
+| Fetch messages | `pull.fetch(opts)` | `!FetchResult` |
+| Ack message | `msg.ack()` | `!void` |
+| Nak message | `msg.nak()` | `!void` |
+| Nak with delay | `msg.nakWithDelay(delay_ns)` | `!void` |
+| In-progress | `msg.inProgress()` | `!void` |
+| Terminate | `msg.term()` | `!void` |
+| Terminate + reason | `msg.termWithReason(reason)` | `!void` |
 
 ---
 
@@ -1535,7 +1638,7 @@ zig build fmt
 | NKey Authentication | Implemented |
 | JWT/Credentials | Implemented |
 | TLS | Implemented |
-| JetStream | Planned |
+| JetStream | In Progress |
 | Key-Value | Planned |
 | Object Store | Planned |
 

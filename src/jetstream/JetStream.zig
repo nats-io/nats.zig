@@ -33,6 +33,8 @@ api_prefix_len: u8 = 0,
 timeout_ms: u32 = 5000,
 last_api_err: ?ApiError = null,
 
+/// JetStream context options for API prefix, timeout, and
+/// multi-tenant domain configuration.
 pub const Options = struct {
     api_prefix: []const u8 = "$JS.API.",
     timeout_ms: u32 = 5000,
@@ -47,7 +49,7 @@ pub fn init(client: *Client, opts: Options) JetStream {
         .allocator = client.allocator,
         .timeout_ms = opts.timeout_ms,
     };
-    const prefix = if (opts.domain) |d| blk: {
+    if (opts.domain) |d| {
         var buf: [128]u8 = undefined;
         const p = std.fmt.bufPrint(
             &buf,
@@ -59,16 +61,13 @@ pub fn init(client: *Client, opts: Options) JetStream {
             p,
         );
         js.api_prefix_len = @intCast(p.len);
-        break :blk js.api_prefix_buf[0..p.len];
-    } else blk: {
+    } else {
         const p = opts.api_prefix;
         std.debug.assert(p.len > 0);
         std.debug.assert(p.len <= js.api_prefix_buf.len);
         @memcpy(js.api_prefix_buf[0..p.len], p);
         js.api_prefix_len = @intCast(p.len);
-        break :blk js.api_prefix_buf[0..p.len];
-    };
-    _ = prefix;
+    }
     return js;
 }
 
@@ -85,6 +84,7 @@ pub fn createStream(
     config: StreamConfig,
 ) !Response(StreamInfo) {
     std.debug.assert(config.name.len > 0);
+    std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
         &buf,
@@ -100,6 +100,7 @@ pub fn updateStream(
     config: StreamConfig,
 ) !Response(StreamInfo) {
     std.debug.assert(config.name.len > 0);
+    std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
         &buf,
@@ -115,6 +116,7 @@ pub fn deleteStream(
     name: []const u8,
 ) !Response(DeleteResponse) {
     std.debug.assert(name.len > 0);
+    std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
         &buf,
@@ -133,6 +135,7 @@ pub fn streamInfo(
     name: []const u8,
 ) !Response(StreamInfo) {
     std.debug.assert(name.len > 0);
+    std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
         &buf,
@@ -148,6 +151,7 @@ pub fn purgeStream(
     name: []const u8,
 ) !Response(PurgeResponse) {
     std.debug.assert(name.len > 0);
+    std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
         &buf,
@@ -169,6 +173,7 @@ pub fn createConsumer(
     config: ConsumerConfig,
 ) !Response(ConsumerInfo) {
     std.debug.assert(stream.len > 0);
+    std.debug.assert(self.timeout_ms > 0);
     var buf: [512]u8 = undefined;
     const name = config.name orelse
         config.durable_name orelse "";
@@ -192,6 +197,7 @@ pub fn updateConsumer(
     config: ConsumerConfig,
 ) !Response(ConsumerInfo) {
     std.debug.assert(stream.len > 0);
+    std.debug.assert(self.timeout_ms > 0);
     var buf: [512]u8 = undefined;
     const name = config.name orelse
         config.durable_name orelse "";
@@ -280,6 +286,7 @@ pub fn publishWithOpts(
     opts: PublishOpts,
 ) !Response(PubAck) {
     std.debug.assert(subject.len > 0);
+    std.debug.assert(payload.len <= 1048576);
 
     var hdr_entries: [5]headers.Entry = undefined;
     var hdr_count: usize = 0;
