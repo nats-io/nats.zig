@@ -99,17 +99,8 @@ pub const TestServer = struct {
                 "[SERVER] Killing server on port {d}...\n",
                 .{self.config.port},
             );
-            // Check if process is still alive before killing (avoid ESRCH panic)
-            // Signal 0 checks if process exists without sending a signal
-            if (proc.id) |pid| {
-                // Use linux kill syscall with signal 0 to check if process exists
-                const sig_zero: std.os.linux.SIG = @enumFromInt(0);
-                const rc = std.os.linux.kill(pid, sig_zero);
-                // rc == 0 means process exists, negative means error (e.g., ESRCH)
-                const alive = (rc == 0);
-                if (alive) {
-                    proc.kill(io);
-                }
+            if (proc.id != null) {
+                proc.kill(io);
             }
             self.process = null;
             // Give OS time to fully terminate the process and close sockets

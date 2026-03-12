@@ -8,7 +8,7 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 | request_reply | `run-request-reply` | RPC pattern with automatic inbox handling |
 | queue_groups | `run-queue-groups` | Load-balanced workers with `io.concurrent()` |
 | polling_loop | `run-polling-loop` | Non-blocking `tryNextMsg()` with priority scheduling |
-| select | `run-select` | Race subscription against timeout with `io.select()` |
+| select | `run-select` | Race subscription against timeout with `Io.Select` |
 | batch_receiving | `run-batch-receiving` | `nextMsgBatch()` for bulk receives, stats monitoring |
 | reconnection | `run-reconnection` | Auto-reconnect, backoff, buffer during disconnect |
 | events | `run-events` | EventHandler callbacks with external state |

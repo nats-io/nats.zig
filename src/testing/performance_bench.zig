@@ -9,6 +9,8 @@
 //!
 //! Usage: zig build perf-bench -- --msgs=100000 --size=16
 
+const builtin = @import("builtin");
+
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
@@ -2174,10 +2176,9 @@ fn generateMarkdown(
     }
 
     // System info
-    const uname = std.posix.uname();
     try writer.print("**System:** {s} {s}\n", .{
-        @as([*:0]const u8, &uname.sysname),
-        @as([*:0]const u8, &uname.release),
+        @tagName(builtin.os.tag),
+        @tagName(builtin.cpu.arch),
     });
 
     try writer.print("**Messages:** {d}\n", .{opts.num_msgs});

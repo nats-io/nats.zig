@@ -40,7 +40,7 @@ pub const Slab = struct {
 
     const NONE: u32 = 0xFFFF_FFFF;
 
-    /// Initialize slab with mmap'd memory.
+    /// Initialize slab with page-aligned memory.
     pub fn init(slice_size: u32, slice_count: u32) !Slab {
         assert(slice_size >= 4);
         assert(slice_count > 0);
@@ -48,14 +48,11 @@ pub const Slab = struct {
 
         const total = @as(usize, slice_size) * slice_count;
 
-        const memory = std.posix.mmap(
-            null,
+        const raw = std.heap.page_allocator.alloc(
+            u8,
             total,
-            .{ .READ = true, .WRITE = true },
-            .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-            -1,
-            0,
         ) catch return error.MmapFailed;
+        const memory: []align(4096) u8 = @alignCast(raw);
 
         var slab = Slab{
             .memory = @alignCast(memory),
@@ -75,9 +72,9 @@ pub const Slab = struct {
         return slab;
     }
 
-    /// Release mmap'd memory.
+    /// Release page-allocated memory.
     pub fn deinit(self: *Slab) void {
-        std.posix.munmap(self.memory);
+        std.heap.page_allocator.free(self.memory);
         self.* = undefined;
     }
 

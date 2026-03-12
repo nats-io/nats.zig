@@ -15,7 +15,9 @@
 //! Runs as async task started by Client.connect().
 
 const std = @import("std");
+const builtin = @import("builtin");
 const posix = std.posix;
+const native_os = builtin.os.tag;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
@@ -202,18 +204,43 @@ const PollResult = enum {
     disconnected,
 };
 
+/// Cross-platform socket poll.
+/// std.posix.poll has a Windows codepath that calls
+/// windows.poll which does not exist in this Zig version.
+/// Use WSAPoll directly on Windows.
+fn pollSockets(
+    fds: []posix.pollfd,
+    timeout: i32,
+) posix.PollError!usize {
+    if (native_os == .windows) {
+        const ws2 = std.os.windows.ws2_32;
+        const rc = ws2.WSAPoll(
+            fds.ptr,
+            @intCast(fds.len),
+            timeout,
+        );
+        if (rc == ws2.SOCKET_ERROR)
+            return error.NetworkDown;
+        return @intCast(rc);
+    }
+    return posix.poll(fds, timeout);
+}
+
 /// Poll socket for readable data with timeout (cross-platform).
 /// Also detects disconnect via POLLHUP/POLLERR.
 /// On Linux, POLLIN and POLLHUP can both be set when there's
 /// buffered data AND the connection is closing. POLLHUP is prioritized
 /// to detect dead connections even with buffered data.
-inline fn pollForData(fd: posix.socket_t, timeout_ms: i32) PollResult {
+inline fn pollForData(
+    fd: posix.socket_t,
+    timeout_ms: i32,
+) PollResult {
     var fds = [_]posix.pollfd{.{
         .fd = fd,
         .events = posix.POLL.IN,
         .revents = 0,
     }};
-    const ready = posix.poll(&fds, timeout_ms) catch return .no_data;
+    const ready = pollSockets(&fds, timeout_ms) catch return .no_data;
     if (ready == 0) return .no_data;
 
     // Single load, combined checks (avoid 3 separate loads)

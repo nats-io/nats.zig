@@ -2,6 +2,8 @@
   <img src="logo/logo.png" width="300">
 </p>
 
+![Zig](https://img.shields.io/badge/Zig-0.16.0--dev.2736-orange)
+
 # nats.zig
 
 A [Zig](https://ziglang.org/) client for the [NATS messaging system](https://nats.io).
@@ -14,7 +16,7 @@ Native Zig. Built on `std.Io`.
 
 ## Requirements
 
-- Zig 0.16.0-dev.2535 or later
+- Zig 0.16.0-dev.2736 or later
 - NATS server (for running examples and tests)
 
 ## Installation
@@ -150,7 +152,7 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 | request_reply | `run-request-reply` | RPC pattern with automatic inbox handling |
 | queue_groups | `run-queue-groups` | Load-balanced workers with `io.concurrent()` |
 | polling_loop | `run-polling-loop` | Non-blocking `tryNextMsg()` with priority scheduling |
-| select | `run-select` | Race subscription against timeout with `io.select()` |
+| select | `run-select` | Race subscription against timeout with `Io.Select` |
 | batch_receiving | `run-batch-receiving` | `nextMsgBatch()` for bulk receives, stats monitoring |
 | reconnection | `run-reconnection` | Auto-reconnect, backoff, buffer during disconnect |
 | events | `run-events` | EventHandler callbacks with external state |
@@ -860,7 +862,7 @@ defer future.cancel(io) catch {};  // defer cancel
 const result = try future.await(io);
 ```
 
-### Racing Operations with `io.select()`
+### Racing Operations with `Io.Select`
 
 Wait for the first of multiple operations to complete:
 
@@ -869,27 +871,42 @@ fn sleepMs(io_ctx: std.Io, ms: i64) void {
     io_ctx.sleep(.fromMilliseconds(ms), .awake) catch {};
 }
 
-var recv_future = io.async(nats.Client.Sub.nextMsg, .{sub});
-var timeout_future = io.async(sleepMs, .{ io, 5000 });
+const Sel = std.Io.Select(union(enum) {
+    message: anyerror!nats.Message,
+    timeout: void,
+});
+var buf: [2]Sel.Union = undefined;
+var sel = Sel.init(io, &buf);
+sel.async(.message, nats.Client.Sub.nextMsg, .{sub});
+sel.async(.timeout, sleepMs, .{ io, 5000 });
 
-const result = io.select(.{
-    .message = &recv_future,
-    .timeout = &timeout_future,
-}) catch |err| {
-    timeout_future.cancel(io);
-    if (recv_future.cancel(io)) |m| m.deinit() else |_| {}
+const result = sel.await() catch |err| {
+    while (sel.cancel()) |remaining| {
+        switch (remaining) {
+            .message => |r| {
+                if (r) |m| m.deinit() else |_| {}
+            },
+            .timeout => {},
+        }
+    }
     return err;
 };
+while (sel.cancel()) |remaining| {
+    switch (remaining) {
+        .message => |r| {
+            if (r) |m| m.deinit() else |_| {}
+        },
+        .timeout => {},
+    }
+}
 
 switch (result) {
     .message => |msg_result| {
-        timeout_future.cancel(io);
         const msg = try msg_result;
         defer msg.deinit();
         std.debug.print("Received: {s}\n", .{msg.data});
     },
-    .timeout => |_| {
-        if (recv_future.cancel(io)) |m| m.deinit() else |_| {}
+    .timeout => {
         std.debug.print("Timeout!\n", .{});
     },
 }
@@ -1641,6 +1658,17 @@ zig build fmt
 | JetStream | In Progress |
 | Key-Value | Planned |
 | Object Store | Planned |
+
+## Related Projects
+
+Other Zig-based NATS implementations from the community:
+
+- [NATS C client library, packaged for Zig](https://github.com/allyourcodebase/nats.c)
+- [Zig language bindings to the NATS.c library](https://github.com/epicyclic-dev/nats-client)
+- [Zig client for NATS Core and JetStream](https://github.com/g41797/nats)
+- [A Zig client library for NATS, the cloud-native messaging system](https://github.com/lalinsky/nats.zig)
+- [Minimal synchronous NATS Zig client](https://github.com/ianic/nats.zig)
+- [Work-in-progress NATS library for Zig](https://github.com/rutgerbrf/zig-nats)
 
 ## License
 

@@ -1,12 +1,13 @@
-//! io.select() Pattern - Subscription with Timeout
+//! Io.Select Pattern - Subscription with Timeout
 //!
-//! Demonstrates io.select() to race a subscription receive against a timeout.
-//! This is the correct use case for io.select() with NATS - racing ONE
-//! subscription against a non-resource operation like sleep.
+//! Demonstrates Io.Select to race a subscription receive against a
+//! timeout. This is the correct use case for Io.Select with NATS -
+//! racing ONE subscription against a non-resource operation like sleep.
 //!
-//! NOTE: Do NOT use io.select() to race multiple subscriptions - cancelling
-//! a subscription future discards any message it received. Use polling or
-//! io.concurrent() + Io.Queue instead (see multi_sub.zig, multi_sub_async.zig).
+//! NOTE: Do NOT use Io.Select to race multiple subscriptions -
+//! cancelling a subscription task discards any message it received.
+//! Use polling or io.concurrent() + Io.Queue instead (see
+//! multi_sub.zig, multi_sub_async.zig).
 //!
 //! Run with: zig build example-select
 //!
@@ -17,8 +18,9 @@ const nats = @import("nats");
 
 const Io = std.Io;
 const Sub = nats.Client.Sub;
+const Message = nats.Message;
 
-/// Sleep function compatible with io.async()
+/// Sleep function compatible with Io.Select.async()
 fn sleepMs(io: Io, ms: i64) void {
     io.sleep(.fromMilliseconds(ms), .awake) catch {};
 }
@@ -41,42 +43,59 @@ pub fn main(init: std.process.Init) !void {
     defer sub.deinit();
 
     std.debug.print("Subscribed to 'demo.select'\n", .{});
-    std.debug.print("\nPublishing 3 messages with 200ms gaps...\n", .{});
-    std.debug.print("Using 500ms timeout - should receive all 3.\n\n", .{});
+    std.debug.print(
+        "\nPublishing 3 messages with 200ms gaps...\n",
+        .{},
+    );
+    std.debug.print(
+        "Using 500ms timeout - should receive all 3.\n\n",
+        .{},
+    );
 
     // Spawn publisher in background
     var publisher = io.async(publishMessages, .{ client, io });
     defer publisher.cancel(io);
 
-    // Receive with timeout using io.select()
+    // Receive with timeout using Io.Select
     var received: u32 = 0;
     const max_attempts = 5;
 
+    const Sel = Io.Select(union(enum) {
+        message: anyerror!Message,
+        timeout: void,
+    });
+
     for (0..max_attempts) |attempt| {
-        // Create futures for receive and timeout
-        var recv_future = io.async(Sub.nextMsg, .{sub});
-        var timeout_future = io.async(sleepMs, .{ io, 500 });
-
-        // Track winner to avoid double-free
-        var winner: enum { none, message, timeout } = .none;
-
-        // Defer cancel for non-winners
-        defer if (winner != .message) {
-            if (recv_future.cancel(io)) |m| m.deinit() else |_| {}
-        };
-        defer if (winner != .timeout) {
-            timeout_future.cancel(io);
-        };
+        var buf: [2]Sel.Union = undefined;
+        var sel = Sel.init(io, &buf);
+        sel.async(.message, Sub.nextMsg, .{sub});
+        sel.async(.timeout, sleepMs, .{ io, 500 });
 
         // Wait for EITHER message OR timeout
-        const result = io.select(.{
-            .message = &recv_future,
-            .timeout = &timeout_future,
-        }) catch break; // Defers handle cleanup
+        const result = sel.await() catch {
+            // Cancel remaining tasks, deinit any messages
+            while (sel.cancel()) |remaining| {
+                switch (remaining) {
+                    .message => |r| {
+                        if (r) |m| m.deinit() else |_| {}
+                    },
+                    .timeout => {},
+                }
+            }
+            break;
+        };
+        // Cancel the loser task
+        while (sel.cancel()) |remaining| {
+            switch (remaining) {
+                .message => |r| {
+                    if (r) |m| m.deinit() else |_| {}
+                },
+                .timeout => {},
+            }
+        }
 
         switch (result) {
             .message => |msg_result| {
-                winner = .message;
                 const msg = msg_result catch continue;
                 defer msg.deinit();
                 received += 1;
@@ -86,8 +105,10 @@ pub fn main(init: std.process.Init) !void {
                 );
             },
             .timeout => {
-                winner = .timeout;
-                std.debug.print("  [{d}] Timeout - no message\n", .{attempt + 1});
+                std.debug.print(
+                    "  [{d}] Timeout - no message\n",
+                    .{attempt + 1},
+                );
             },
         }
     }
@@ -107,7 +128,11 @@ fn publishMessages(
 
     for (1..4) |i| {
         var buf: [32]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Message {d}", .{i}) catch "Msg";
+        const msg = std.fmt.bufPrint(
+            &buf,
+            "Message {d}",
+            .{i},
+        ) catch "Msg";
         client.publish("demo.select", msg) catch return;
         io.sleep(.fromMilliseconds(200), .awake) catch {};
     }

@@ -1311,7 +1311,7 @@ fn checkAuthRejection(self: *Client) !void {
     }
 }
 
-/// Reads from socket with connection timeout using io.select().
+/// Reads from socket with connection timeout using Io.Select.
 /// Returns data or error.ConnectionTimeout if timeout expires.
 fn peekWithTimeout(
     self: *Client,
@@ -1320,34 +1320,26 @@ fn peekWithTimeout(
 ) ![]u8 {
     assert(timeout_ns > 0);
 
-    // Race read against timeout using io.select()
-    var read_future = self.io.async(peekGreedyAsync, .{ reader, self.io });
-    var timeout_future = self.io.async(sleepNs, .{ self.io, timeout_ns });
+    const Sel = Io.Select(union(enum) {
+        read: anyerror![]u8,
+        timeout: void,
+    });
+    var buf: [2]Sel.Union = undefined;
+    var sel = Sel.init(self.io, &buf);
+    sel.async(.read, peekGreedyAsync, .{ reader, self.io });
+    sel.async(.timeout, sleepNs, .{ self.io, timeout_ns });
 
-    // Winner-tracking pattern to avoid double-free
-    var winner: enum { none, read, timeout } = .none;
-
-    defer if (winner != .read) {
-        if (read_future.cancel(self.io)) |_| {} else |_| {}
-    };
-    defer if (winner != .timeout) {
-        timeout_future.cancel(self.io);
-    };
-
-    const result = self.io.select(.{
-        .read = &read_future,
-        .timeout = &timeout_future,
-    }) catch {
+    const result = sel.await() catch {
+        sel.cancelDiscard();
         return error.ConnectionFailed;
     };
+    sel.cancelDiscard();
 
     switch (result) {
         .read => |read_result| {
-            winner = .read;
             return read_result catch error.ConnectionFailed;
         },
         .timeout => {
-            winner = .timeout;
             return error.ConnectionTimeout;
         },
     }
@@ -1848,7 +1840,7 @@ pub fn publishMsg(self: *Client, msg: *const Message) !void {
 ///     timeout_ms: Maximum time to wait for reply in milliseconds
 ///
 /// Creates a temporary inbox subscription, sends request with reply-to
-/// and headers, and waits for response using io.select().
+/// and headers, and waits for response using Io.Select.
 /// Returns null on timeout.
 pub fn requestWithHeaders(
     self: *Client,
@@ -1880,48 +1872,47 @@ pub fn requestWithHeaders(
     // Publish request with reply-to and headers (auto-flush sends promptly)
     try self.publishRequestWithHeaders(subject, inbox, hdrs, payload);
 
-    // Wait for reply using io.select()
-    var response_future = self.io.async(
-        Subscription.nextMsg,
-        .{sub},
-    );
-    var timeout_future = self.io.async(
-        sleepMs,
-        .{ self.io, timeout_ms },
-    );
+    const Sel = Io.Select(union(enum) {
+        response: anyerror!Message,
+        timeout: void,
+    });
+    var buf: [2]Sel.Union = undefined;
+    var sel = Sel.init(self.io, &buf);
+    sel.async(.response, Subscription.nextMsg, .{sub});
+    sel.async(.timeout, sleepMs, .{ self.io, timeout_ms });
 
-    // Winner-tracking pattern: defer cleanup for non-winners
-    var winner: enum { none, response, timeout } = .none;
-
-    defer if (winner != .response) {
-        if (response_future.cancel(self.io)) |msg| {
-            msg.deinit();
-        } else |_| {}
+    const select_result = sel.await() catch {
+        while (sel.cancel()) |remaining| {
+            switch (remaining) {
+                .response => |r| {
+                    if (r) |msg| msg.deinit() else |_| {}
+                },
+                .timeout => {},
+            }
+        }
+        return null;
     };
-    defer if (winner != .timeout) {
-        timeout_future.cancel(self.io);
-    };
-
-    const select_result = self.io.select(.{
-        .response = &response_future,
-        .timeout = &timeout_future,
-    }) catch |err| {
-        if (err == error.Canceled) return null;
-        return err;
-    };
+    while (sel.cancel()) |remaining| {
+        switch (remaining) {
+            .response => |r| {
+                if (r) |msg| msg.deinit() else |_| {}
+            },
+            .timeout => {},
+        }
+    }
 
     switch (select_result) {
         .response => |msg_result| {
-            winner = .response;
             return msg_result catch |err| {
-                if (err == error.Canceled or err == error.Closed) {
+                if (err == error.Canceled or
+                    err == error.Closed)
+                {
                     return null;
                 }
                 return err;
             };
         },
         .timeout => {
-            winner = .timeout;
             return null;
         },
     }
@@ -1955,7 +1946,7 @@ pub fn flushBuffer(self: *Client) !void {
 ///
 /// Sends all buffered data, then sends PING and waits for PONG response.
 /// This confirms the server received all messages up to this point.
-/// Safe in both sync and async contexts (uses io.select pattern).
+/// Safe in both sync and async contexts (uses Io.Select pattern).
 ///
 /// This matches Go/C client Flush() behavior (PING/PONG confirmation).
 /// For fast buffer-only flush without confirmation, use flushBuffer().
@@ -2000,8 +1991,8 @@ pub fn flush(
     }
     self.write_mutex.unlock(self.io);
 
-    // Step 2: Poll for PONG with timeout (direct loop, no io.select)
-    // Using direct polling avoids io.async()+io.select() which can deadlock
+    // Step 2: Poll for PONG with timeout (direct loop, no Io.Select)
+    // Using direct polling avoids io.async()+Io.Select which can deadlock
     // when multiple clients share the same Io.Threaded instance.
     const old_pong_ns = self.last_pong_received_ns.load(.acquire);
     const deadline_ns = getNowNs(self.io) +| timeout_ns;
@@ -2078,33 +2069,26 @@ pub fn drainTimeout(
         return error.NotConnected;
     }
 
-    var drain_future = self.io.async(drainHelper, .{self});
-    var timeout_future = self.io.async(sleepNs, .{ self.io, timeout_ns });
+    const Sel = Io.Select(union(enum) {
+        drain: anyerror!DrainResult,
+        timeout: void,
+    });
+    var buf: [2]Sel.Union = undefined;
+    var sel = Sel.init(self.io, &buf);
+    sel.async(.drain, drainHelper, .{self});
+    sel.async(.timeout, sleepNs, .{ self.io, timeout_ns });
 
-    var winner: enum { none, drain, timeout } = .none;
-
-    defer if (winner != .drain) {
-        _ = drain_future.cancel(self.io);
+    const select_result = sel.await() catch {
+        sel.cancelDiscard();
+        return error.Canceled;
     };
-    defer if (winner != .timeout) {
-        timeout_future.cancel(self.io);
-    };
-
-    const select_result = self.io.select(.{
-        .drain = &drain_future,
-        .timeout = &timeout_future,
-    }) catch |err| {
-        if (err == error.Canceled) return error.Canceled;
-        return err;
-    };
+    sel.cancelDiscard();
 
     switch (select_result) {
         .drain => |result| {
-            winner = .drain;
             return result;
         },
         .timeout => {
-            winner = .timeout;
             return error.Timeout;
         },
     }
@@ -2123,7 +2107,7 @@ fn drainHelper(self: *Client) !DrainResult {
 ///     timeout_ms: Maximum time to wait for reply in milliseconds
 ///
 /// Creates a temporary inbox subscription, sends request with reply-to,
-/// and waits for response using io.select(). Returns null on timeout.
+/// and waits for response using Io.Select. Returns null on timeout.
 pub fn request(
     self: *Client,
     subject: []const u8,
@@ -2152,48 +2136,47 @@ pub fn request(
     // Publish request with reply-to (auto-flush sends promptly)
     try self.publishRequest(subject, inbox, payload);
 
-    // Wait for reply using io.select()
-    var response_future = self.io.async(
-        Subscription.nextMsg,
-        .{sub},
-    );
-    var timeout_future = self.io.async(
-        sleepMs,
-        .{ self.io, timeout_ms },
-    );
+    const Sel = Io.Select(union(enum) {
+        response: anyerror!Message,
+        timeout: void,
+    });
+    var buf: [2]Sel.Union = undefined;
+    var sel = Sel.init(self.io, &buf);
+    sel.async(.response, Subscription.nextMsg, .{sub});
+    sel.async(.timeout, sleepMs, .{ self.io, timeout_ms });
 
-    // Winner-tracking pattern: defer cleanup for non-winners
-    var winner: enum { none, response, timeout } = .none;
-
-    defer if (winner != .response) {
-        if (response_future.cancel(self.io)) |msg| {
-            msg.deinit();
-        } else |_| {}
+    const select_result = sel.await() catch {
+        while (sel.cancel()) |remaining| {
+            switch (remaining) {
+                .response => |r| {
+                    if (r) |m| m.deinit() else |_| {}
+                },
+                .timeout => {},
+            }
+        }
+        return null;
     };
-    defer if (winner != .timeout) {
-        timeout_future.cancel(self.io);
-    };
-
-    const select_result = self.io.select(.{
-        .response = &response_future,
-        .timeout = &timeout_future,
-    }) catch |err| {
-        if (err == error.Canceled) return null;
-        return err;
-    };
+    while (sel.cancel()) |remaining| {
+        switch (remaining) {
+            .response => |r| {
+                if (r) |m| m.deinit() else |_| {}
+            },
+            .timeout => {},
+        }
+    }
 
     switch (select_result) {
         .response => |msg_result| {
-            winner = .response;
             return msg_result catch |err| {
-                if (err == error.Canceled or err == error.Closed) {
+                if (err == error.Canceled or
+                    err == error.Closed)
+                {
                     return null;
                 }
                 return err;
             };
         },
         .timeout => {
-            winner = .timeout;
             return null;
         },
     }
@@ -2258,45 +2241,48 @@ pub fn requestMsg(
         self.flush_requested.store(true, .release);
     }
 
-    // Wait for reply using io.select()
-    var response_future = self.io.async(
+    const Sel = Io.Select(union(enum) {
+        response: anyerror!Message,
+        timeout: void,
+    });
+    var buf_sel: [2]Sel.Union = undefined;
+    var sel = Sel.init(self.io, &buf_sel);
+    sel.async(
+        .response,
         Subscription.nextMsg,
         .{sub},
     );
-    var timeout_future = self.io.async(
-        sleepMs,
-        .{ self.io, timeout_ms },
-    );
+    sel.async(.timeout, sleepMs, .{ self.io, timeout_ms });
 
-    var winner: enum { none, response, timeout } = .none;
-
-    defer if (winner != .response) {
-        if (response_future.cancel(self.io)) |reply| {
-            reply.deinit();
-        } else |_| {}
+    const select_result = sel.await() catch {
+        while (sel.cancel()) |remaining| {
+            switch (remaining) {
+                .response => |r| {
+                    if (r) |m| m.deinit() else |_| {}
+                },
+                .timeout => {},
+            }
+        }
+        return null;
     };
-    defer if (winner != .timeout) {
-        timeout_future.cancel(self.io);
-    };
-
-    const select_result = self.io.select(.{
-        .response = &response_future,
-        .timeout = &timeout_future,
-    }) catch |err| {
-        if (err == error.Canceled) return null;
-        return err;
-    };
+    while (sel.cancel()) |remaining| {
+        switch (remaining) {
+            .response => |r| {
+                if (r) |m| m.deinit() else |_| {}
+            },
+            .timeout => {},
+        }
+    }
 
     switch (select_result) {
         .response => |msg_result| {
-            winner = .response;
             return msg_result catch |err| {
-                if (err == error.Canceled or err == error.Closed) return null;
+                if (err == error.Canceled or
+                    err == error.Closed) return null;
                 return err;
             };
         },
         .timeout => {
-            winner = .timeout;
             return null;
         },
     }
