@@ -218,11 +218,12 @@ try client.publish("events.click", "button2");
 try client.publish("events.click", "button3");
 ```
 
-**Buffer details:**
-- Default size: 1MB (configurable via `writer_buffer_size` option)
-- No allocator needed - `publish()` writes to a pre-allocated buffer
-- Auto-flushes (via io_task background loop)
+**How it works:**
+- `publish()` encodes into a lock-free ring buffer (no mutex)
+- The io_task background thread drains the ring to the socket
 - Multiple rapid publishes are naturally batched for efficiency
+- Works at full speed even in tight loops (100K+ msgs/sec)
+- Ring size: 2MB minimum (auto-sized, power-of-2)
 
 ### Confirmed Flush
 
