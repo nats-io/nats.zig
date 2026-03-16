@@ -375,6 +375,35 @@ pub fn encode(
     try writer.writeAll("\r\n");
 }
 
+/// Encodes headers directly into a pre-sized byte buffer.
+/// Buffer must be exactly encodedSize(entries) bytes.
+pub fn encodeToBuf(
+    buf: []u8,
+    entries: []const Entry,
+) void {
+    assert(entries.len > 0);
+    var pos: usize = 0;
+
+    @memcpy(buf[pos..][0..10], "NATS/1.0\r\n");
+    pos += 10;
+
+    for (entries) |entry| {
+        @memcpy(buf[pos..][0..entry.key.len], entry.key);
+        pos += entry.key.len;
+        @memcpy(buf[pos..][0..2], ": ");
+        pos += 2;
+        @memcpy(
+            buf[pos..][0..entry.value.len],
+            entry.value,
+        );
+        pos += entry.value.len;
+        @memcpy(buf[pos..][0..2], "\r\n");
+        pos += 2;
+    }
+
+    @memcpy(buf[pos..][0..2], "\r\n");
+}
+
 /// Calculates the encoded size of headers.
 pub fn encodedSize(entries: []const Entry) usize {
     assert(entries.len > 0);

@@ -1110,10 +1110,6 @@ pub fn testMaxSubscriptionsExceeded(allocator: std.mem.Allocator) void {
             break;
         };
         created += 1;
-        // Flush every 500 to prevent write backlog
-        if (created % 500 == 0) {
-            client.flush(2_000_000_000) catch {};
-        }
     }
 
     if (created != MAX_SUBS) {

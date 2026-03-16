@@ -150,18 +150,41 @@ pub fn run(client: *Client) void {
             }
         }
 
-        // Auto-flush: check if publish() requested a flush
-        // Only flush if still connected (avoid BADF on closed socket)
-        if (client.flush_requested.load(.monotonic)) {
+        // Drain publish ring: move encoded bytes to socket
+        if (!client.publish_ring.isEmpty()) {
+            if (State.atomicLoad(&client.state) == .connected) {
+                client.write_mutex.lock(client.io) catch continue :outer;
+                if (State.atomicLoad(&client.state) == .connected) {
+                    // Drain all pending publishes
+                    while (client.publish_ring.peek()) |data| {
+                        client.active_writer.writeAll(data) catch {
+                            client.write_mutex.unlock(client.io);
+                            continue :outer;
+                        };
+                        client.publish_ring.advance();
+                    }
+                    // Flush once after draining all entries
+                    client.active_writer.flush() catch {};
+                    if (client.use_tls) {
+                        client.writer.interface.flush() catch {};
+                    }
+                }
+                client.write_mutex.unlock(client.io);
+                // Clear flush_requested since we just flushed
+                _ = client.flush_requested.swap(
+                    false,
+                    .acquire,
+                );
+                made_progress = true;
+            }
+        } else if (client.flush_requested.load(.monotonic)) {
+            // Auto-flush for non-publish writes (SUB, UNSUB)
             if (client.flush_requested.swap(false, .acquire)) {
-                // Atomic check before acquiring mutex
                 if (State.atomicLoad(&client.state) == .connected) {
                     client.write_mutex.lock(client.io) catch continue :outer;
                     defer client.write_mutex.unlock(client.io);
-                    // Double-check after mutex
                     if (State.atomicLoad(&client.state) == .connected) {
                         client.active_writer.flush() catch {};
-                        // TLS: flush underlying TCP writer too
                         if (client.use_tls) {
                             client.writer.interface.flush() catch {};
                         }

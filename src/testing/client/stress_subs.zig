@@ -11,13 +11,6 @@ const reportResult = utils.reportResult;
 const formatUrl = utils.formatUrl;
 const test_port = utils.test_port;
 
-/// Helper: flush client write buffer. Needed after tight publish
-/// loops because the main thread holding write_mutex starves
-/// the io_task's auto-flush from acquiring it.
-fn doFlush(client: *nats.Client) void {
-    client.flush(2_000_000_000) catch {};
-}
-
 // --- A. Massive Subscription Tests ---
 
 /// 5K subs on unique subjects, publish one msg to each, verify.
@@ -124,7 +117,7 @@ pub fn testFiveThousandSubs(
             return;
         };
     }
-    doFlush(pub_client);
+
 
     // Wait for messages to arrive
     io.io().sleep(
@@ -143,7 +136,7 @@ pub fn testFiveThousandSubs(
         }
     }
 
-    const threshold = NUM_SUBS * 90 / 100;
+    const threshold = NUM_SUBS * 100 / 100;
     if (received >= threshold) {
         reportResult("5k_subs", true, "");
     } else {
@@ -455,7 +448,7 @@ pub fn testWildcardFanOut(
             return;
         };
     }
-    doFlush(pub_client);
+
     io.io().sleep(
         .fromMilliseconds(500),
         .awake,
@@ -603,7 +596,7 @@ pub fn testTenClientsManySubs(
             return;
         };
     }
-    doFlush(publisher);
+
 
     pub_io.io().sleep(
         .fromMilliseconds(1000),
@@ -620,7 +613,7 @@ pub fn testTenClientsManySubs(
         }
     }
 
-    const threshold = total_subs * 90 / 100;
+    const threshold = total_subs * 100 / 100;
     if (total_recv >= threshold) {
         reportResult("10_clients_subs", true, "");
     } else {
@@ -752,7 +745,7 @@ pub fn testMultiPubMultiSub(
                 c.publish(subj, "mp") catch {};
             }
         }
-        doFlush(c);
+
     }
 
     pub_ios[0].io().sleep(
@@ -776,7 +769,7 @@ pub fn testMultiPubMultiSub(
 
     const total_expected =
         NUM_SUB * NUM_SUBJECTS * expected_per_sub;
-    const threshold = total_expected * 90 / 100;
+    const threshold = total_expected * 100 / 100;
     if (total_recv >= threshold) {
         reportResult("multi_pub_sub", true, "");
     } else {
@@ -1115,7 +1108,7 @@ pub fn testBurstPublish100K(
             return;
         };
     }
-    doFlush(pub_client);
+
 
     io.io().sleep(
         .fromMilliseconds(3000),
@@ -1130,7 +1123,7 @@ pub fn testBurstPublish100K(
         } else break;
     }
 
-    const threshold = NUM_MSGS * 90 / 100;
+    const threshold = NUM_MSGS * 100 / 100;
     if (received >= threshold) {
         reportResult("burst_100k", true, "");
     } else {
@@ -1213,7 +1206,7 @@ pub fn testLargePayloadBurst(
             return;
         };
     }
-    doFlush(pub_client);
+
 
     io.io().sleep(
         .fromMilliseconds(3000),
@@ -1228,7 +1221,7 @@ pub fn testLargePayloadBurst(
         } else break;
     }
 
-    const threshold = NUM_MSGS * 90 / 100;
+    const threshold = NUM_MSGS * 100 / 100;
     if (received >= threshold) {
         reportResult("large_burst", true, "");
     } else {
@@ -1304,7 +1297,7 @@ pub fn testManySubjectsPublish(
             return;
         };
     }
-    doFlush(pub_client);
+
 
     io.io().sleep(
         .fromMilliseconds(2000),
@@ -1319,7 +1312,7 @@ pub fn testManySubjectsPublish(
         } else break;
     }
 
-    const threshold = NUM * 90 / 100;
+    const threshold = NUM * 100 / 100;
     if (received >= threshold) {
         reportResult("many_subj_pub", true, "");
     } else {
@@ -1384,7 +1377,7 @@ pub fn testSlowConsumer(
     for (0..200) |_| {
         pub_client.publish("slow", "flood") catch {};
     }
-    doFlush(pub_client);
+
     io.io().sleep(
         .fromMilliseconds(500),
         .awake,
@@ -1455,7 +1448,7 @@ pub fn testQueueFillAndRecover(
     for (0..Q_SIZE) |_| {
         pub_client.publish("qr", "fill1") catch {};
     }
-    doFlush(pub_client);
+
     io.io().sleep(
         .fromMilliseconds(200),
         .awake,
@@ -1472,7 +1465,7 @@ pub fn testQueueFillAndRecover(
     for (0..Q_SIZE) |_| {
         pub_client.publish("qr", "fill2") catch {};
     }
-    doFlush(pub_client);
+
     io.io().sleep(
         .fromMilliseconds(200),
         .awake,

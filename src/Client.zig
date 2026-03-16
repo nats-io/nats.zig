@@ -31,6 +31,9 @@ const memory = @import("memory.zig");
 const SidMap = memory.SidMap;
 const TieredSlab = memory.TieredSlab;
 const SpscQueue = @import("sync/spsc_queue.zig").SpscQueue;
+const byte_ring = @import("sync/byte_ring.zig");
+pub const ByteRing = byte_ring.ByteRing;
+const RING_HDR_SIZE = byte_ring.HDR_SIZE;
 const dbg = @import("dbg.zig");
 const defaults = @import("defaults.zig");
 const events_mod = @import("events.zig");
@@ -533,6 +536,11 @@ pings_outstanding: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 /// Auto-flush signal: set by publish(), cleared by io_task after flush.
 flush_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
+/// Lock-free publish ring buffer. Producer: main thread, Consumer: io_task.
+/// Publishes encode directly into this ring; io_task drains to socket.
+publish_ring: ByteRing = undefined,
+publish_ring_buf: ?[]u8 = null,
+
 // Debug counters for io_task (only used when dbg.enabled)
 io_task_stats: IoTaskStats = .{},
 
@@ -753,6 +761,25 @@ pub fn connect(
         return error.OutOfMemory;
     };
     errdefer allocator.free(client.write_buffer);
+
+    // Publish ring: power-of-2, at least 2x max_payload
+    const min_ring = defaults.Protocol.max_payload * 2;
+    const ring_size = std.math.ceilPowerOfTwo(
+        usize,
+        @max(min_ring, opts.writer_buffer_size),
+    ) catch {
+        return error.OutOfMemory;
+    };
+    client.publish_ring_buf = allocator.alloc(
+        u8,
+        ring_size,
+    ) catch {
+        return error.OutOfMemory;
+    };
+    errdefer if (client.publish_ring_buf) |b| allocator.free(b);
+    client.publish_ring = ByteRing.init(
+        client.publish_ring_buf.?,
+    );
 
     client.io = io;
     client.reader = client.stream.reader(io, client.read_buffer);
@@ -1578,12 +1605,8 @@ pub fn queueSubscribeFn(
 
 /// Publishes a message to a subject.
 ///
-/// Arguments:
-///     subject: Destination subject (no wildcards allowed)
-///     payload: Message data
-///
-/// Messages are buffered. Call flush() to ensure delivery.
-/// Thread-safe: protected by write_mutex for concurrent publish.
+/// Lock-free: encodes directly into the publish ring buffer.
+/// The io_task drains the ring to the socket automatically.
 pub fn publish(
     self: *Client,
     subject: []const u8,
@@ -1594,20 +1617,14 @@ pub fn publish(
         return error.NotConnected;
     }
     try pubsub.validatePublish(subject);
-    if (payload.len > self.max_payload) return error.PayloadTooLarge;
+    if (payload.len > self.max_payload)
+        return error.PayloadTooLarge;
 
-    // Acquire write mutex for thread-safe buffer access
-    try self.write_mutex.lock(self.io);
-    defer self.write_mutex.unlock(self.io);
-
-    const writer = self.active_writer;
-    protocol.Encoder.encodePub(writer, .{
-        .subject = subject,
-        .reply_to = null,
-        .payload = payload,
-    }) catch {
-        return error.EncodingFailed;
-    };
+    try self.encodePubToRing(
+        subject,
+        null,
+        payload,
+    );
 
     self.statistics.msgs_out += 1;
     self.statistics.bytes_out += payload.len;
@@ -1615,7 +1632,7 @@ pub fn publish(
 }
 
 /// Publishes with a reply-to subject.
-/// Thread-safe: protected by write_mutex for concurrent publish.
+/// Lock-free: encodes into the publish ring buffer.
 pub fn publishRequest(
     self: *Client,
     subject: []const u8,
@@ -1629,20 +1646,14 @@ pub fn publishRequest(
     }
     try pubsub.validatePublish(subject);
     try pubsub.validateReplyTo(reply_to);
-    if (payload.len > self.max_payload) return error.PayloadTooLarge;
+    if (payload.len > self.max_payload)
+        return error.PayloadTooLarge;
 
-    // Acquire write mutex for thread-safe buffer access
-    try self.write_mutex.lock(self.io);
-    defer self.write_mutex.unlock(self.io);
-
-    const writer = self.active_writer;
-    protocol.Encoder.encodePub(writer, .{
-        .subject = subject,
-        .reply_to = reply_to,
-        .payload = payload,
-    }) catch {
-        return error.EncodingFailed;
-    };
+    try self.encodePubToRing(
+        subject,
+        reply_to,
+        payload,
+    );
 
     self.statistics.msgs_out += 1;
     self.statistics.bytes_out += payload.len;
@@ -1650,14 +1661,7 @@ pub fn publishRequest(
 }
 
 /// Publishes a message with headers.
-///
-/// Arguments:
-///     subject: Destination subject (no wildcards allowed)
-///     hdrs: Header entries to include
-///     payload: Message data
-///
-/// Messages are buffered. Call flush() to ensure delivery.
-/// Thread-safe: protected by write_mutex for concurrent publish.
+/// Lock-free: encodes into the publish ring buffer.
 pub fn publishWithHeaders(
     self: *Client,
     subject: []const u8,
@@ -1666,27 +1670,19 @@ pub fn publishWithHeaders(
 ) !void {
     assert(subject.len > 0);
     assert(hdrs.len > 0);
-    if (!self.state.canSend()) {
-        return error.NotConnected;
-    }
+    if (!self.state.canSend()) return error.NotConnected;
     try pubsub.validatePublish(subject);
 
     const hdr_size = headers.encodedSize(hdrs);
-    if (hdr_size + payload.len > self.max_payload) return error.PayloadTooLarge;
+    if (hdr_size + payload.len > self.max_payload)
+        return error.PayloadTooLarge;
 
-    // Acquire write mutex for thread-safe buffer access
-    try self.write_mutex.lock(self.io);
-    defer self.write_mutex.unlock(self.io);
-
-    const writer = self.active_writer;
-    protocol.Encoder.encodeHPubWithEntries(writer, .{
-        .subject = subject,
-        .reply_to = null,
-        .headers = hdrs,
-        .payload = payload,
-    }) catch {
-        return error.EncodingFailed;
-    };
+    try self.encodeHPubToRing(
+        subject,
+        null,
+        hdrs,
+        payload,
+    );
 
     self.statistics.msgs_out += 1;
     self.statistics.bytes_out += payload.len;
@@ -1694,14 +1690,7 @@ pub fn publishWithHeaders(
 }
 
 /// Publishes with headers and reply-to subject.
-///
-/// Arguments:
-///     subject: Destination subject (no wildcards allowed)
-///     reply_to: Subject for reply
-///     hdrs: Header entries to include
-///     payload: Message data
-///
-/// Thread-safe: protected by write_mutex for concurrent publish.
+/// Lock-free: encodes into the publish ring buffer.
 pub fn publishRequestWithHeaders(
     self: *Client,
     subject: []const u8,
@@ -1712,28 +1701,20 @@ pub fn publishRequestWithHeaders(
     assert(subject.len > 0);
     assert(reply_to.len > 0);
     assert(hdrs.len > 0);
-    if (!self.state.canSend()) {
-        return error.NotConnected;
-    }
+    if (!self.state.canSend()) return error.NotConnected;
     try pubsub.validatePublish(subject);
     try pubsub.validateReplyTo(reply_to);
 
     const hdr_size = headers.encodedSize(hdrs);
-    if (hdr_size + payload.len > self.max_payload) return error.PayloadTooLarge;
+    if (hdr_size + payload.len > self.max_payload)
+        return error.PayloadTooLarge;
 
-    // Acquire write mutex for thread-safe buffer access
-    try self.write_mutex.lock(self.io);
-    defer self.write_mutex.unlock(self.io);
-
-    const writer = self.active_writer;
-    protocol.Encoder.encodeHPubWithEntries(writer, .{
-        .subject = subject,
-        .reply_to = reply_to,
-        .headers = hdrs,
-        .payload = payload,
-    }) catch {
-        return error.EncodingFailed;
-    };
+    try self.encodeHPubToRing(
+        subject,
+        reply_to,
+        hdrs,
+        payload,
+    );
 
     self.statistics.msgs_out += 1;
     self.statistics.bytes_out += payload.len;
@@ -1741,14 +1722,7 @@ pub fn publishRequestWithHeaders(
 }
 
 /// Publishes with a HeaderMap builder.
-///
-/// Arguments:
-///     subject: Destination subject (no wildcards allowed)
-///     header_map: HeaderMap containing headers to include
-///     payload: Message data
-///
-/// Messages are buffered. Call flush() to ensure delivery.
-/// Thread-safe: protected by write_mutex for concurrent publish.
+/// Lock-free: encodes into the publish ring buffer.
 pub fn publishWithHeaderMap(
     self: *Client,
     subject: []const u8,
@@ -1760,74 +1734,54 @@ pub fn publishWithHeaderMap(
     if (!self.state.canSend()) return error.NotConnected;
     try pubsub.validatePublish(subject);
 
-    // Encode headers to NATS format
     const hdr_bytes = try header_map.encode();
     defer header_map.allocator.free(hdr_bytes);
 
-    if (hdr_bytes.len + payload.len > self.max_payload) {
+    if (hdr_bytes.len + payload.len > self.max_payload)
         return error.PayloadTooLarge;
-    }
 
-    // Acquire write mutex for thread-safe buffer access
-    try self.write_mutex.lock(self.io);
-    defer self.write_mutex.unlock(self.io);
-
-    const writer = self.active_writer;
-    protocol.Encoder.encodeHPub(writer, .{
-        .subject = subject,
-        .reply_to = null,
-        .headers = hdr_bytes,
-        .payload = payload,
-    }) catch {
-        return error.EncodingFailed;
-    };
+    try self.encodeHPubRawToRing(
+        subject,
+        null,
+        hdr_bytes,
+        payload,
+    );
 
     self.statistics.msgs_out += 1;
     self.statistics.bytes_out += payload.len;
     self.flush_requested.store(true, .release);
 }
 
-/// Publishes a Message object (convenience for republishing/forwarding).
-///
-/// Arguments:
-///     msg: Message to publish (uses subject, data, and headers if present)
-///
-/// Useful for forwarding received messages or republishing with same content.
-/// Messages are buffered. Call flush() to ensure delivery.
-/// Thread-safe: protected by write_mutex for concurrent publish.
-pub fn publishMsg(self: *Client, msg: *const Message) !void {
+/// Publishes a Message object (convenience for forwarding).
+/// Lock-free: encodes into the publish ring buffer.
+pub fn publishMsg(
+    self: *Client,
+    msg: *const Message,
+) !void {
     assert(msg.subject.len > 0);
     if (!self.state.canSend()) return error.NotConnected;
     try pubsub.validatePublish(msg.subject);
 
-    // Check payload size (including headers if present)
     const total_size = if (msg.headers) |h|
         h.len + msg.data.len
     else
         msg.data.len;
-    if (total_size > self.max_payload) return error.PayloadTooLarge;
-
-    // Acquire write mutex for thread-safe buffer access
-    try self.write_mutex.lock(self.io);
-    defer self.write_mutex.unlock(self.io);
-
-    const writer = self.active_writer;
+    if (total_size > self.max_payload)
+        return error.PayloadTooLarge;
 
     if (msg.headers) |hdrs| {
-        // Publish with headers using raw header bytes
-        protocol.Encoder.encodeHPub(writer, .{
-            .subject = msg.subject,
-            .reply_to = null,
-            .headers = hdrs,
-            .payload = msg.data,
-        }) catch return error.EncodingFailed;
+        try self.encodeHPubRawToRing(
+            msg.subject,
+            null,
+            hdrs,
+            msg.data,
+        );
     } else {
-        // Publish without headers
-        protocol.Encoder.encodePub(writer, .{
-            .subject = msg.subject,
-            .reply_to = null,
-            .payload = msg.data,
-        }) catch return error.EncodingFailed;
+        try self.encodePubToRing(
+            msg.subject,
+            null,
+            msg.data,
+        );
     }
 
     self.statistics.msgs_out += 1;
@@ -1964,8 +1918,17 @@ pub fn flush(
     assert(timeout_ns > 0);
     if (!self.state.canSend()) return error.NotConnected;
 
-    // Step 1: Flush buffered data and send PING (holding mutex)
+    // Step 1: Drain publish ring + flush + send PING (holding mutex)
     try self.write_mutex.lock(self.io);
+
+    // Drain any pending publishes from the ring first
+    while (self.publish_ring.peek()) |data| {
+        self.active_writer.writeAll(data) catch {
+            self.write_mutex.unlock(self.io);
+            return error.WriteFailed;
+        };
+        self.publish_ring.advance();
+    }
 
     self.active_writer.flush() catch {
         self.write_mutex.unlock(self.io);
@@ -3104,6 +3067,7 @@ pub fn deinit(self: *Client) void {
 
     alloc.free(self.read_buffer);
     alloc.free(self.write_buffer);
+    if (self.publish_ring_buf) |b| alloc.free(b);
     alloc.destroy(self);
 }
 
@@ -3212,6 +3176,252 @@ fn deinitPendingBuffer(self: *Client) void {
         self.pending_buffer_pos = 0;
         self.pending_buffer_capacity = 0;
     }
+}
+
+/// Fast integer-to-string (avoids std.fmt overhead).
+fn writeUsizeToSlice(buf: *[20]u8, value: usize) []const u8 {
+    if (value == 0) {
+        buf[19] = '0';
+        return buf[19..20];
+    }
+    var v = value;
+    var i: usize = 20;
+    while (v > 0) : (v /= 10) {
+        i -= 1;
+        buf[i] = @intCast((v % 10) + '0');
+    }
+    return buf[i..20];
+}
+
+/// Max encoded size for PUB subject [reply] len\r\npayload\r\n
+fn pubEncodedSize(
+    subject: []const u8,
+    reply_to: ?[]const u8,
+    payload: []const u8,
+) usize {
+    // "PUB " + subject + " " + [reply + " "] + len(max 20) + "\r\n" + payload + "\r\n"
+    var size: usize = 4 + subject.len + 1 + 20 + 2 + payload.len + 2;
+    if (reply_to) |r| size += r.len + 1;
+    return size;
+}
+
+/// Encode PUB into publish ring (lock-free).
+/// Spins briefly if ring is full, then returns error.
+fn encodePubToRing(
+    self: *Client,
+    subject: []const u8,
+    reply_to: ?[]const u8,
+    payload: []const u8,
+) !void {
+    const max_size = pubEncodedSize(
+        subject,
+        reply_to,
+        payload,
+    );
+    const entry = self.reserveRingEntry(max_size) orelse
+        return error.PublishBufferFull;
+
+    const buf = entry[RING_HDR_SIZE..];
+    var pos: usize = 0;
+
+    // "PUB "
+    @memcpy(buf[pos..][0..4], "PUB ");
+    pos += 4;
+
+    // subject
+    @memcpy(buf[pos..][0..subject.len], subject);
+    pos += subject.len;
+
+    // [reply_to]
+    if (reply_to) |r| {
+        buf[pos] = ' ';
+        pos += 1;
+        @memcpy(buf[pos..][0..r.len], r);
+        pos += r.len;
+    }
+
+    // " " + payload length
+    buf[pos] = ' ';
+    pos += 1;
+    var num_buf: [20]u8 = undefined;
+    const len_str = writeUsizeToSlice(
+        &num_buf,
+        payload.len,
+    );
+    @memcpy(buf[pos..][0..len_str.len], len_str);
+    pos += len_str.len;
+
+    // "\r\n"
+    @memcpy(buf[pos..][0..2], "\r\n");
+    pos += 2;
+
+    // payload
+    @memcpy(buf[pos..][0..payload.len], payload);
+    pos += payload.len;
+
+    // "\r\n"
+    @memcpy(buf[pos..][0..2], "\r\n");
+    pos += 2;
+
+    self.publish_ring.commit(entry, pos);
+}
+
+/// Encode HPUB with structured header entries into ring.
+fn encodeHPubToRing(
+    self: *Client,
+    subject: []const u8,
+    reply_to: ?[]const u8,
+    hdrs: []const headers.Entry,
+    payload: []const u8,
+) !void {
+    const hdr_size = headers.encodedSize(hdrs);
+    const total_len = hdr_size + payload.len;
+
+    // "HPUB " + subject + " " + [reply + " "] + hdr_len(20) + " " + total_len(20) + "\r\n" + headers + payload + "\r\n"
+    var max_size: usize = 5 + subject.len + 1 + 20 + 1 + 20 + 2 + hdr_size + payload.len + 2;
+    if (reply_to) |r| max_size += r.len + 1;
+
+    const entry = self.reserveRingEntry(max_size) orelse
+        return error.PublishBufferFull;
+
+    const buf = entry[RING_HDR_SIZE..];
+    var pos: usize = 0;
+
+    @memcpy(buf[pos..][0..5], "HPUB ");
+    pos += 5;
+
+    @memcpy(buf[pos..][0..subject.len], subject);
+    pos += subject.len;
+
+    if (reply_to) |r| {
+        buf[pos] = ' ';
+        pos += 1;
+        @memcpy(buf[pos..][0..r.len], r);
+        pos += r.len;
+    }
+
+    var num_buf: [20]u8 = undefined;
+    buf[pos] = ' ';
+    pos += 1;
+    const hdr_str = writeUsizeToSlice(&num_buf, hdr_size);
+    @memcpy(buf[pos..][0..hdr_str.len], hdr_str);
+    pos += hdr_str.len;
+
+    buf[pos] = ' ';
+    pos += 1;
+    const tot_str = writeUsizeToSlice(&num_buf, total_len);
+    @memcpy(buf[pos..][0..tot_str.len], tot_str);
+    pos += tot_str.len;
+
+    @memcpy(buf[pos..][0..2], "\r\n");
+    pos += 2;
+
+    // Encode headers into buffer
+    const hdr_buf = buf[pos .. pos + hdr_size];
+    headers.encodeToBuf(hdr_buf, hdrs);
+    pos += hdr_size;
+
+    @memcpy(buf[pos..][0..payload.len], payload);
+    pos += payload.len;
+
+    @memcpy(buf[pos..][0..2], "\r\n");
+    pos += 2;
+
+    self.publish_ring.commit(entry, pos);
+}
+
+/// Encode HPUB with raw pre-encoded header bytes into ring.
+fn encodeHPubRawToRing(
+    self: *Client,
+    subject: []const u8,
+    reply_to: ?[]const u8,
+    hdr_bytes: []const u8,
+    payload: []const u8,
+) !void {
+    const total_len = hdr_bytes.len + payload.len;
+
+    var max_size: usize = 5 + subject.len + 1 + 20 + 1 + 20 + 2 + hdr_bytes.len + payload.len + 2;
+    if (reply_to) |r| max_size += r.len + 1;
+
+    const entry = self.reserveRingEntry(max_size) orelse
+        return error.PublishBufferFull;
+
+    const buf = entry[RING_HDR_SIZE..];
+    var pos: usize = 0;
+
+    @memcpy(buf[pos..][0..5], "HPUB ");
+    pos += 5;
+
+    @memcpy(buf[pos..][0..subject.len], subject);
+    pos += subject.len;
+
+    if (reply_to) |r| {
+        buf[pos] = ' ';
+        pos += 1;
+        @memcpy(buf[pos..][0..r.len], r);
+        pos += r.len;
+    }
+
+    var num_buf: [20]u8 = undefined;
+    buf[pos] = ' ';
+    pos += 1;
+    const hdr_str = writeUsizeToSlice(
+        &num_buf,
+        hdr_bytes.len,
+    );
+    @memcpy(buf[pos..][0..hdr_str.len], hdr_str);
+    pos += hdr_str.len;
+
+    buf[pos] = ' ';
+    pos += 1;
+    const tot_str = writeUsizeToSlice(
+        &num_buf,
+        total_len,
+    );
+    @memcpy(buf[pos..][0..tot_str.len], tot_str);
+    pos += tot_str.len;
+
+    @memcpy(buf[pos..][0..2], "\r\n");
+    pos += 2;
+
+    @memcpy(buf[pos..][0..hdr_bytes.len], hdr_bytes);
+    pos += hdr_bytes.len;
+
+    @memcpy(buf[pos..][0..payload.len], payload);
+    pos += payload.len;
+
+    @memcpy(buf[pos..][0..2], "\r\n");
+    pos += 2;
+
+    self.publish_ring.commit(entry, pos);
+}
+
+/// Reserve a ring entry with brief spin on full.
+/// Returns the entry slice or null if still full after ~1ms.
+fn reserveRingEntry(
+    self: *Client,
+    max_size: usize,
+) ?[]u8 {
+    // Try immediately
+    if (self.publish_ring.reserve(max_size)) |e| return e;
+
+    // Backpressure: spin → yield → sleep → fail
+    for (0..256) |_| {
+        std.atomic.spinLoopHint();
+        if (self.publish_ring.reserve(max_size)) |e| return e;
+    }
+    for (0..64) |_| {
+        std.Thread.yield() catch {};
+        if (self.publish_ring.reserve(max_size)) |e| return e;
+    }
+    // Sleep in 10us increments to let io_task drain
+    for (0..100) |_| {
+        // 10us sleep to let io_task drain the ring
+        var ts: std.posix.timespec = .{ .sec = 0, .nsec = 10_000 };
+        _ = std.posix.system.nanosleep(&ts, &ts);
+        if (self.publish_ring.reserve(max_size)) |e| return e;
+    }
+    return null;
 }
 
 /// Buffer a publish during reconnect.
