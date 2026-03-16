@@ -45,7 +45,7 @@ pub const TestServer = struct {
             .{config.port},
         ) catch unreachable;
 
-        var args: std.ArrayList([]const u8) = .{};
+        var args: std.ArrayList([]const u8) = .empty;
         defer args.deinit(allocator);
 
         try args.append(allocator, "nats-server");
@@ -150,7 +150,7 @@ pub const TestServer = struct {
 // Legacy aliases for backward compatibility during migration
 pub const ServerInstance = TestServer;
 pub const ServerManager = struct {
-    servers: std.ArrayList(TestServer) = .{},
+    servers: std.ArrayList(TestServer) = .empty,
 
     /// Max servers expected in any test - pre-allocate to avoid reallocation
     const MAX_SERVERS: usize = 16;

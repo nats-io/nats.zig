@@ -1083,12 +1083,19 @@ pub fn testMaxSubscriptionsExceeded(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    const MAX_SUBS = 256;
-    var subs: [MAX_SUBS]?*nats.Subscription = undefined;
-    @memset(&subs, null);
+    const MAX_SUBS = nats.Client.MAX_SUBSCRIPTIONS;
+    const subs = allocator.alloc(
+        ?*nats.Subscription,
+        MAX_SUBS,
+    ) catch {
+        reportResult("max_subs_exceeded", false, "alloc");
+        return;
+    };
+    defer allocator.free(subs);
+    @memset(subs, null);
 
-    defer for (&subs) |*s| {
-        if (s.*) |sub| sub.deinit();
+    defer for (subs) |s| {
+        if (s) |sub| sub.deinit();
     };
 
     var created: usize = 0;
@@ -1103,28 +1110,40 @@ pub fn testMaxSubscriptionsExceeded(allocator: std.mem.Allocator) void {
             break;
         };
         created += 1;
+        // Flush every 500 to prevent write backlog
+        if (created % 500 == 0) {
+            client.flush(2_000_000_000) catch {};
+        }
     }
 
     if (created != MAX_SUBS) {
         var buf: [48]u8 = undefined;
         const detail = std.fmt.bufPrint(
             &buf,
-            "only created {d}/256",
-            .{created},
+            "only created {d}/{d}",
+            .{ created, MAX_SUBS },
         ) catch "e";
         reportResult("max_subs_exceeded", false, detail);
         return;
     }
 
-    const result = client.subscribeSync("exceedsub.257");
+    const result = client.subscribeSync("exceedsub.over");
     if (result) |sub| {
         sub.deinit();
-        reportResult("max_subs_exceeded", false, "257th should fail");
+        reportResult(
+            "max_subs_exceeded",
+            false,
+            "over-max should fail",
+        );
     } else |err| {
         if (err == error.TooManySubscriptions) {
             reportResult("max_subs_exceeded", true, "");
         } else {
-            reportResult("max_subs_exceeded", false, "wrong error type");
+            reportResult(
+                "max_subs_exceeded",
+                false,
+                "wrong error type",
+            );
         }
     }
 }

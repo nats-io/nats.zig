@@ -101,8 +101,8 @@ pub fn main(init: std.process.Init) !void {
         try client.publish("bench.extra", payload);
     }
 
-    // Small delay to let messages arrive
-    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    // Flush to ensure messages have been delivered
+    try client.flush(1_000_000_000);
 
     // Non-blocking batch receive
     const available = sub.tryNextMsgBatch(&batch_buf);

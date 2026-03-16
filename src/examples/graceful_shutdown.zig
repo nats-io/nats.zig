@@ -51,8 +51,8 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("Published 10 messages (5 orders, 5 events)\n", .{});
 
-    // Process some messages
-    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    // Flush to ensure messages have been delivered
+    try client.flush(1_000_000_000);
 
     var orders_count: u32 = 0;
     while (orders.tryNextMsg()) |msg| {

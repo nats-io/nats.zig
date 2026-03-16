@@ -53,8 +53,8 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("Published 6 messages (2 high, 2 normal, 2 low)\n\n", .{});
 
-    // Let messages arrive
-    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    // Flush to ensure messages have been delivered
+    try client.flush(1_000_000_000);
 
     // PRIORITY POLLING: Check high priority first, then others
     std.debug.print("Priority polling (high -> normal -> low):\n", .{});
@@ -128,7 +128,7 @@ pub fn main(init: std.process.Init) !void {
         const low_msg = std.fmt.bufPrint(&buf, "Low {d}", .{i + 1}) catch "Low";
         try client.publish("priority.low", low_msg);
     }
-    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    try client.flush(1_000_000_000);
 
     std.debug.print("Published 9 more messages (3 each)\n", .{});
     std.debug.print("Round-robin processing:\n", .{});

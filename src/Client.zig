@@ -1478,6 +1478,10 @@ pub fn queueSubscribeSync(
     self.sub_ptrs[slot_idx] = sub;
     self.cached_sub = sub;
 
+    // Acquire write mutex for thread-safe buffer access
+    try self.write_mutex.lock(self.io);
+    defer self.write_mutex.unlock(self.io);
+
     const writer = self.active_writer;
     protocol.Encoder.encodeSub(writer, .{
         .subject = subject,
@@ -2339,10 +2343,13 @@ pub fn drain(self: *Client) !DrainResult {
     assert(self.next_sid >= 1);
 
     var result: DrainResult = .{};
-    const writer = self.active_writer;
 
     // Acquire mutex for subscription cleanup (prevents races with nextMsg())
     self.read_mutex.lockUncancelable(self.io);
+
+    // Acquire write mutex for thread-safe UNSUB encoding
+    self.write_mutex.lockUncancelable(self.io);
+    const writer = self.active_writer;
 
     // Unsubscribe all active subscriptions
     for (self.sub_ptrs, 0..) |maybe_sub, slot_idx| {
@@ -2377,12 +2384,13 @@ pub fn drain(self: *Client) !DrainResult {
         }
     }
 
-    self.read_mutex.unlock(self.io);
-
-    // I/O operations after mutex released
+    // Flush while still holding write mutex
     writer.flush() catch {
         result.flush_failed = true;
     };
+    self.write_mutex.unlock(self.io);
+
+    self.read_mutex.unlock(self.io);
     State.atomicStore(&self.state, .draining);
     self.pushEvent(.{ .draining = {} });
 
@@ -4112,6 +4120,8 @@ pub const Subscription = struct {
 
         // Send UNSUB protocol if connected
         if (can_send) {
+            // Acquire write mutex for thread-safe buffer access
+            client.write_mutex.lockUncancelable(client.io);
             const writer = &client.writer.interface;
             protocol.Encoder.encodeUnsub(writer, .{
                 .sid = self.sid,
@@ -4119,6 +4129,7 @@ pub const Subscription = struct {
             }) catch {
                 send_failed = true;
             };
+            client.write_mutex.unlock(client.io);
 
             // Signal auto-flush to send UNSUB promptly
             client.flush_requested.store(true, .release);

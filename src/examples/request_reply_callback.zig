@@ -84,8 +84,8 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("Service listening on 'math.double'\n\n", .{});
 
-    // Wait for subscription to propagate
-    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    // Flush to ensure server has registered the subscription
+    try service_client.flush(1_000_000_000);
 
     // Send requests
     const numbers = [_][]const u8{ "21", "50", "100" };

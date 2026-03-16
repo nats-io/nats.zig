@@ -102,8 +102,8 @@ pub fn main(init: std.process.Init) !void {
     try client.publish("demo.alert", "fire!");
     try client.publish("demo.alert", "smoke!");
 
-    // Wait for callbacks to fire
-    io.sleep(.fromMilliseconds(200), .awake) catch {};
+    // Flush to ensure messages have been delivered
+    try client.flush(1_000_000_000);
 
     std.debug.print(
         "\nHandler count: {d}\n",

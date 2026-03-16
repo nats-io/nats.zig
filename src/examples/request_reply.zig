@@ -45,8 +45,8 @@ pub fn main(init: std.process.Init) !void {
     });
     defer service_future.cancel(io);
 
-    // Wait for service subscription to be ready
-    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    // Flush to ensure server has registered the subscription
+    try service_client.flush(1_000_000_000);
 
     // Send request using client.request() - handles inbox automatically
     std.debug.print("\nRequester: What is 21 * 2?\n", .{});

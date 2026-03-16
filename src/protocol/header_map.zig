@@ -26,9 +26,9 @@ const Allocator = std.mem.Allocator;
 pub const HeaderMap = struct {
     allocator: Allocator,
     /// Keys (owned, case-preserved).
-    keys: std.ArrayList([]u8) = .{},
+    keys: std.ArrayList([]u8) = .empty,
     /// Values (owned). Same index as key.
-    values: std.ArrayList([]u8) = .{},
+    values: std.ArrayList([]u8) = .empty,
 
     /// Creates a new HeaderMap with the given allocator.
     pub fn init(allocator: Allocator) HeaderMap {

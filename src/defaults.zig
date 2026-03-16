@@ -104,9 +104,9 @@ pub const Server = struct {
 /// Client limits.
 pub const Client = struct {
     /// Max concurrent subscriptions per client.
-    pub const max_subscriptions: u16 = 256;
+    pub const max_subscriptions: u16 = 16384;
     /// SidMap hash table capacity.
-    pub const sidmap_capacity: u32 = 512;
+    pub const sidmap_capacity: u32 = 32768;
 };
 
 /// Protocol constants.

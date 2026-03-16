@@ -2,7 +2,7 @@
   <img src="logo/logo.png" width="300">
 </p>
 
-![Zig](https://img.shields.io/badge/Zig-0.16.0--dev.2736-orange)
+![Zig](https://img.shields.io/badge/Zig-0.16.0--dev.2905-orange)
 
 # nats.zig
 
@@ -16,7 +16,7 @@ Native Zig. Built on `std.Io`.
 
 ## Requirements
 
-- Zig 0.16.0-dev.2736 or later
+- Zig 0.16.0-dev.2905 or later
 - NATS server (for running examples and tests)
 
 ## Installation
