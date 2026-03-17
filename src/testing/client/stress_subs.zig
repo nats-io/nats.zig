@@ -118,7 +118,6 @@ pub fn testFiveThousandSubs(
         };
     }
 
-
     // Wait for messages to arrive
     io.io().sleep(
         .fromMilliseconds(2000),
@@ -266,7 +265,6 @@ pub fn testSubsThenResubscribe(
         ) catch continue;
         subs[i] = client.subscribeSync(subj) catch break;
         created += 1;
-
     }
 
     if (created != COUNT) {
@@ -284,7 +282,6 @@ pub fn testSubsThenResubscribe(
     // Unsub all
     for (subs) |s| if (s) |sub| sub.deinit();
     @memset(subs, null);
-
 
     io.io().sleep(
         .fromMilliseconds(200),
@@ -311,7 +308,6 @@ pub fn testSubsThenResubscribe(
             break;
         };
         created2 += 1;
-
     }
 
     defer for (subs) |s| if (s) |sub| sub.deinit();
@@ -408,7 +404,6 @@ pub fn testWildcardFanOut(
         ) catch continue;
         subs[i] = client.subscribeSync(subj) catch break;
         created += 1;
-
     }
 
     if (created != NUM_SUBS) {
@@ -428,7 +423,6 @@ pub fn testWildcardFanOut(
         return;
     };
     defer wc_sub.deinit();
-
 
     io.io().sleep(
         .fromMilliseconds(200),
@@ -547,7 +541,6 @@ pub fn testTenClientsManySubs(
                 break;
             sub_count += 1;
         }
-
     }
 
     if (sub_count != total_subs) {
@@ -596,7 +589,6 @@ pub fn testTenClientsManySubs(
             return;
         };
     }
-
 
     pub_io.io().sleep(
         .fromMilliseconds(1000),
@@ -695,7 +687,6 @@ pub fn testMultiPubMultiSub(
             all_subs[idx] = c.subscribeSync(subj) catch
                 break;
         }
-
     }
 
     var pub_ios: [NUM_PUB]std.Io.Threaded = undefined;
@@ -745,7 +736,6 @@ pub fn testMultiPubMultiSub(
                 c.publish(subj, "mp") catch {};
             }
         }
-
     }
 
     pub_ios[0].io().sleep(
@@ -972,7 +962,7 @@ pub fn testMaxPayload1MB(
         }
         var ok = true;
         const checks = [_]usize{
-            0, 1, 255, 256, 1023, 1024,
+            0,        1,        255, 256, 1023, 1024,
             SIZE / 2, SIZE - 1,
         };
         for (checks) |idx| {
@@ -1109,7 +1099,6 @@ pub fn testBurstPublish100K(
         };
     }
 
-
     io.io().sleep(
         .fromMilliseconds(3000),
         .awake,
@@ -1207,7 +1196,6 @@ pub fn testLargePayloadBurst(
         };
     }
 
-
     io.io().sleep(
         .fromMilliseconds(3000),
         .awake,
@@ -1297,7 +1285,6 @@ pub fn testManySubjectsPublish(
             return;
         };
     }
-
 
     io.io().sleep(
         .fromMilliseconds(2000),
@@ -1555,7 +1542,7 @@ pub fn testSidMapTombstoneStress(
             if (s.*) |sub| sub.deinit();
         }
         // Flush UNSUB commands between rounds
-    
+
     }
 
     // Final: subscribe 100 fresh, verify pub/sub

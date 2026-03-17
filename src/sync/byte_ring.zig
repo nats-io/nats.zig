@@ -150,9 +150,7 @@ pub const ByteRing = struct {
             }
 
             const data_start = offset + HDR_SIZE;
-            return self.buffer[
-                data_start .. data_start + entry_len
-            ];
+            return self.buffer[data_start .. data_start + entry_len];
         }
 
         return null;
@@ -238,7 +236,7 @@ test "ByteRing multiple entries" {
     var ring = ByteRing.init(&buf);
 
     const messages = [_][]const u8{
-        "one", "two", "three", "four", "five",
+        "one", "two",   "three", "four", "five",
         "six", "seven", "eight", "nine", "ten",
     };
 

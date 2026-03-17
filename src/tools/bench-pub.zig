@@ -107,8 +107,11 @@ fn runBenchmark(
         config.url,
         .{ .name = "bench-pub" },
     ) catch |err| {
-        std.debug.print("Failed to connect: {}\n", .{err});
-        std.process.exit(1);
+        std.debug.print(
+            "Failed to connect: {}\n",
+            .{err},
+        );
+        return err;
     };
     defer client.deinit();
 
@@ -120,15 +123,27 @@ fn runBenchmark(
 
     var i: u64 = 0;
     while (i < config.msgs) : (i += 1) {
-        client.publish(config.subject, payload) catch |err| {
-            std.debug.print("Publish failed at msg {d}: {}\n", .{ i, err });
-            std.process.exit(1);
+        client.publish(
+            config.subject,
+            payload,
+        ) catch |err| {
+            std.debug.print(
+                "Publish failed at msg {d}: {}\n",
+                .{ i, err },
+            );
+            return err;
         };
     }
 
-    client.flush(50_000_000) catch |err| {
-        std.debug.print("Flush failed: {}\n", .{err});
-        std.process.exit(1);
+    // 10s timeout matches Go client's Flush() default.
+    // Server must process all queued PUBs before
+    // responding to our PING.
+    client.flush(10_000_000_000) catch |err| {
+        std.debug.print(
+            "Flush failed: {}\n",
+            .{err},
+        );
+        return err;
     };
 
     const end = std.Io.Timestamp.now(io, .awake);

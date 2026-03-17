@@ -114,24 +114,40 @@ fn runBenchmark(
         );
     }
 
-    const client = nats.Client.connect(allocator, io, config.url, .{
-        .name = "bench-sub",
-        .sub_queue_size = queue_size,
-    }) catch |err| {
-        std.debug.print("Failed to connect: {}\n", .{err});
-        std.process.exit(1);
+    const client = nats.Client.connect(
+        allocator,
+        io,
+        config.url,
+        .{
+            .name = "bench-sub",
+            .sub_queue_size = queue_size,
+        },
+    ) catch |err| {
+        std.debug.print(
+            "Failed to connect: {}\n",
+            .{err},
+        );
+        return err;
     };
     defer client.deinit();
 
-    var sub = client.subscribeSync(config.subject) catch |err| {
-        std.debug.print("Subscribe failed: {}\n", .{err});
-        std.process.exit(1);
+    var sub = client.subscribeSync(
+        config.subject,
+    ) catch |err| {
+        std.debug.print(
+            "Subscribe failed: {}\n",
+            .{err},
+        );
+        return err;
     };
     defer sub.deinit();
 
     client.flushBuffer() catch |err| {
-        std.debug.print("Flush failed: {}\n", .{err});
-        std.process.exit(1);
+        std.debug.print(
+            "Flush failed: {}\n",
+            .{err},
+        );
+        return err;
     };
 
     std.debug.print("Subscribed to '{s}', waiting for messages...\n", .{
@@ -179,8 +195,11 @@ fn runBenchmark(
         }
 
         const msg = sub.nextMsgTimeout(5000) catch |err| {
-            std.debug.print("Receive error: {}\n", .{err});
-            std.process.exit(1);
+            std.debug.print(
+                "Receive error: {}\n",
+                .{err},
+            );
+            return err;
         } orelse {
             std.debug.print("Timeout or connection closed\n", .{});
             break;

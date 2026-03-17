@@ -62,6 +62,65 @@ inline fn drainReturnQueue(client: *Client) void {
     }
 }
 
+/// Drain publish ring to socket. Returns false on write error
+/// (caller should continue :outer to retry). Also handles
+/// auto-flush for non-publish writes (SUB, UNSUB).
+inline fn drainPublishRing(client: *Client) bool {
+    if (!client.publish_ring.isEmpty()) {
+        if (State.atomicLoad(&client.state) == .connected) {
+            client.write_mutex.lock(
+                client.io,
+            ) catch return true;
+            if (State.atomicLoad(&client.state) ==
+                .connected)
+            {
+                while (client.publish_ring.peek()) |data| {
+                    client.active_writer.writeAll(
+                        data,
+                    ) catch {
+                        client.write_mutex.unlock(
+                            client.io,
+                        );
+                        return false;
+                    };
+                    client.publish_ring.advance();
+                }
+                // Flush once after draining all entries
+                client.active_writer.flush() catch {};
+                if (client.use_tls) {
+                    client.writer.interface.flush() catch {};
+                }
+            }
+            client.write_mutex.unlock(client.io);
+            _ = client.flush_requested.swap(
+                false,
+                .acquire,
+            );
+        }
+    } else if (client.flush_requested.load(.monotonic)) {
+        // Auto-flush for non-publish writes (SUB, UNSUB)
+        if (client.flush_requested.swap(false, .acquire)) {
+            if (State.atomicLoad(&client.state) ==
+                .connected)
+            {
+                client.write_mutex.lock(
+                    client.io,
+                ) catch return true;
+                defer client.write_mutex.unlock(client.io);
+                if (State.atomicLoad(&client.state) ==
+                    .connected)
+                {
+                    client.active_writer.flush() catch {};
+                    if (client.use_tls) {
+                        client.writer.interface.flush() catch {};
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
 /// Main I/O task entry point. Called via io.async() from connect().
 /// Reader: reads socket, routes MSG, responds to PING with PONG.
 /// Exits cleanly when stream is closed (close then cancel).
@@ -106,25 +165,47 @@ pub fn run(client: *Client) void {
             }
         }
 
+        // Drain ring BEFORE reads to minimize write latency.
+        // Without this, ring drains only after the inner
+        // loop's 1ms poll timeout, starving the producer.
+        if (!drainPublishRing(client)) continue :outer;
+
         var made_progress = true;
         while (made_progress) {
             made_progress = false;
 
+            // Exit inner loop when ring has pending data
+            // so we drain it without blocking in poll().
+            if (!client.publish_ring.isEmpty()) break;
+
             drainReturnQueue(client);
 
-            const route_result = tryRouteBufferedMessages(client);
+            const route_result =
+                tryRouteBufferedMessages(client);
             if (route_result == .progress) {
-                dbg.print("io_task[fd={d}]: routed messages", .{client.stream.socket.handle});
+                dbg.print(
+                    "io_task[fd={d}]: routed messages",
+                    .{client.stream.socket.handle},
+                );
                 made_progress = true;
             }
             if (route_result == .disconnected) {
-                const state = State.atomicLoad(&client.state);
-                if (client.options.reconnect and state != .closed) {
-                    if (!handleDisconnect(client)) break :outer;
+                const state = State.atomicLoad(
+                    &client.state,
+                );
+                if (client.options.reconnect and
+                    state != .closed)
+                {
+                    if (!handleDisconnect(client))
+                        break :outer;
                     continue :outer;
                 }
-                // Reconnect disabled - set closed state before exiting
-                @atomicStore(State, &client.state, .closed, .release);
+                @atomicStore(
+                    State,
+                    &client.state,
+                    .closed,
+                    .release,
+                );
                 client.pushEvent(.{ .closed = {} });
                 break :outer;
             }
@@ -132,68 +213,46 @@ pub fn run(client: *Client) void {
             if (!made_progress) {
                 const read_result = tryFillBuffer(client);
                 if (read_result == .progress) {
-                    dbg.print("io_task[fd={d}]: read data from socket", .{client.stream.socket.handle});
+                    dbg.print(
+                        "io_task[fd={d}]: read data" ++
+                            " from socket",
+                        .{client.stream.socket.handle},
+                    );
                 }
-                if (read_result == .canceled) break :outer;
+                if (read_result == .canceled)
+                    break :outer;
                 if (read_result == .disconnected) {
-                    const state = State.atomicLoad(&client.state);
-                    if (client.options.reconnect and state != .closed) {
-                        if (!handleDisconnect(client)) break :outer;
+                    const state = State.atomicLoad(
+                        &client.state,
+                    );
+                    if (client.options.reconnect and
+                        state != .closed)
+                    {
+                        if (!handleDisconnect(client))
+                            break :outer;
                         continue :outer;
                     }
-                    // Reconnect disabled - set closed state before exiting
-                    @atomicStore(State, &client.state, .closed, .release);
-                    client.pushEvent(.{ .closed = {} });
+                    @atomicStore(
+                        State,
+                        &client.state,
+                        .closed,
+                        .release,
+                    );
+                    client.pushEvent(
+                        .{ .closed = {} },
+                    );
                     break :outer;
                 }
-                if (read_result == .progress) made_progress = true;
+                if (read_result == .progress)
+                    made_progress = true;
             }
         }
 
-        // Drain publish ring: move encoded bytes to socket
-        if (!client.publish_ring.isEmpty()) {
-            if (State.atomicLoad(&client.state) == .connected) {
-                client.write_mutex.lock(client.io) catch continue :outer;
-                if (State.atomicLoad(&client.state) == .connected) {
-                    // Drain all pending publishes
-                    while (client.publish_ring.peek()) |data| {
-                        client.active_writer.writeAll(data) catch {
-                            client.write_mutex.unlock(client.io);
-                            continue :outer;
-                        };
-                        client.publish_ring.advance();
-                    }
-                    // Flush once after draining all entries
-                    client.active_writer.flush() catch {};
-                    if (client.use_tls) {
-                        client.writer.interface.flush() catch {};
-                    }
-                }
-                client.write_mutex.unlock(client.io);
-                // Clear flush_requested since we just flushed
-                _ = client.flush_requested.swap(
-                    false,
-                    .acquire,
-                );
-                made_progress = true;
-            }
-        } else if (client.flush_requested.load(.monotonic)) {
-            // Auto-flush for non-publish writes (SUB, UNSUB)
-            if (client.flush_requested.swap(false, .acquire)) {
-                if (State.atomicLoad(&client.state) == .connected) {
-                    client.write_mutex.lock(client.io) catch continue :outer;
-                    defer client.write_mutex.unlock(client.io);
-                    if (State.atomicLoad(&client.state) == .connected) {
-                        client.active_writer.flush() catch {};
-                        if (client.use_tls) {
-                            client.writer.interface.flush() catch {};
-                        }
-                    }
-                }
-            }
-        }
+        // Drain ring AFTER reads (catches new entries
+        // produced during the inner loop).
+        if (!drainPublishRing(client)) continue :outer;
 
-        // No progress - yield to allow other threads to run
+        // No progress - yield to allow other threads
         std.Thread.yield() catch {};
     }
     if (dbg.enabled) {

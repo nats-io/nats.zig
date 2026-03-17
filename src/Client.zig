@@ -3414,12 +3414,17 @@ fn reserveRingEntry(
         std.Thread.yield() catch {};
         if (self.publish_ring.reserve(max_size)) |e| return e;
     }
-    // Sleep in 10us increments to let io_task drain
-    for (0..100) |_| {
-        // 10us sleep to let io_task drain the ring
-        var ts: std.posix.timespec = .{ .sec = 0, .nsec = 10_000 };
+    // Sleep in 10us increments to let io_task drain.
+    // 1000 iterations = ~10ms budget, well above the
+    // io_task's ~1ms drain cycle.
+    for (0..1000) |_| {
+        var ts: std.posix.timespec = .{
+            .sec = 0,
+            .nsec = 10_000,
+        };
         _ = std.posix.system.nanosleep(&ts, &ts);
-        if (self.publish_ring.reserve(max_size)) |e| return e;
+        if (self.publish_ring.reserve(max_size)) |e|
+            return e;
     }
     return null;
 }
