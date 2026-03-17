@@ -34,6 +34,7 @@ const SpscQueue = @import("sync/spsc_queue.zig").SpscQueue;
 const byte_ring = @import("sync/byte_ring.zig");
 pub const ByteRing = byte_ring.ByteRing;
 const RING_HDR_SIZE = byte_ring.HDR_SIZE;
+const SpinLock = @import("sync/spin_lock.zig").SpinLock;
 const dbg = @import("dbg.zig");
 const defaults = @import("defaults.zig");
 const events_mod = @import("events.zig");
@@ -114,16 +115,28 @@ pub const Message = struct {
     backing_buf: ?[]u8 = null,
     /// Return queue for thread-safe deallocation (reader thread frees).
     return_queue: ?*SpscQueue([]u8) = null,
+    /// Spinlock for multi-thread return_queue.push() safety.
+    return_lock: ?*SpinLock = null,
 
     /// Frees message data. Pushes to return queue for slab-allocated msgs.
+    /// Thread-safe: return_lock serializes concurrent push().
     pub fn deinit(self: *const Message) void {
         if (!self.owned) return;
         if (self.backing_buf) |buf| {
             assert(self.return_queue != null);
             const rq = self.return_queue.?;
-            // Yield allows io_task to drain before retry
-            while (!rq.push(buf)) {
-                std.Thread.yield() catch {};
+            if (self.return_lock) |sl| {
+                sl.lock();
+                defer sl.unlock();
+                while (!rq.push(buf)) {
+                    sl.unlock();
+                    std.Thread.yield() catch {};
+                    sl.lock();
+                }
+            } else {
+                while (!rq.push(buf)) {
+                    std.Thread.yield() catch {};
+                }
             }
             return;
         }
@@ -315,22 +328,45 @@ pub const Options = struct {
     servers: ?[]const []const u8 = null,
 };
 
-/// Connection statistics
-/// Thread ownership: io_task exclusively writes msgs_in/bytes_in,
-/// main thread exclusively writes msgs_out/bytes_out. No concurrent
-/// modifications to same counter, so atomics are not needed.
+/// Connection statistics.
+/// Thread ownership: io_task exclusively writes msgs_in/bytes_in.
+/// msgs_out/bytes_out use atomics for multi-thread publish safety.
 pub const Statistics = struct {
     /// Total messages received (written by io_task only).
     msgs_in: u64 = 0,
-    /// Total messages sent (written by main thread only).
-    msgs_out: u64 = 0,
+    /// Total messages sent (atomic: multi-thread publish).
+    msgs_out: std.atomic.Value(u64) =
+        std.atomic.Value(u64).init(0),
     /// Total bytes received (written by io_task only).
     bytes_in: u64 = 0,
-    /// Total bytes sent (written by main thread only).
-    bytes_out: u64 = 0,
+    /// Total bytes sent (atomic: multi-thread publish).
+    bytes_out: std.atomic.Value(u64) =
+        std.atomic.Value(u64).init(0),
     /// Number of reconnects (written by io_task only).
     reconnects: u32 = 0,
     /// Total successful connections (initial + reconnects).
+    connects: u32 = 0,
+
+    /// Returns a snapshot of stats with atomics loaded.
+    pub fn snapshot(self: *const Statistics) StatsSnapshot {
+        return .{
+            .msgs_in = self.msgs_in,
+            .msgs_out = self.msgs_out.load(.monotonic),
+            .bytes_in = self.bytes_in,
+            .bytes_out = self.bytes_out.load(.monotonic),
+            .reconnects = self.reconnects,
+            .connects = self.connects,
+        };
+    }
+};
+
+/// Plain stats snapshot (no atomics). Returned by stats().
+pub const StatsSnapshot = struct {
+    msgs_in: u64 = 0,
+    msgs_out: u64 = 0,
+    bytes_in: u64 = 0,
+    bytes_out: u64 = 0,
+    reconnects: u32 = 0,
     connects: u32 = 0,
 };
 
@@ -492,6 +528,18 @@ free_count: u16 = MAX_SUBSCRIPTIONS,
 next_sid: u64 = 1,
 read_mutex: Io.Mutex = .init,
 statistics: Statistics = .{},
+
+// Thread-safety mutexes for multi-thread publish/subscribe.
+// Lock ordering: sub_mutex -> read_mutex -> write_mutex.
+// publish_mutex and return_lock are independent.
+
+/// Serializes multi-thread publish (encode-to-ring path).
+publish_mutex: Io.Mutex = .init,
+/// Serializes multi-thread subscribe/unsubscribe bookkeeping.
+sub_mutex: Io.Mutex = .init,
+/// Spinlock for multi-thread return_queue.push() in msg.deinit().
+/// Atomic spinlock (not Io.Mutex) because Message.deinit() has no io.
+return_lock: SpinLock = .{},
 
 // Connection diagnostics
 tcp_nodelay_set: bool = false,
@@ -1447,6 +1495,11 @@ pub fn queueSubscribeSync(
     }
     assert(self.next_sid >= 1);
 
+    // sub_mutex serializes slot/SID allocation and SUB encoding
+    // for multi-thread subscribe safety.
+    self.sub_mutex.lockUncancelable(self.io);
+    defer self.sub_mutex.unlock(self.io);
+
     // Allocate slot
     if (self.free_count == 0) {
         return error.TooManySubscriptions;
@@ -1506,6 +1559,7 @@ pub fn queueSubscribeSync(
     self.cached_sub = sub;
 
     // Acquire write mutex for thread-safe buffer access
+    // Lock ordering: sub_mutex -> write_mutex (correct).
     try self.write_mutex.lock(self.io);
     defer self.write_mutex.unlock(self.io);
 
@@ -1605,8 +1659,8 @@ pub fn queueSubscribeFn(
 
 /// Publishes a message to a subject.
 ///
-/// Lock-free: encodes directly into the publish ring buffer.
-/// The io_task drains the ring to the socket automatically.
+/// Thread-safe: serialized by publish_mutex. Encodes into
+/// the publish ring buffer; io_task drains to socket.
 pub fn publish(
     self: *Client,
     subject: []const u8,
@@ -1620,19 +1674,25 @@ pub fn publish(
     if (payload.len > self.max_payload)
         return error.PayloadTooLarge;
 
+    self.publish_mutex.lockUncancelable(self.io);
+    defer self.publish_mutex.unlock(self.io);
+
     try self.encodePubToRing(
         subject,
         null,
         payload,
     );
 
-    self.statistics.msgs_out += 1;
-    self.statistics.bytes_out += payload.len;
+    _ = self.statistics.msgs_out.fetchAdd(1, .monotonic);
+    _ = self.statistics.bytes_out.fetchAdd(
+        payload.len,
+        .monotonic,
+    );
     self.flush_requested.store(true, .release);
 }
 
 /// Publishes with a reply-to subject.
-/// Lock-free: encodes into the publish ring buffer.
+/// Thread-safe: serialized by publish_mutex.
 pub fn publishRequest(
     self: *Client,
     subject: []const u8,
@@ -1649,19 +1709,25 @@ pub fn publishRequest(
     if (payload.len > self.max_payload)
         return error.PayloadTooLarge;
 
+    self.publish_mutex.lockUncancelable(self.io);
+    defer self.publish_mutex.unlock(self.io);
+
     try self.encodePubToRing(
         subject,
         reply_to,
         payload,
     );
 
-    self.statistics.msgs_out += 1;
-    self.statistics.bytes_out += payload.len;
+    _ = self.statistics.msgs_out.fetchAdd(1, .monotonic);
+    _ = self.statistics.bytes_out.fetchAdd(
+        payload.len,
+        .monotonic,
+    );
     self.flush_requested.store(true, .release);
 }
 
 /// Publishes a message with headers.
-/// Lock-free: encodes into the publish ring buffer.
+/// Thread-safe: serialized by publish_mutex.
 pub fn publishWithHeaders(
     self: *Client,
     subject: []const u8,
@@ -1677,6 +1743,9 @@ pub fn publishWithHeaders(
     if (hdr_size + payload.len > self.max_payload)
         return error.PayloadTooLarge;
 
+    self.publish_mutex.lockUncancelable(self.io);
+    defer self.publish_mutex.unlock(self.io);
+
     try self.encodeHPubToRing(
         subject,
         null,
@@ -1684,13 +1753,16 @@ pub fn publishWithHeaders(
         payload,
     );
 
-    self.statistics.msgs_out += 1;
-    self.statistics.bytes_out += payload.len;
+    _ = self.statistics.msgs_out.fetchAdd(1, .monotonic);
+    _ = self.statistics.bytes_out.fetchAdd(
+        payload.len,
+        .monotonic,
+    );
     self.flush_requested.store(true, .release);
 }
 
 /// Publishes with headers and reply-to subject.
-/// Lock-free: encodes into the publish ring buffer.
+/// Thread-safe: serialized by publish_mutex.
 pub fn publishRequestWithHeaders(
     self: *Client,
     subject: []const u8,
@@ -1709,6 +1781,9 @@ pub fn publishRequestWithHeaders(
     if (hdr_size + payload.len > self.max_payload)
         return error.PayloadTooLarge;
 
+    self.publish_mutex.lockUncancelable(self.io);
+    defer self.publish_mutex.unlock(self.io);
+
     try self.encodeHPubToRing(
         subject,
         reply_to,
@@ -1716,13 +1791,16 @@ pub fn publishRequestWithHeaders(
         payload,
     );
 
-    self.statistics.msgs_out += 1;
-    self.statistics.bytes_out += payload.len;
+    _ = self.statistics.msgs_out.fetchAdd(1, .monotonic);
+    _ = self.statistics.bytes_out.fetchAdd(
+        payload.len,
+        .monotonic,
+    );
     self.flush_requested.store(true, .release);
 }
 
 /// Publishes with a HeaderMap builder.
-/// Lock-free: encodes into the publish ring buffer.
+/// Thread-safe: serialized by publish_mutex.
 pub fn publishWithHeaderMap(
     self: *Client,
     subject: []const u8,
@@ -1740,6 +1818,9 @@ pub fn publishWithHeaderMap(
     if (hdr_bytes.len + payload.len > self.max_payload)
         return error.PayloadTooLarge;
 
+    self.publish_mutex.lockUncancelable(self.io);
+    defer self.publish_mutex.unlock(self.io);
+
     try self.encodeHPubRawToRing(
         subject,
         null,
@@ -1747,13 +1828,16 @@ pub fn publishWithHeaderMap(
         payload,
     );
 
-    self.statistics.msgs_out += 1;
-    self.statistics.bytes_out += payload.len;
+    _ = self.statistics.msgs_out.fetchAdd(1, .monotonic);
+    _ = self.statistics.bytes_out.fetchAdd(
+        payload.len,
+        .monotonic,
+    );
     self.flush_requested.store(true, .release);
 }
 
 /// Publishes a Message object (convenience for forwarding).
-/// Lock-free: encodes into the publish ring buffer.
+/// Thread-safe: serialized by publish_mutex.
 pub fn publishMsg(
     self: *Client,
     msg: *const Message,
@@ -1768,6 +1852,9 @@ pub fn publishMsg(
         msg.data.len;
     if (total_size > self.max_payload)
         return error.PayloadTooLarge;
+
+    self.publish_mutex.lockUncancelable(self.io);
+    defer self.publish_mutex.unlock(self.io);
 
     if (msg.headers) |hdrs| {
         try self.encodeHPubRawToRing(
@@ -1784,8 +1871,11 @@ pub fn publishMsg(
         );
     }
 
-    self.statistics.msgs_out += 1;
-    self.statistics.bytes_out += msg.data.len;
+    _ = self.statistics.msgs_out.fetchAdd(1, .monotonic);
+    _ = self.statistics.bytes_out.fetchAdd(
+        msg.data.len,
+        .monotonic,
+    );
     self.flush_requested.store(true, .release);
 }
 
@@ -2201,8 +2291,11 @@ pub fn requestMsg(
             }) catch return error.EncodingFailed;
         }
 
-        self.statistics.msgs_out += 1;
-        self.statistics.bytes_out += msg.data.len;
+        _ = self.statistics.msgs_out.fetchAdd(1, .monotonic);
+        _ = self.statistics.bytes_out.fetchAdd(
+            msg.data.len,
+            .monotonic,
+        );
 
         // Signal auto-flush to send request promptly
         self.flush_requested.store(true, .release);
@@ -2307,6 +2400,9 @@ pub fn drain(self: *Client) !DrainResult {
 
     var result: DrainResult = .{};
 
+    // Lock ordering: sub_mutex -> read_mutex -> write_mutex.
+    self.sub_mutex.lockUncancelable(self.io);
+
     // Acquire mutex for subscription cleanup (prevents races with nextMsg())
     self.read_mutex.lockUncancelable(self.io);
 
@@ -2354,6 +2450,7 @@ pub fn drain(self: *Client) !DrainResult {
     self.write_mutex.unlock(self.io);
 
     self.read_mutex.unlock(self.io);
+    self.sub_mutex.unlock(self.io);
     State.atomicStore(&self.state, .draining);
     self.pushEvent(.{ .draining = {} });
 
@@ -2393,10 +2490,10 @@ pub fn isConnected(self: *const Client) bool {
     return @atomicLoad(State, &self.state, .acquire) == .connected;
 }
 
-/// Returns connection statistics.
-pub fn stats(self: *const Client) Statistics {
+/// Returns connection statistics snapshot.
+pub fn stats(self: *const Client) StatsSnapshot {
     assert(self.next_sid >= 1);
-    return self.statistics;
+    return self.statistics.snapshot();
 }
 
 /// Returns server info.
@@ -3077,6 +3174,9 @@ pub fn deinit(self: *Client) void {
 /// Stores SID, subject, and queue_group in inline buffers (no allocation).
 /// Returns error if any subject > 256 bytes or queue_group > 64 bytes.
 pub fn backupSubscriptions(self: *Client) error{SubjectTooLong}!void {
+    self.sub_mutex.lockUncancelable(self.io);
+    defer self.sub_mutex.unlock(self.io);
+
     self.sub_backup_count = 0;
 
     for (self.sub_ptrs) |maybe_sub| {
@@ -3133,6 +3233,10 @@ pub fn backupSubscriptions(self: *Client) error{SubjectTooLong}!void {
 /// subscription pointers continue to work.
 pub fn restoreSubscriptions(self: *Client) !void {
     if (self.sub_backup_count == 0) return;
+
+    // Acquire write_mutex — restoreSubscriptions writes to socket.
+    try self.write_mutex.lock(self.io);
+    defer self.write_mutex.unlock(self.io);
 
     const writer = self.active_writer;
 
@@ -4326,6 +4430,12 @@ pub const Subscription = struct {
         const client = self.client;
         const can_send = client.state.canSend();
 
+        // sub_mutex serializes with subscribe for
+        // sidmap/sub_ptrs/free_slots safety.
+        // Lock ordering: sub_mutex -> read_mutex -> write_mutex.
+        client.sub_mutex.lockUncancelable(client.io);
+        defer client.sub_mutex.unlock(client.io);
+
         // Acquire mutex for thread-safe cleanup
         client.read_mutex.lockUncancelable(client.io);
         defer client.read_mutex.unlock(client.io);
@@ -4504,9 +4614,10 @@ test "options defaults" {
 
 test "stats defaults" {
     const s: Statistics = .{};
-    try std.testing.expectEqual(@as(u64, 0), s.msgs_in);
-    try std.testing.expectEqual(@as(u64, 0), s.msgs_out);
-    try std.testing.expectEqual(@as(u64, 0), s.bytes_in);
-    try std.testing.expectEqual(@as(u64, 0), s.bytes_out);
+    const snap = s.snapshot();
+    try std.testing.expectEqual(@as(u64, 0), snap.msgs_in);
+    try std.testing.expectEqual(@as(u64, 0), snap.msgs_out);
+    try std.testing.expectEqual(@as(u64, 0), snap.bytes_in);
+    try std.testing.expectEqual(@as(u64, 0), snap.bytes_out);
     try std.testing.expectEqual(@as(u32, 0), s.reconnects);
 }

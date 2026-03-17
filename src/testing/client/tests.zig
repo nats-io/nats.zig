@@ -38,6 +38,7 @@ pub const dynamic_jwt = @import("dynamic_jwt.zig");
 pub const callback = @import("callback.zig");
 pub const stress_subs = @import("stress_subs.zig");
 pub const jetstream = @import("jetstream.zig");
+pub const multithread = @import("multithread.zig");
 
 /// Runs all client tests.
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -73,4 +74,5 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     callback.runAll(allocator);
     stress_subs.runAll(allocator);
     jetstream.runAll(allocator, manager);
+    multithread.runAll(allocator);
 }

@@ -613,6 +613,7 @@ inline fn routeMessageToSub(
         .owned = true,
         .backing_buf = buf,
         .return_queue = &client.return_queue,
+        .return_lock = &client.return_lock,
     };
 
     sub.pushMessage(msg) catch {
@@ -694,6 +695,7 @@ inline fn routeHMessageToSub(
         .owned = true,
         .backing_buf = buf,
         .return_queue = &client.return_queue,
+        .return_lock = &client.return_lock,
     };
 
     sub.pushMessage(msg) catch {
