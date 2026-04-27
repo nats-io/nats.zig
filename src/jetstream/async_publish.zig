@@ -333,7 +333,7 @@ pub const AsyncPublisher = struct {
         self.mu.unlock(io);
 
         const fut = if (entry) |e| e.value else return;
-        _ = self.pending_count.fetchSub(1, .release);
+        defer _ = self.pending_count.fetchSub(1, .release);
 
         // Parse PubAck from message data
         if (msg.data.len == 0) {

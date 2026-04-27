@@ -7936,6 +7936,8 @@ pub fn testKvCreateWithTTL(
 pub fn testPublishAsync(
     allocator: std.mem.Allocator,
 ) void {
+    const stream_name = "TEST_ASYNC_PUB";
+
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, js_port);
 
@@ -7962,8 +7964,10 @@ pub fn testPublishAsync(
         .{},
     );
 
+    deleteStreamIfExists(&js, stream_name);
+
     var stream = js.createStream(.{
-        .name = "TEST_ASYNC_PUB",
+        .name = stream_name,
         .subjects = &.{"async.>"},
         .storage = .memory,
     }) catch {
@@ -7974,6 +7978,7 @@ pub fn testPublishAsync(
         );
         return;
     };
+    defer deleteStreamIfExists(&js, stream_name);
     defer stream.deinit();
 
     var ap = nats.jetstream.AsyncPublisher.init(
@@ -8040,7 +8045,7 @@ pub fn testPublishAsync(
 
     // Verify stream has 20 messages
     var info = js.streamInfo(
-        "TEST_ASYNC_PUB",
+        stream_name,
     ) catch {
         for (futures[0..20]) |f| f.deinit();
         reportResult(
@@ -8074,17 +8079,6 @@ pub fn testPublishAsync(
         return;
     }
 
-    var d = js.deleteStream(
-        "TEST_ASYNC_PUB",
-    ) catch {
-        reportResult(
-            "js_pub_async",
-            true,
-            "",
-        );
-        return;
-    };
-    d.deinit();
     reportResult("js_pub_async", true, "");
 }
 
