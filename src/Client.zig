@@ -456,10 +456,12 @@ pub const Statistics = struct {
     /// Total bytes sent (atomic: multi-thread publish).
     bytes_out: std.atomic.Value(u64) =
         std.atomic.Value(u64).init(0),
-    /// Number of reconnects (written by io_task only).
-    reconnects: u32 = 0,
+    /// Number of reconnects.
+    reconnects: std.atomic.Value(u32) =
+        std.atomic.Value(u32).init(0),
     /// Total successful connections (initial + reconnects).
-    connects: u32 = 0,
+    connects: std.atomic.Value(u32) =
+        std.atomic.Value(u32).init(0),
 
     /// Returns a snapshot of stats with atomics loaded.
     pub fn snapshot(self: *const Statistics) StatsSnapshot {
@@ -468,8 +470,8 @@ pub const Statistics = struct {
             .msgs_out = self.msgs_out.load(.monotonic),
             .bytes_in = self.bytes_in,
             .bytes_out = self.bytes_out.load(.monotonic),
-            .reconnects = self.reconnects,
-            .connects = self.connects,
+            .reconnects = self.reconnects.load(.monotonic),
+            .connects = self.connects.load(.monotonic),
         };
     }
 };
@@ -1430,7 +1432,7 @@ fn handshake(
                 self.server_info = parsed_info;
                 self.max_payload = parsed_info.max_payload;
                 self.state = .connected;
-                self.statistics.connects += 1;
+                _ = self.statistics.connects.fetchAdd(1, .monotonic);
             },
             else => return error.UnexpectedCommand,
         }
@@ -4165,13 +4167,14 @@ pub fn reconnect(self: *Client) !void {
 
             State.atomicStore(&self.state, .connected);
             self.reconnect_attempt = 0;
-            self.statistics.reconnects += 1;
+            const reconnects =
+                self.statistics.reconnects.fetchAdd(1, .monotonic) + 1;
             self.server_pool.resetFailures();
 
             dbg.stateChange("reconnecting", "connected");
             dbg.print(
                 "Reconnect successful (total reconnects: {d})",
-                .{self.statistics.reconnects},
+                .{reconnects},
             );
             return;
         } else |err| {
@@ -4996,5 +4999,6 @@ test "stats defaults" {
     try std.testing.expectEqual(@as(u64, 0), snap.msgs_out);
     try std.testing.expectEqual(@as(u64, 0), snap.bytes_in);
     try std.testing.expectEqual(@as(u64, 0), snap.bytes_out);
-    try std.testing.expectEqual(@as(u32, 0), s.reconnects);
+    try std.testing.expectEqual(@as(u32, 0), snap.reconnects);
+    try std.testing.expectEqual(@as(u32, 0), snap.connects);
 }

@@ -788,7 +788,7 @@ fn tryReconnectLoop(client: *Client) bool {
         for (client.server_pool.servers[0..client.server_pool.count]) |*server| {
             client.tryConnect(server) catch continue;
             @atomicStore(State, &client.state, .connected, .release);
-            client.statistics.reconnects += 1;
+            _ = client.statistics.reconnects.fetchAdd(1, .monotonic);
             client.reconnect_attempt = 0;
             return true;
         }

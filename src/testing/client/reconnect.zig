@@ -23,6 +23,46 @@ const failover_port_7: u16 = 14236;
 const failover_port_8: u16 = 14237;
 const failover_port_9: u16 = 14238;
 
+fn waitForClosed(
+    io: std.Io,
+    client: *nats.Client,
+    timeout_ms: u32,
+) bool {
+    var waited: u32 = 0;
+    while (waited < timeout_ms) : (waited += 25) {
+        if (client.isClosed()) return true;
+        io.sleep(.fromMilliseconds(25), .awake) catch {};
+    }
+    return client.isClosed();
+}
+
+fn waitForConnected(
+    io: std.Io,
+    client: *nats.Client,
+    timeout_ms: u32,
+) bool {
+    var waited: u32 = 0;
+    while (waited < timeout_ms) : (waited += 25) {
+        if (client.isConnected()) return true;
+        io.sleep(.fromMilliseconds(25), .awake) catch {};
+    }
+    return client.isConnected();
+}
+
+fn waitForReconnects(
+    io: std.Io,
+    client: *nats.Client,
+    want: u32,
+    timeout_ms: u32,
+) bool {
+    var waited: u32 = 0;
+    while (waited < timeout_ms) : (waited += 25) {
+        if (client.stats().reconnects >= want) return true;
+        io.sleep(.fromMilliseconds(25), .awake) catch {};
+    }
+    return client.stats().reconnects >= want;
+}
+
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     testAutoReconnectBasic(allocator, manager);
     testSubscriptionRestored(allocator, manager);
@@ -263,10 +303,18 @@ fn testReconnectMaxAttempts(
     manager: *ServerManager,
 ) void {
     var url_buf: [64]u8 = undefined;
-    const url = formatUrl(&url_buf, test_port);
+    const url = formatUrl(&url_buf, reconnect_port);
 
     const io = utils.newIo(allocator);
     defer io.deinit();
+
+    const server_idx = manager.count();
+    _ = manager.startServer(allocator, io.io(), .{
+        .port = reconnect_port,
+    }) catch {
+        reportResult("reconnect_max_attempts", false, "server start failed");
+        return;
+    };
 
     const client = nats.Client.connect(allocator, io.io(), url, .{
         .reconnect = true,
@@ -276,28 +324,19 @@ fn testReconnectMaxAttempts(
         .ping_interval_ms = 100,
         .max_pings_outstanding = 1,
     }) catch {
+        manager.stopServer(server_idx, io.io());
         reportResult("reconnect_max_attempts", false, "connect failed");
         return;
     };
     defer client.deinit();
 
-    std.debug.print("[TEST max_attempts] Stopping server...\n", .{});
-    manager.stopAll(io.io());
-
-    std.debug.print("[TEST max_attempts] Sleeping 1000ms...\n", .{});
-    io.io().sleep(.fromMilliseconds(1000), .awake) catch {};
-
-    std.debug.print("[TEST max_attempts] Checking state...\n", .{});
-    const is_disconnected = !client.isConnected();
-    std.debug.print(
-        "[TEST max_attempts] isDisconnected={}\n",
-        .{is_disconnected},
+    manager.stopServer(server_idx, io.io());
+    client.forceReconnect() catch {};
+    const is_disconnected = waitForClosed(
+        io.io(),
+        client,
+        1500,
     );
-
-    _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
-        reportResult("reconnect_max_attempts", false, "restart failed");
-        return;
-    };
 
     if (is_disconnected) {
         reportResult("reconnect_max_attempts", true, "");
@@ -327,9 +366,10 @@ fn testReconnectDisabled(
     defer client.deinit();
 
     manager.stopAll(io.io());
-    io.io().sleep(.fromMilliseconds(200), .awake) catch {};
+    client.forceReconnect() catch {};
+    _ = waitForClosed(io.io(), client, 500);
 
-    const flush_result = client.flushBuffer();
+    const flush_result = client.flush(200_000_000);
 
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("reconnect_disabled", false, "restart failed");
@@ -484,16 +524,24 @@ fn testReconnectStatsIncrement(
     const initial_reconnects = client.stats().reconnects;
 
     manager.stopAll(io.io());
+    client.forceReconnect() catch {};
 
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("reconnect_stats", false, "restart failed");
         return;
     };
 
-    io.io().sleep(.fromMilliseconds(500), .awake) catch {};
-    client.publish("stats.test", "trigger") catch {};
+    if (!waitForReconnects(
+        io.io(),
+        client,
+        initial_reconnects + 1,
+        3000,
+    )) {
+        reportResult("reconnect_stats", false, "counter not incremented");
+        return;
+    }
 
-    io.io().sleep(.fromMilliseconds(100), .awake) catch {};
+    client.publish("stats.test", "trigger") catch {};
 
     const final_reconnects = client.stats().reconnects;
 
@@ -1541,7 +1589,7 @@ fn testRapidServerRestarts(
     var cycle: u8 = 0;
     while (cycle < 3) : (cycle += 1) {
         manager.stopAll(io.io());
-        io.io().sleep(.fromMilliseconds(200), .awake) catch {};
+        client.forceReconnect() catch {};
 
         _ = manager.startServer(allocator, io.io(), .{
             .port = test_port,
@@ -1550,7 +1598,22 @@ fn testRapidServerRestarts(
             return;
         };
 
-        io.io().sleep(.fromMilliseconds(500), .awake) catch {};
+        const want_reconnects: u32 = @as(u32, cycle) + 1;
+        if (!waitForReconnects(
+            io.io(),
+            client,
+            want_reconnects,
+            3000,
+        ) or !waitForConnected(io.io(), client, 1000)) {
+            var buf: [32]u8 = undefined;
+            const details = std.fmt.bufPrint(
+                &buf,
+                "reconnect {d} timeout",
+                .{cycle},
+            ) catch "reconnect timeout";
+            reportResult("rapid_restarts", false, details);
+            return;
+        }
     }
 
     client.publish("rapid.test", "survived") catch {
@@ -1612,7 +1675,7 @@ fn testMultipleReconnectionCycles(
     var cycle: u8 = 0;
     while (cycle < 3) : (cycle += 1) {
         manager.stopAll(io.io());
-        io.io().sleep(.fromMilliseconds(200), .awake) catch {};
+        client.forceReconnect() catch {};
 
         _ = manager.startServer(allocator, io.io(), .{
             .port = test_port,
@@ -1627,7 +1690,22 @@ fn testMultipleReconnectionCycles(
             return;
         };
 
-        io.io().sleep(.fromMilliseconds(500), .awake) catch {};
+        const want_reconnects: u32 = @as(u32, cycle) + 1;
+        if (!waitForReconnects(
+            io.io(),
+            client,
+            want_reconnects,
+            3000,
+        ) or !waitForConnected(io.io(), client, 1000)) {
+            var buf: [32]u8 = undefined;
+            const details = std.fmt.bufPrint(
+                &buf,
+                "reconnect {d} timeout",
+                .{cycle},
+            ) catch "reconnect timeout";
+            reportResult("multiple_cycles", false, details);
+            return;
+        }
 
         var msg_buf: [32]u8 = undefined;
         const msg = std.fmt.bufPrint(
