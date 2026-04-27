@@ -7,15 +7,25 @@
 
 const std = @import("std");
 const nats = @import("nats");
+const io_backend = @import("io_backend");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
-    const io = init.io;
+
+    var service_backend: io_backend.Backend = undefined;
+    try io_backend.init(&service_backend, allocator);
+    defer service_backend.deinit();
+    const service_io = service_backend.io();
+
+    var requester_backend: io_backend.Backend = undefined;
+    try io_backend.init(&requester_backend, allocator);
+    defer requester_backend.deinit();
+    const requester_io = requester_backend.io();
 
     // Service client
     const service_client = try nats.Client.connect(
         allocator,
-        io,
+        service_io,
         "nats://localhost:4222",
         .{ .name = "service" },
     );
@@ -24,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
     // Requester client
     const requester = try nats.Client.connect(
         allocator,
-        io,
+        requester_io,
         "nats://localhost:4222",
         .{ .name = "requester" },
     );
@@ -39,11 +49,11 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Service listening on 'math.double'\n", .{});
 
     // Run service handler in background (returns void, so no catch)
-    var service_future = io.async(handleService, .{
+    var service_future = service_io.async(handleService, .{
         service_client,
         service,
     });
-    defer service_future.cancel(io);
+    defer service_future.cancel(service_io);
 
     // Flush to ensure server has registered the subscription
     try service_client.flush(1_000_000_000);

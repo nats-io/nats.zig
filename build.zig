@@ -96,6 +96,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "nats", .module = nats },
+                .{ .name = "io_backend", .module = io_backend_mod },
             },
         }),
     });
@@ -140,6 +141,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "nats", .module = nats },
+                .{ .name = "io_backend", .module = io_backend_mod },
             },
         }),
     });
@@ -298,6 +300,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "nats", .module = nats },
+                .{ .name = "io_backend", .module = io_backend_mod },
             },
         }),
     });

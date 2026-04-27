@@ -21,12 +21,12 @@ pub fn testFiveThousandSubs(
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
 
     const sub_client = nats.Client.connect(
         allocator,
-        io.io(),
+        sub_io.io(),
         url,
         .{ .sub_queue_size = 64, .reconnect = false },
     ) catch {
@@ -35,9 +35,12 @@ pub fn testFiveThousandSubs(
     };
     defer sub_client.deinit();
 
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
+
     const pub_client = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -96,7 +99,7 @@ pub fn testFiveThousandSubs(
         return;
     }
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(200),
         .awake,
     ) catch {};
@@ -116,7 +119,7 @@ pub fn testFiveThousandSubs(
     }
 
     // Wait for messages to arrive
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(2000),
         .awake,
     ) catch {};
@@ -345,12 +348,12 @@ pub fn testWildcardFanOut(
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
 
     const client = nats.Client.connect(
         allocator,
-        io.io(),
+        sub_io.io(),
         url,
         .{ .sub_queue_size = 128, .reconnect = false },
     ) catch {
@@ -359,9 +362,12 @@ pub fn testWildcardFanOut(
     };
     defer client.deinit();
 
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
+
     const pub_client = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -412,7 +418,7 @@ pub fn testWildcardFanOut(
     };
     defer wc_sub.deinit();
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(200),
         .awake,
     ) catch {};
@@ -431,7 +437,7 @@ pub fn testWildcardFanOut(
         };
     }
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(500),
         .awake,
     ) catch {};
@@ -1027,12 +1033,12 @@ pub fn testBurstPublish100K(
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
 
     const pub_client = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -1041,9 +1047,12 @@ pub fn testBurstPublish100K(
     };
     defer pub_client.deinit();
 
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
+
     const sub_client = nats.Client.connect(
         allocator,
-        io.io(),
+        sub_io.io(),
         url,
         .{
             .sub_queue_size = 131072,
@@ -1061,7 +1070,7 @@ pub fn testBurstPublish100K(
     };
     defer sub.deinit();
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(50),
         .awake,
     ) catch {};
@@ -1076,7 +1085,7 @@ pub fn testBurstPublish100K(
         };
     }
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(3000),
         .awake,
     ) catch {};
@@ -1112,12 +1121,12 @@ pub fn testLargePayloadBurst(
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
 
     const pub_client = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -1126,9 +1135,12 @@ pub fn testLargePayloadBurst(
     };
     defer pub_client.deinit();
 
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
+
     const sub_client = nats.Client.connect(
         allocator,
-        io.io(),
+        sub_io.io(),
         url,
         .{
             .sub_queue_size = 2048,
@@ -1155,7 +1167,7 @@ pub fn testLargePayloadBurst(
     defer allocator.free(payload);
     @memset(payload, 'L');
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(50),
         .awake,
     ) catch {};
@@ -1170,7 +1182,7 @@ pub fn testLargePayloadBurst(
         };
     }
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(3000),
         .awake,
     ) catch {};
@@ -1205,12 +1217,12 @@ pub fn testManySubjectsPublish(
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
 
     const client = nats.Client.connect(
         allocator,
-        io.io(),
+        sub_io.io(),
         url,
         .{
             .sub_queue_size = 8192,
@@ -1228,14 +1240,17 @@ pub fn testManySubjectsPublish(
     };
     defer sub.deinit();
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(50),
         .awake,
     ) catch {};
 
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
+
     const pub_client = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -1257,7 +1272,7 @@ pub fn testManySubjectsPublish(
         };
     }
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(2000),
         .awake,
     ) catch {};
@@ -1293,12 +1308,12 @@ pub fn testSlowConsumer(
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
 
     const sub_client = nats.Client.connect(
         allocator,
-        io.io(),
+        sub_io.io(),
         url,
         .{ .sub_queue_size = 64, .reconnect = false },
     ) catch {
@@ -1313,9 +1328,12 @@ pub fn testSlowConsumer(
     };
     defer sub.deinit();
 
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
+
     const pub_client = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -1324,7 +1342,7 @@ pub fn testSlowConsumer(
     };
     defer pub_client.deinit();
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(50),
         .awake,
     ) catch {};
@@ -1333,7 +1351,7 @@ pub fn testSlowConsumer(
         pub_client.publish("slow", "flood") catch {};
     }
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(500),
         .awake,
     ) catch {};
@@ -1358,12 +1376,12 @@ pub fn testQueueFillAndRecover(
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
 
     const sub_client = nats.Client.connect(
         allocator,
-        io.io(),
+        sub_io.io(),
         url,
         .{
             .sub_queue_size = @intCast(Q_SIZE),
@@ -1381,9 +1399,12 @@ pub fn testQueueFillAndRecover(
     };
     defer sub.deinit();
 
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
+
     const pub_client = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -1392,7 +1413,7 @@ pub fn testQueueFillAndRecover(
     };
     defer pub_client.deinit();
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(50),
         .awake,
     ) catch {};
@@ -1401,7 +1422,7 @@ pub fn testQueueFillAndRecover(
         pub_client.publish("qr", "fill1") catch {};
     }
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(200),
         .awake,
     ) catch {};
@@ -1418,7 +1439,7 @@ pub fn testQueueFillAndRecover(
         pub_client.publish("qr", "fill2") catch {};
     }
 
-    io.io().sleep(
+    sub_io.io().sleep(
         .fromMilliseconds(200),
         .awake,
     ) catch {};

@@ -16,12 +16,12 @@ pub fn testClientManySubs(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
 
     const publisher = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -30,9 +30,12 @@ pub fn testClientManySubs(allocator: std.mem.Allocator) void {
     };
     defer publisher.deinit();
 
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
+
     const client = nats.Client.connect(
         allocator,
-        io.io(),
+        sub_io.io(),
         url,
         .{ .sub_queue_size = 32, .reconnect = false },
     ) catch {
@@ -67,13 +70,13 @@ pub fn testClientManySubs(allocator: std.mem.Allocator) void {
 
     var received: usize = 0;
     for (subs) |s| {
-        var future = io.io().async(
+        var future = sub_io.io().async(
             nats.Client.Sub.nextMsg,
             .{s},
         );
-        defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
+        defer if (future.cancel(sub_io.io())) |m| m.deinit() else |_| {};
 
-        if (future.await(io.io())) |_| {
+        if (future.await(sub_io.io())) |_| {
             received += 1;
         } else |_| {}
     }
@@ -95,12 +98,12 @@ pub fn testClientWildcard(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
 
     const publisher = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -109,9 +112,12 @@ pub fn testClientWildcard(allocator: std.mem.Allocator) void {
     };
     defer publisher.deinit();
 
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
+
     const client = nats.Client.connect(
         allocator,
-        io.io(),
+        sub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -126,7 +132,7 @@ pub fn testClientWildcard(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit();
 
-    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
+    sub_io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     publisher.publish("wild.a", "msg-a") catch {
         reportResult("client_wildcard", false, "pub a failed");
@@ -144,13 +150,13 @@ pub fn testClientWildcard(allocator: std.mem.Allocator) void {
     const NUM_MSGS = 3;
     var received: usize = 0;
     for (0..NUM_MSGS) |_| {
-        var future = io.io().async(
+        var future = sub_io.io().async(
             nats.Client.Sub.nextMsg,
             .{sub},
         );
-        defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
+        defer if (future.cancel(sub_io.io())) |m| m.deinit() else |_| {};
 
-        if (future.await(io.io())) |_| {
+        if (future.await(sub_io.io())) |_| {
             received += 1;
         } else |_| {}
     }
@@ -168,12 +174,12 @@ pub fn testClientDuplicateSubs(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
 
     const publisher = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -182,9 +188,12 @@ pub fn testClientDuplicateSubs(allocator: std.mem.Allocator) void {
     };
     defer publisher.deinit();
 
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
+
     const client = nats.Client.connect(
         allocator,
-        io.io(),
+        sub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -205,24 +214,24 @@ pub fn testClientDuplicateSubs(allocator: std.mem.Allocator) void {
     };
     defer sub2.deinit();
 
-    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
+    sub_io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     publisher.publish("dup", "hello") catch {};
 
-    var future1 = io.io().async(
+    var future1 = sub_io.io().async(
         nats.Client.Sub.nextMsg,
         .{sub1},
     );
-    defer if (future1.cancel(io.io())) |m| m.deinit() else |_| {};
+    defer if (future1.cancel(sub_io.io())) |m| m.deinit() else |_| {};
 
-    var future2 = io.io().async(
+    var future2 = sub_io.io().async(
         nats.Client.Sub.nextMsg,
         .{sub2},
     );
-    defer if (future2.cancel(io.io())) |m| m.deinit() else |_| {};
+    defer if (future2.cancel(sub_io.io())) |m| m.deinit() else |_| {};
 
-    const got1 = if (future1.await(io.io())) |_| true else |_| false;
-    const got2 = if (future2.await(io.io())) |_| true else |_| false;
+    const got1 = if (future1.await(sub_io.io())) |_| true else |_| false;
+    const got2 = if (future2.await(sub_io.io())) |_| true else |_| false;
 
     if (got1 and got2) {
         reportResult("client_dup_subs", true, "");
@@ -235,12 +244,12 @@ pub fn testClientQueueGroup(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
 
     const publisher = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -249,9 +258,12 @@ pub fn testClientQueueGroup(allocator: std.mem.Allocator) void {
     };
     defer publisher.deinit();
 
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
+
     const client = nats.Client.connect(
         allocator,
-        io.io(),
+        sub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -266,17 +278,17 @@ pub fn testClientQueueGroup(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit();
 
-    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
+    sub_io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     publisher.publish("qg", "task") catch {};
 
-    var future = io.io().async(
+    var future = sub_io.io().async(
         nats.Client.Sub.nextMsg,
         .{sub},
     );
-    defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
+    defer if (future.cancel(sub_io.io())) |m| m.deinit() else |_| {};
 
-    if (future.await(io.io())) |_| {
+    if (future.await(sub_io.io())) |_| {
         reportResult("client_queue_group", true, "");
         return;
     } else |_| {}

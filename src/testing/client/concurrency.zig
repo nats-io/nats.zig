@@ -218,12 +218,12 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
 
     const publisher = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -232,9 +232,12 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
     };
     defer publisher.deinit();
 
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
+
     const subscriber = nats.Client.connect(
         allocator,
-        io.io(),
+        sub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -253,7 +256,7 @@ pub fn testRaceSubscribeVsDelivery(allocator: std.mem.Allocator) void {
         reportResult("race_sub_delivery", false, "publish1 failed");
         return;
     };
-    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
+    sub_io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     publisher.publish("race.delivery", "race-msg-2") catch {
         reportResult("race_sub_delivery", false, "publish2 failed");
@@ -377,60 +380,66 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
     }
 }
 
-pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
+pub fn testMultipleClientsSeparateIo(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const io1 = utils.newIo(allocator);
+    defer io1.deinit();
 
     const client1 = nats.Client.connect(
         allocator,
-        io.io(),
+        io1.io(),
         url,
         .{ .reconnect = false },
     ) catch {
-        reportResult("multi_client_shared_io", false, "client1 failed");
+        reportResult("multi_client_separate_io", false, "client1 failed");
         return;
     };
     defer client1.deinit();
 
+    const io2 = utils.newIo(allocator);
+    defer io2.deinit();
+
     const client2 = nats.Client.connect(
         allocator,
-        io.io(),
+        io2.io(),
         url,
         .{ .reconnect = false },
     ) catch {
-        reportResult("multi_client_shared_io", false, "client2 failed");
+        reportResult("multi_client_separate_io", false, "client2 failed");
         return;
     };
     defer client2.deinit();
 
+    const io3 = utils.newIo(allocator);
+    defer io3.deinit();
+
     const client3 = nats.Client.connect(
         allocator,
-        io.io(),
+        io3.io(),
         url,
         .{ .reconnect = false },
     ) catch {
-        reportResult("multi_client_shared_io", false, "client3 failed");
+        reportResult("multi_client_separate_io", false, "client3 failed");
         return;
     };
     defer client3.deinit();
 
-    const sub = client1.subscribeSync("shared.io.test") catch {
-        reportResult("multi_client_shared_io", false, "subscribe failed");
+    const sub = client1.subscribeSync("separate.io.test") catch {
+        reportResult("multi_client_separate_io", false, "subscribe failed");
         return;
     };
     defer sub.deinit();
 
-    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
+    io1.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    client2.publish("shared.io.test", "from-client2") catch {
-        reportResult("multi_client_shared_io", false, "pub2 failed");
+    client2.publish("separate.io.test", "from-client2") catch {
+        reportResult("multi_client_separate_io", false, "pub2 failed");
         return;
     };
-    client3.publish("shared.io.test", "from-client3") catch {
-        reportResult("multi_client_shared_io", false, "pub3 failed");
+    client3.publish("separate.io.test", "from-client3") catch {
+        reportResult("multi_client_separate_io", false, "pub3 failed");
         return;
     };
 
@@ -443,11 +452,11 @@ pub fn testMultipleClientsSharedIo(allocator: std.mem.Allocator) void {
     }
 
     if (received == 2) {
-        reportResult("multi_client_shared_io", true, "");
+        reportResult("multi_client_separate_io", true, "");
     } else {
         var buf: [32]u8 = undefined;
         const detail = std.fmt.bufPrint(&buf, "got {d}/2", .{received}) catch "e";
-        reportResult("multi_client_shared_io", false, detail);
+        reportResult("multi_client_separate_io", false, detail);
     }
 }
 
@@ -789,7 +798,7 @@ pub fn runAll(allocator: std.mem.Allocator) void {
     testRaceSubscribeVsDelivery(allocator);
     testRaceUnsubscribeVsDelivery(allocator);
     testSidAllocationRecycling(allocator);
-    testMultipleClientsSharedIo(allocator);
+    testMultipleClientsSeparateIo(allocator);
     testParallelReceive(allocator);
     testRapidFlushOperations(allocator);
     testStatsConcurrency(allocator);

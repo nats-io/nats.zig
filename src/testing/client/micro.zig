@@ -358,15 +358,19 @@ fn testMicroStats(allocator: std.mem.Allocator) void {
 fn testMicroNoQueueFanout(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const io_a = utils.newIo(allocator);
+    defer io_a.deinit();
 
-    const client_a = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+    const client_a = nats.Client.connect(allocator, io_a.io(), url, .{ .reconnect = false }) catch {
         reportResult("testMicroNoQueueFanout", false, "client_a failed");
         return;
     };
     defer client_a.deinit();
-    const client_b = nats.Client.connect(allocator, io.io(), url, .{ .reconnect = false }) catch {
+
+    const io_b = utils.newIo(allocator);
+    defer io_b.deinit();
+
+    const client_b = nats.Client.connect(allocator, io_b.io(), url, .{ .reconnect = false }) catch {
         reportResult("testMicroNoQueueFanout", false, "client_b failed");
         return;
     };
@@ -410,7 +414,7 @@ fn testMicroNoQueueFanout(allocator: std.mem.Allocator) void {
         if (msg) |m| m.deinit();
     }
 
-    io.io().sleep(.fromMilliseconds(200), .awake) catch {};
+    io_a.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
     if (count_a == 5 and count_b == 5) {
         reportResult("testMicroNoQueueFanout", true, "");
@@ -848,17 +852,21 @@ fn testMicroReset(allocator: std.mem.Allocator) void {
 fn testMicroQueueGroupLoadBalance(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const io_a = utils.newIo(allocator);
+    defer io_a.deinit();
 
-    const client_a = nats.Client.connect(allocator, io.io(), url, .{
+    const client_a = nats.Client.connect(allocator, io_a.io(), url, .{
         .reconnect = false,
     }) catch {
         reportResult("testMicroQueueGroupLoadBalance", false, "client_a failed");
         return;
     };
     defer client_a.deinit();
-    const client_b = nats.Client.connect(allocator, io.io(), url, .{
+
+    const io_b = utils.newIo(allocator);
+    defer io_b.deinit();
+
+    const client_b = nats.Client.connect(allocator, io_b.io(), url, .{
         .reconnect = false,
     }) catch {
         reportResult("testMicroQueueGroupLoadBalance", false, "client_b failed");
@@ -903,7 +911,7 @@ fn testMicroQueueGroupLoadBalance(allocator: std.mem.Allocator) void {
         if (m) |x| x.deinit();
     }
 
-    io.io().sleep(.fromMilliseconds(100), .awake) catch {};
+    io_a.io().sleep(.fromMilliseconds(100), .awake) catch {};
 
     // Both should receive >0 and combined == N (queue group → load split).
     if (count_a + count_b == N and count_a > 0 and count_b > 0) {

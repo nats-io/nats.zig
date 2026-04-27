@@ -715,12 +715,12 @@ pub fn testCallbackRequestReply(
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const svc_io = utils.newIo(allocator);
+    defer svc_io.deinit();
 
     const svc_client = nats.Client.connect(
         allocator,
-        io.io(),
+        svc_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -733,9 +733,12 @@ pub fn testCallbackRequestReply(
     };
     defer svc_client.deinit();
 
+    const req_io = utils.newIo(allocator);
+    defer req_io.deinit();
+
     const req_client = nats.Client.connect(
         allocator,
-        io.io(),
+        req_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -768,7 +771,7 @@ pub fn testCallbackRequestReply(
     defer sub.deinit();
 
     // Wait for sub to propagate
-    io.io().sleep(
+    svc_io.io().sleep(
         .fromMilliseconds(50),
         .awake,
     ) catch {};

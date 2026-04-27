@@ -16,12 +16,12 @@ pub fn testStress500Messages(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const pub_io = utils.newIo(allocator);
+    defer pub_io.deinit();
 
     const publisher = nats.Client.connect(
         allocator,
-        io.io(),
+        pub_io.io(),
         url,
         .{ .reconnect = false },
     ) catch {
@@ -30,7 +30,10 @@ pub fn testStress500Messages(allocator: std.mem.Allocator) void {
     };
     defer publisher.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{
+    const sub_io = utils.newIo(allocator);
+    defer sub_io.deinit();
+
+    const client = nats.Client.connect(allocator, sub_io.io(), url, .{
         .sub_queue_size = 512,
         .reconnect = false,
     }) catch {
@@ -45,7 +48,7 @@ pub fn testStress500Messages(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit();
 
-    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
+    sub_io.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
     const NUM_MSGS = 500;
     for (0..NUM_MSGS) |_| {
@@ -57,13 +60,13 @@ pub fn testStress500Messages(allocator: std.mem.Allocator) void {
 
     var received: usize = 0;
     for (0..NUM_MSGS) |_| {
-        var future = io.io().async(
+        var future = sub_io.io().async(
             nats.Client.Sub.nextMsg,
             .{sub},
         );
-        defer if (future.cancel(io.io())) |m| m.deinit() else |_| {};
+        defer if (future.cancel(sub_io.io())) |m| m.deinit() else |_| {};
 
-        if (future.await(io.io())) |_| {
+        if (future.await(sub_io.io())) |_| {
             received += 1;
         } else |_| {
             break;
