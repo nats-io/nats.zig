@@ -1837,7 +1837,10 @@ pub fn queueSubscribe(
     );
     errdefer sub.deinit();
     sub.mode = .callback;
-    sub.callback_future = self.io.async(
+    sub.callback_future = self.io.concurrent(
+        callbackDrainFn,
+        .{ sub, handler },
+    ) catch self.io.async(
         callbackDrainFn,
         .{ sub, handler },
     );
@@ -1871,7 +1874,10 @@ pub fn queueSubscribeFn(
     );
     errdefer sub.deinit();
     sub.mode = .callback;
-    sub.callback_future = self.io.async(
+    sub.callback_future = self.io.concurrent(
+        callbackDrainFnPlain,
+        .{ sub, cb },
+    ) catch self.io.async(
         callbackDrainFnPlain,
         .{ sub, cb },
     );

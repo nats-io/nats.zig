@@ -173,7 +173,10 @@ pub const PushSubscription = struct {
             .io = client.io,
         };
         if (opts.heartbeat_ms > 0) {
-            ctx.monitor_future = client.io.async(
+            ctx.monitor_future = client.io.concurrent(
+                pushHeartbeatMonitorTask,
+                .{ wrapper, opts.heartbeat_ms },
+            ) catch client.io.async(
                 pushHeartbeatMonitorTask,
                 .{ wrapper, opts.heartbeat_ms },
             );
