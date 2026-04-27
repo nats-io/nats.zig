@@ -1065,9 +1065,9 @@ pub fn keyValueStores(
 // -- JetStream Publish --
 
 /// Publishes a message to a JetStream stream subject
-/// and waits for a PubAck. Retries up to 2 times on
-/// NoResponders (matching Go client behavior for
-/// transient leadership changes).
+/// and waits for a PubAck. Retries NoResponders within
+/// the configured JetStream timeout to tolerate transient
+/// stream or leadership readiness after stream creation.
 pub fn publish(
     self: *JetStream,
     subject: []const u8,
@@ -1084,8 +1084,10 @@ pub fn publishRetry(
     payload: []const u8,
     hdrs: ?[]const headers.Entry,
 ) !Response(PubAck) {
-    const max_retries: u32 = 2;
-    const retry_wait_ns: u64 = 250_000_000;
+    const retry_wait_ms: u32 = 250;
+    const max_retries: u32 = @max(2, self.timeout_ms / retry_wait_ms);
+    const retry_wait_ns: u64 =
+        @as(u64, retry_wait_ms) * std.time.ns_per_ms;
     var attempt: u32 = 0;
 
     while (true) {
