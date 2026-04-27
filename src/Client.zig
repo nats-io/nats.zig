@@ -2132,6 +2132,8 @@ pub fn requestWithHeaders(
         payload,
     );
 
+    try self.flushBuffer();
+
     return self.requestAwaitResp(&waiter, reply, timeout_ms);
 }
 
@@ -2150,6 +2152,20 @@ pub fn flushBuffer(self: *Client) !void {
 
     try self.write_mutex.lock(self.io);
     defer self.write_mutex.unlock(self.io);
+
+    try self.flushBufferLocked();
+}
+
+fn flushBufferLocked(self: *Client) !void {
+    if (!State.atomicLoad(&self.state).canSend()) {
+        return error.NotConnected;
+    }
+
+    while (self.publish_ring.peek()) |data| {
+        self.active_writer.writeAll(data) catch return error.WriteFailed;
+        self.publish_ring.advance();
+    }
+
     self.active_writer.flush() catch return error.WriteFailed;
 
     // TLS: active_writer.flush() only encrypts to TCP buffer.
@@ -2557,6 +2573,7 @@ pub fn request(
     errdefer self.cleanupRespWaiter(&waiter, reply);
 
     try self.publishRequest(subject, reply, payload);
+    try self.flushBuffer();
 
     return self.requestAwaitResp(&waiter, reply, timeout_ms);
 }
@@ -2614,6 +2631,8 @@ pub fn requestMsg(
 
         self.flush_requested.store(true, .release);
     }
+
+    try self.flushBuffer();
 
     return self.requestAwaitResp(&waiter, reply, timeout_ms);
 }
