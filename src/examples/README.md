@@ -6,6 +6,7 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 |---------|-----|-------------|
 | simple | `run-simple` | Basic pub/sub - connect, `subscribeSync`, publish, receive |
 | request_reply | `run-request-reply` | RPC pattern with automatic inbox handling |
+| headers | `run-headers` | Publish, receive, and parse NATS headers |
 | queue_groups | `run-queue-groups` | Load-balanced workers with `io.concurrent()` |
 | polling_loop | `run-polling-loop` | Non-blocking `tryNextMsg()` with priority scheduling |
 | select | `run-select` | Race subscription against timeout with `Io.Select` |

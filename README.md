@@ -1,4 +1,5 @@
 [![CI](https://github.com/nats-io/nats.zig/actions/workflows/ci.yml/badge.svg)](https://github.com/nats-io/nats.zig/actions/workflows/ci.yml)
+[![License Apache 2.0](https://img.shields.io/badge/License-Apache2-blue.svg)](LICENSE)
 ![Zig](https://img.shields.io/badge/Zig-0.16.0-orange)
 
 <p align="center">
@@ -16,10 +17,46 @@ A [Zig](https://ziglang.org/) client for the [NATS messaging system](https://nat
 Built on `std.Io`.
 
 > **Pre-1.0** - This library is under active development.
-> Core pub/sub, TLS, JetStream (pull + push consumers), and
-> Key-Value store are implemented and functional. The micro service
-> API is implemented and covered by integration tests. Object store
-> is not yet implemented. The API may change before 1.0.
+> Core pub/sub, server-auth TLS, JetStream (pull + push
+> consumers), Key-Value store, and the micro service API are
+> implemented and covered by integration tests. Object store and
+> mTLS are not yet implemented. The API may change before 1.0.
+
+Check out [NATS by Example](https://natsbyexample.com) for
+runnable, cross-client NATS examples. This repository includes
+Zig ports in [doc/nats-by-example](doc/nats-by-example/README.md).
+
+## Contents
+
+- [Requirements](#requirements)
+- [Documentation](#documentation)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Examples](#examples)
+- [Memory Ownership](#memory-ownership)
+- [Publishing](#publishing)
+- [Subscribing](#subscribing)
+- [Request/Reply](#requestreply)
+- [Headers](#headers)
+- [JetStream](#jetstream)
+- [Async Patterns with std.Io](#async-patterns-with-stdio)
+- [Connections](#connections)
+- [Authentication](#authentication)
+- [Error Handling](#error-handling)
+- [Server Compatibility](#server-compatibility)
+- [API Quick Reference](#api-quick-reference)
+- [Building](#building)
+- [Status](#status)
+
+## Documentation
+
+- [Examples](src/examples/README.md) - runnable examples built by `zig build`
+- [JetStream guide](doc/JetStream.md) - stream, consumer, publish,
+  pull-consume, ack, and error-handling details
+- [NATS by Example ports](doc/nats-by-example/README.md) - Zig ports of
+  selected cross-client examples from natsbyexample.com
+- [Integration tests](src/testing/README.md) - local test layout,
+  fixtures, and focused test targets
 
 ## Requirements
 
@@ -157,6 +194,7 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 |---------|-----|-------------|
 | simple | `run-simple` | Basic pub/sub - connect, `subscribeSync`, publish, receive |
 | request_reply | `run-request-reply` | RPC pattern with automatic inbox handling |
+| headers | `run-headers` | Publish, receive, and parse NATS headers |
 | queue_groups | `run-queue-groups` | Load-balanced workers with `io.concurrent()` |
 | polling_loop | `run-polling-loop` | Non-blocking `tryNextMsg()` with priority scheduling |
 | select | `run-select` | Race subscription against timeout with `Io.Select` |
@@ -821,7 +859,8 @@ at-least-once delivery, message replay, and durable consumers --
 all through a JSON request/reply API on `$JS.API.*` subjects.
 
 For runnable examples, see `src/examples/jetstream_*.zig`,
-`src/examples/kv*.zig`, and the API reference below.
+`src/examples/kv*.zig`, the focused [JetStream guide](doc/JetStream.md),
+and the API reference below.
 
 ### Quick Example -- JetStream
 
@@ -1580,15 +1619,9 @@ const client = try nats.Client.connect(allocator, io, "tls://localhost:4443", .{
 });
 ```
 
-**Mutual TLS (mTLS):**
-
-```zig
-const client = try nats.Client.connect(allocator, io, "tls://localhost:4443", .{
-    .tls_ca_file = "/path/to/ca.pem",
-    .tls_cert_file = "/path/to/client.pem",
-    .tls_key_file = "/path/to/client-key.pem",
-});
-```
+**Mutual TLS (mTLS):** client certificates are planned but not
+implemented yet. Setting `tls_cert_file` or `tls_key_file` currently
+returns `error.MtlsNotImplemented`.
 
 **Checking TLS Status:**
 
@@ -1602,8 +1635,8 @@ if (client.isTls()) {
 |--------|------|-------------|
 | `tls_required` | `bool` | Force TLS connection |
 | `tls_ca_file` | `?[]const u8` | CA certificate file path (PEM) |
-| `tls_cert_file` | `?[]const u8` | Client certificate for mTLS (PEM) |
-| `tls_key_file` | `?[]const u8` | Client private key for mTLS (PEM) |
+| `tls_cert_file` | `?[]const u8` | Reserved for mTLS; currently returns `error.MtlsNotImplemented` |
+| `tls_key_file` | `?[]const u8` | Reserved for mTLS; currently returns `error.MtlsNotImplemented` |
 | `tls_insecure_skip_verify` | `bool` | Skip server certificate verification |
 | `tls_handshake_first` | `bool` | TLS handshake before NATS protocol |
 
@@ -1849,7 +1882,8 @@ layout, fixtures, and focused test targets.
 | Event Callbacks | Implemented |
 | NKey Authentication | Implemented |
 | JWT/Credentials | Implemented |
-| TLS | Implemented |
+| Server-auth TLS | Implemented |
+| mTLS client certificates | Planned |
 | JetStream Core | Implemented |
 | JetStream Pull Consumers | Implemented |
 | JetStream Push Consumers | Implemented |

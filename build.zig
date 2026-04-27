@@ -110,6 +110,29 @@ pub fn build(b: *std.Build) void {
     run_request_reply.dependOn(&request_reply_cmd.step);
     request_reply_cmd.step.dependOn(b.getInstallStep());
 
+    // Headers example (metadata with HPUB/HMSG)
+    const headers_exe = b.addExecutable(.{
+        .name = "example-headers",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/examples/headers.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+                .{ .name = "io_backend", .module = io_backend_mod },
+            },
+        }),
+    });
+    b.installArtifact(headers_exe);
+
+    const run_headers = b.step(
+        "run-headers",
+        "Run headers example",
+    );
+    const headers_cmd = b.addRunArtifact(headers_exe);
+    run_headers.dependOn(&headers_cmd.step);
+    headers_cmd.step.dependOn(b.getInstallStep());
+
     // 3. Queue Groups example (load balancing with workers)
     const queue_groups_exe = b.addExecutable(.{
         .name = "example-queue-groups",
