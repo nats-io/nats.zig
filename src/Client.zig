@@ -1293,32 +1293,6 @@ fn generateRespToken(buf: *[8]u8, n: u64) []const u8 {
     return buf[0..];
 }
 
-/// Spin-yield wait for a RespWaiter to be signaled.
-/// Spawned via io.async and raced against a timeout in request().
-/// Mirrors the Sub.nextRaw spin/yield discipline so it cooperates
-/// with both std.Io.Threaded and std.Io.Evented.
-fn waitForRespWaiter(
-    waiter: *RespWaiter,
-    io: Io,
-) !void {
-    var spin: u32 = 0;
-    while (!waiter.done.load(.acquire)) {
-        spin += 1;
-        if (spin < defaults.Spin.max_spins) {
-            std.atomic.spinLoopHint();
-        } else {
-            io.sleep(
-                .fromNanoseconds(0),
-                .awake,
-            ) catch |err| {
-                if (err == error.Canceled)
-                    return error.Canceled;
-            };
-            spin = 0;
-        }
-    }
-}
-
 /// Upgrades the connection to TLS.
 /// Allocates TLS buffers, loads CA certificates, and performs handshake.
 fn upgradeTls(
@@ -2120,8 +2094,8 @@ pub fn publishMsg(
 ///     payload: Request data
 ///     timeout_ms: Maximum time to wait for reply in milliseconds
 ///
-/// Creates a temporary inbox subscription, sends request with reply-to
-/// and headers, and waits for response using Io.Select.
+/// Sends request with reply-to and headers, then waits for the
+/// response multiplexer using a direct deadline loop.
 /// Returns null on timeout.
 pub fn requestWithHeaders(
     self: *Client,
@@ -2179,7 +2153,7 @@ pub fn flushBuffer(self: *Client) !void {
 ///
 /// Sends all buffered data, then sends PING and waits for PONG response.
 /// This confirms the server received all messages up to this point.
-/// Safe in both sync and async contexts (uses Io.Select pattern).
+/// Safe in both sync and async contexts.
 ///
 /// This matches Go/C client Flush() behavior (PING/PONG confirmation).
 /// For fast buffer-only flush without confirmation, use flushBuffer().
@@ -2465,12 +2439,12 @@ fn cleanupRespWaiter(
     }
 }
 
-/// Inner helper: races the waiter against a timeout, cleans up
-/// the map entry on every exit path, and returns the response or
-/// null. Acquiring resp_mux.mutex in the cleanup defer serializes
-/// against any concurrent dispatcher (which holds the same mutex
-/// during clone+write), preventing use-after-free of the
-/// stack-allocated waiter.
+/// Inner helper: waits for the waiter or deadline, cleans up the
+/// map entry on every exit path, and returns the response or null.
+/// Acquiring resp_mux.mutex in the cleanup defer serializes against
+/// any concurrent dispatcher (which holds the same mutex during
+/// clone+write), preventing use-after-free of the stack-allocated
+/// waiter.
 fn requestAwaitResp(
     self: *Client,
     waiter: *RespWaiter,
@@ -2479,6 +2453,10 @@ fn requestAwaitResp(
 ) ?Message {
     assert(self.resp_mux.prefix_len > 0);
     const map_key = reply[self.resp_mux.prefix_len..];
+    const timeout_ns: u64 =
+        @as(u64, timeout_ms) * std.time.ns_per_ms;
+    const start = getNowNs(self.io);
+    var spin_count: u32 = 0;
 
     defer {
         self.resp_mux.mutex.lockUncancelable(self.io);
@@ -2486,24 +2464,26 @@ fn requestAwaitResp(
         self.resp_mux.mutex.unlock(self.io);
     }
 
-    const Sel = Io.Select(union(enum) {
-        response: anyerror!void,
-        timeout: void,
-    });
-    var sel_buf: [2]Sel.Union = undefined;
-    var sel = Sel.init(self.io, &sel_buf);
-    sel.async(
-        .response,
-        waitForRespWaiter,
-        .{ waiter, self.io },
-    );
-    sel.async(.timeout, sleepMs, .{ self.io, timeout_ms });
+    while (!waiter.done.load(.acquire)) {
+        spin_count += 1;
+        if (spin_count < defaults.Spin.max_spins) {
+            std.atomic.spinLoopHint();
+        } else {
+            self.io.sleep(
+                .fromNanoseconds(0),
+                .awake,
+            ) catch |err| {
+                if (err == error.Canceled)
+                    return waiter.msg;
+            };
+            spin_count = 0;
 
-    _ = sel.await() catch {
-        sel.cancelDiscard();
-        return waiter.msg;
-    };
-    sel.cancelDiscard();
+            const now = getNowNs(self.io);
+            if (now -| start >= timeout_ns)
+                return waiter.msg;
+        }
+    }
+
     return waiter.msg;
 }
 
@@ -2625,11 +2605,6 @@ pub fn requestMsg(
     }
 
     return self.requestAwaitResp(&waiter, reply, timeout_ms);
-}
-
-/// Sleep helper for timeouts (milliseconds).
-fn sleepMs(io: Io, timeout_ms: u32) void {
-    io.sleep(.fromMilliseconds(timeout_ms), .awake) catch {};
 }
 
 /// Helper for connection timeout (nanoseconds).
