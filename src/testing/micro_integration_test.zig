@@ -7,7 +7,6 @@ const utils = @import("test_utils.zig");
 const micro_tests = @import("client/micro.zig");
 
 const ServerManager = utils.ServerManager;
-const test_port = utils.test_port;
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -21,14 +20,6 @@ pub fn main(init: std.process.Init) !void {
 
     var manager: ServerManager = .init(allocator);
     defer manager.deinit(allocator, io);
-
-    std.debug.print("Starting primary server on port {d}...\n", .{test_port});
-    _ = manager.startServer(allocator, io, .{ .port = test_port }) catch |err| {
-        std.debug.print("Failed to start primary server: {}\n", .{err});
-        std.process.exit(1);
-    };
-
-    io.sleep(.fromMilliseconds(200), .awake) catch {};
 
     std.debug.print("\nRunning micro tests...\n\n", .{});
     micro_tests.runAll(allocator, &manager);

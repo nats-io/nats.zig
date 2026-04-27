@@ -6,8 +6,9 @@ const nats = utils.nats;
 
 const reportResult = utils.reportResult;
 const formatUrl = utils.formatUrl;
-const test_port = utils.test_port;
+const test_port = utils.micro_port;
 const ServerManager = utils.ServerManager;
+const TestServer = utils.server_manager.TestServer;
 
 const ParseOpts: std.json.ParseOptions = .{
     .ignore_unknown_fields = true,
@@ -39,6 +40,19 @@ const ErrorHandler = struct {
 };
 
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
+    _ = manager;
+
+    const io = utils.newIo(allocator);
+    defer io.deinit();
+
+    var server = TestServer.start(allocator, io.io(), .{
+        .port = test_port,
+    }) catch {
+        reportResult("micro_server", false, "start server failed");
+        return;
+    };
+    defer server.deinit(io.io());
+
     testMicroBasicRequest(allocator);
     testMicroBasicRequestHandlerFn(allocator);
     testMicroRespondError(allocator);
@@ -61,7 +75,20 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     testMicroStop(allocator);
     testMicroStopIdempotent(allocator);
     testMicroDrainOnStop(allocator);
-    testMicroReconnect(allocator, manager);
+    testMicroReconnect(allocator, &server);
+}
+
+fn waitForConnected(
+    io: std.Io,
+    client: *nats.Client,
+    timeout_ms: u32,
+) bool {
+    var waited: u32 = 0;
+    while (waited < timeout_ms) : (waited += 25) {
+        if (client.isConnected()) return true;
+        io.sleep(.fromMilliseconds(25), .awake) catch {};
+    }
+    return client.isConnected();
 }
 
 fn testMicroBasicRequest(allocator: std.mem.Allocator) void {
@@ -469,7 +496,7 @@ fn testMicroStop(allocator: std.mem.Allocator) void {
 
 fn testMicroReconnect(
     allocator: std.mem.Allocator,
-    manager: *ServerManager,
+    server: *TestServer,
 ) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -500,13 +527,16 @@ fn testMicroReconnect(
     };
     defer service.deinit();
 
-    manager.stopServer(0, io.io());
-    io.io().sleep(.fromMilliseconds(200), .awake) catch {};
-    _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
+    server.stop(io.io());
+    client.forceReconnect() catch {};
+    server.* = TestServer.start(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("testMicroReconnect", false, "restart failed");
         return;
     };
-    io.io().sleep(.fromMilliseconds(700), .awake) catch {};
+    if (!waitForConnected(io.io(), client, 5000)) {
+        reportResult("testMicroReconnect", false, "reconnect timeout");
+        return;
+    }
 
     const msg = client.request("reconnect.echo", "again", 1000) catch null;
     if (msg) |m| {
