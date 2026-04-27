@@ -25,6 +25,14 @@ fn threadSleepNs(ns: u64) void {
 var push_heartbeat_err_seen =
     std.atomic.Value(bool).init(false);
 
+fn deleteStreamIfExists(
+    js: *nats.jetstream.JetStream,
+    name: []const u8,
+) void {
+    var d = js.deleteStream(name) catch return;
+    d.deinit();
+}
+
 fn pushHeartbeatErrHandler(err: anyerror) void {
     if (err == error.NoHeartbeat) {
         push_heartbeat_err_seen.store(true, .release);
@@ -9124,6 +9132,8 @@ pub fn testAsyncPublishDedup(
         .{},
     );
 
+    deleteStreamIfExists(&js, "ASYNC_DEDUP");
+
     var s = js.createStream(.{
         .name = "ASYNC_DEDUP",
         .subjects = &.{"adedup.>"},
@@ -9138,6 +9148,7 @@ pub fn testAsyncPublishDedup(
         return;
     };
     defer s.deinit();
+    defer deleteStreamIfExists(&js, "ASYNC_DEDUP");
 
     var ap = nats.jetstream.AsyncPublisher.init(
         &js,
@@ -9418,6 +9429,8 @@ pub fn testAsyncPublishBurst(
         .{},
     );
 
+    deleteStreamIfExists(&js, "BURST");
+
     var s = js.createStream(.{
         .name = "BURST",
         .subjects = &.{"burst.>"},
@@ -9431,6 +9444,7 @@ pub fn testAsyncPublishBurst(
         return;
     };
     defer s.deinit();
+    defer deleteStreamIfExists(&js, "BURST");
 
     var ap = nats.jetstream.AsyncPublisher.init(
         &js,
