@@ -771,6 +771,7 @@ pub fn createKeyValue(
         &sc.subjects,
     ));
     resp.deinit();
+    try self.confirmServerRoundTrip();
     return self.initKeyValue(cfg.bucket);
 }
 
@@ -789,6 +790,7 @@ pub fn updateKeyValue(
         &sc.subjects,
     ));
     resp.deinit();
+    try self.confirmServerRoundTrip();
     return self.initKeyValue(cfg.bucket);
 }
 
@@ -805,6 +807,7 @@ pub fn createOrUpdateKeyValue(
         sc.config(sc.stream_name(), &sc.subjects),
     );
     resp.deinit();
+    try self.confirmServerRoundTrip();
     return self.initKeyValue(cfg.bucket);
 }
 
@@ -869,6 +872,14 @@ fn initKeyValue(
     kv.stream_len = @intCast(sn.len);
 
     return kv;
+}
+
+fn confirmServerRoundTrip(self: *JetStream) !void {
+    // Make newly created/updated KV streams immediately publishable on
+    // constrained runners where stream interest can lag the API response.
+    const timeout_ns = @as(u64, self.timeout_ms) *
+        std.time.ns_per_ms;
+    try self.client.flush(timeout_ns);
 }
 
 /// Builds the stream config for a KV bucket without
