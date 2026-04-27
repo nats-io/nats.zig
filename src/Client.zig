@@ -2177,6 +2177,8 @@ pub fn flush(
     assert(timeout_ns > 0);
     if (!State.atomicLoad(&self.state).canSend()) return error.NotConnected;
 
+    const old_pong_ns = self.last_pong_received_ns.load(.acquire);
+
     // Step 1: Drain publish ring + flush + send PING (holding mutex)
     try self.write_mutex.lock(self.io);
 
@@ -2220,7 +2222,6 @@ pub fn flush(
     // Step 2: Poll for PONG with timeout (direct loop, no Io.Select).
     // Using direct polling avoids layering a second async wait inside
     // a synchronous flush call on this client's Io.
-    const old_pong_ns = self.last_pong_received_ns.load(.acquire);
     const deadline_ns = getNowNs(self.io) +| timeout_ns;
     var iteration: u32 = 0;
 
