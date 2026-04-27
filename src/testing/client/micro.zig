@@ -1343,19 +1343,35 @@ fn testMicroStopIdempotent(allocator: std.mem.Allocator) void {
     }
 }
 
-const SlowEcho = struct {
+const BlockingEcho = struct {
     started: *std.atomic.Value(bool),
-    delay_ms: u32,
+    release: *std.atomic.Value(bool),
+    finished: *std.atomic.Value(bool),
 
     pub fn onRequest(self: *@This(), req: *nats.micro.Request) void {
         self.started.store(true, .release);
-        req.client.io.sleep(
-            .fromMilliseconds(self.delay_ms),
-            .awake,
-        ) catch {};
+        while (!self.release.load(.acquire)) {
+            req.client.io.sleep(.fromMilliseconds(1), .awake) catch {};
+        }
         req.respond("done") catch {};
+        self.finished.store(true, .release);
     }
 };
+
+const StopState = struct {
+    done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    err: ?anyerror = null,
+};
+
+fn stopService(
+    service: *nats.micro.Service,
+    state: *StopState,
+) void {
+    service.stop(null) catch |err| {
+        state.err = err;
+    };
+    state.done.store(true, .release);
+}
 
 fn drainRequester(
     client: *nats.Client,
@@ -1379,14 +1395,20 @@ fn testMicroDrainOnStop(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     var started = std.atomic.Value(bool).init(false);
-    var slow = SlowEcho{ .started = &started, .delay_ms = 200 };
+    var release = std.atomic.Value(bool).init(false);
+    var finished = std.atomic.Value(bool).init(false);
+    var blocking = BlockingEcho{
+        .started = &started,
+        .release = &release,
+        .finished = &finished,
+    };
 
     const service = nats.micro.addService(client, .{
         .name = "drain-svc",
         .version = "1.0.0",
         .endpoint = .{
             .subject = "drain.echo",
-            .handler = nats.micro.Handler.init(SlowEcho, &slow),
+            .handler = nats.micro.Handler.init(BlockingEcho, &blocking),
         },
     }) catch {
         reportResult("testMicroDrainOnStop", false, "addService failed");
@@ -1409,27 +1431,48 @@ fn testMicroDrainOnStop(allocator: std.mem.Allocator) void {
         return;
     }
 
-    const t0 = std.Io.Timestamp.now(io.io(), .awake);
-    service.stop(null) catch {
+    var stop_state = StopState{};
+    var stop_fut = io.io().concurrent(stopService, .{ service, &stop_state }) catch
+        io.io().async(stopService, .{ service, &stop_state });
+
+    spins = 0;
+    while (!service.stopping.load(.acquire) and spins < 200) {
+        io.io().sleep(.fromMilliseconds(1), .awake) catch {};
+        spins += 1;
+    }
+    if (!service.stopping.load(.acquire)) {
+        release.store(true, .release);
+        stop_fut.await(io.io());
+        fut.await(io.io());
+        defer if (resp) |m| m.deinit();
+        reportResult("testMicroDrainOnStop", false, "stop never started");
+        return;
+    }
+
+    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
+    if (stop_state.done.load(.acquire)) {
+        release.store(true, .release);
+        stop_fut.await(io.io());
+        fut.await(io.io());
+        defer if (resp) |m| m.deinit();
+        reportResult("testMicroDrainOnStop", false, "stop returned early");
+        return;
+    }
+
+    release.store(true, .release);
+    stop_fut.await(io.io());
+    if (stop_state.err != null) {
         _ = fut.cancel(io.io());
         reportResult("testMicroDrainOnStop", false, "stop failed");
         return;
-    };
-    const t1 = std.Io.Timestamp.now(io.io(), .awake);
+    }
+
     fut.await(io.io());
     defer if (resp) |m| m.deinit();
 
-    const elapsed_ms: u64 = @intCast(@divTrunc(
-        t1.nanoseconds - t0.nanoseconds,
-        std.time.ns_per_ms,
-    ));
-
-    // stop() must have waited for in-flight handler to finish
-    // (response must be present), and must not have returned
-    // immediately (some non-trivial portion of the 200ms remained).
-    if (resp != null and elapsed_ms >= 50) {
+    if (resp != null and finished.load(.acquire) and service.stopped()) {
         reportResult("testMicroDrainOnStop", true, "");
     } else {
-        reportResult("testMicroDrainOnStop", false, "drain did not wait");
+        reportResult("testMicroDrainOnStop", false, "drain incomplete");
     }
 }
