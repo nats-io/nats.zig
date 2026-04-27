@@ -1,0 +1,19 @@
+.{
+    .name = .nats,
+    .version = "0.1.0",
+    // Changing fingerprint has security and trust implications.
+    .fingerprint = 0x31f7624fb15addf7,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "CONTRIBUTING.md",
+        "LICENSE",
+        "README.md",
+        "SECURITY.md",
+        "build.zig",
+        "build.zig.zon",
+        "doc",
+        "logo",
+        "src",
+    },
+}

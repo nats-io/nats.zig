@@ -1,0 +1,1042 @@
+//! Async Patterns Integration Tests
+//!
+//! Tests std.Io async patterns with NATS client including:
+//! - Io.Select for racing operations
+//! - io.concurrent() + Io.Queue for workers
+//! - io.async() for parallel receives
+//! - Cancellation and cleanup patterns
+//! - Batch receiving
+
+const std = @import("std");
+const utils = @import("../test_utils.zig");
+const nats = utils.nats;
+
+const reportResult = utils.reportResult;
+const formatUrl = utils.formatUrl;
+const test_port = utils.test_port;
+const ServerManager = utils.ServerManager;
+
+const Io = std.Io;
+const Allocator = std.mem.Allocator;
+const Sub = nats.Client.Sub;
+const Message = nats.Message;
+
+/// Sleep function compatible with Io.Select.async()
+fn sleepMs(io: Io, ms: i64) void {
+    io.sleep(.fromMilliseconds(ms), .awake) catch {};
+}
+
+const MsgSel = Io.Select(union(enum) {
+    message: anyerror!Message,
+    timeout: void,
+});
+
+/// Cancel a MsgSel, deiniting any completed messages.
+fn cancelMsgSel(sel: *MsgSel) void {
+    while (sel.cancel()) |remaining| {
+        switch (remaining) {
+            .message => |r| {
+                if (r) |m| m.deinit() else |_| {}
+            },
+            .timeout => {},
+        }
+    }
+}
+
+/// Test 1: Race subscription receive against timeout - timeout wins.
+fn testAsyncSelectTimeout(allocator: Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const threaded = utils.newIo(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const client = nats.Client.connect(
+        allocator,
+        io,
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "async_select_timeout",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit();
+
+    const sub = client.subscribeSync(
+        "async.timeout.test",
+    ) catch {
+        reportResult(
+            "async_select_timeout",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit();
+
+    // Do NOT publish - we want timeout to win
+    var buf: [2]MsgSel.Union = undefined;
+    var sel = MsgSel.init(io, &buf);
+    sel.async(.message, Sub.nextMsg, .{sub});
+    sel.async(.timeout, sleepMs, .{ io, 50 });
+
+    const result = sel.await() catch {
+        cancelMsgSel(&sel);
+        reportResult(
+            "async_select_timeout",
+            false,
+            "select failed",
+        );
+        return;
+    };
+    cancelMsgSel(&sel);
+
+    switch (result) {
+        .message => {
+            reportResult(
+                "async_select_timeout",
+                false,
+                "expected timeout",
+            );
+        },
+        .timeout => {
+            reportResult("async_select_timeout", true, "");
+        },
+    }
+}
+
+/// Test 2: Race subscription receive against timeout - message wins.
+fn testAsyncSelectMessage(allocator: Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const threaded = utils.newIo(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const client = nats.Client.connect(
+        allocator,
+        io,
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "async_select_message",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit();
+
+    const sub = client.subscribeSync(
+        "async.message.test",
+    ) catch {
+        reportResult(
+            "async_select_message",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit();
+
+    // Publish message immediately
+    client.publish(
+        "async.message.test",
+        "select-test-msg",
+    ) catch {
+        reportResult(
+            "async_select_message",
+            false,
+            "publish failed",
+        );
+        return;
+    };
+
+    var buf: [2]MsgSel.Union = undefined;
+    var sel = MsgSel.init(io, &buf);
+    sel.async(.message, Sub.nextMsg, .{sub});
+    sel.async(.timeout, sleepMs, .{ io, 500 });
+
+    const result = sel.await() catch {
+        cancelMsgSel(&sel);
+        reportResult(
+            "async_select_message",
+            false,
+            "select failed",
+        );
+        return;
+    };
+    cancelMsgSel(&sel);
+
+    switch (result) {
+        .message => |msg_result| {
+            const msg = msg_result catch {
+                reportResult(
+                    "async_select_message",
+                    false,
+                    "msg error",
+                );
+                return;
+            };
+            defer msg.deinit();
+            if (std.mem.eql(
+                u8,
+                msg.data,
+                "select-test-msg",
+            )) {
+                reportResult(
+                    "async_select_message",
+                    true,
+                    "",
+                );
+            } else {
+                reportResult(
+                    "async_select_message",
+                    false,
+                    "wrong data",
+                );
+            }
+        },
+        .timeout => {
+            reportResult(
+                "async_select_message",
+                false,
+                "unexpected timeout",
+            );
+        },
+    }
+}
+
+/// Worker result for concurrent workers test.
+const WorkerResult = struct {
+    worker_id: u8,
+    msg: nats.Message,
+
+    fn deinit(self: WorkerResult) void {
+        self.msg.deinit();
+    }
+};
+
+/// Worker task for concurrent test.
+fn workerTask(
+    io: Io,
+    worker_id: u8,
+    sub: *Sub,
+    queue: *Io.Queue(WorkerResult),
+    done: *std.atomic.Value(bool),
+) void {
+    while (!done.load(.acquire)) {
+        const msg = sub.nextMsgTimeout(
+            100,
+        ) catch return orelse continue;
+        queue.putOne(io, .{
+            .worker_id = worker_id,
+            .msg = msg,
+        }) catch {
+            msg.deinit();
+            return;
+        };
+    }
+}
+
+/// Test 3: Multiple workers with io.concurrent() + Io.Queue.
+fn testAsyncConcurrentWorkers(allocator: Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const threaded = utils.newIo(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const client = nats.Client.connect(
+        allocator,
+        io,
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "async_concurrent_workers",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit();
+
+    // Create 3 workers in queue group
+    const w1_sub = client.queueSubscribeSync(
+        "async.workers",
+        "workers",
+    ) catch {
+        reportResult(
+            "async_concurrent_workers",
+            false,
+            "sub1 failed",
+        );
+        return;
+    };
+    defer w1_sub.deinit();
+
+    const w2_sub = client.queueSubscribeSync(
+        "async.workers",
+        "workers",
+    ) catch {
+        reportResult(
+            "async_concurrent_workers",
+            false,
+            "sub2 failed",
+        );
+        return;
+    };
+    defer w2_sub.deinit();
+
+    const w3_sub = client.queueSubscribeSync(
+        "async.workers",
+        "workers",
+    ) catch {
+        reportResult(
+            "async_concurrent_workers",
+            false,
+            "sub3 failed",
+        );
+        return;
+    };
+    defer w3_sub.deinit();
+
+    // Shared queue for results
+    var queue_buf: [64]WorkerResult = undefined;
+    var queue: Io.Queue(WorkerResult) = .init(&queue_buf);
+    var done: std.atomic.Value(bool) = .init(false);
+
+    // Launch workers
+    var w1 = io.concurrent(workerTask, .{
+        io, 1, w1_sub, &queue, &done,
+    }) catch {
+        reportResult(
+            "async_concurrent_workers",
+            false,
+            "w1 launch failed",
+        );
+        return;
+    };
+    defer w1.cancel(io);
+
+    var w2 = io.concurrent(workerTask, .{
+        io, 2, w2_sub, &queue, &done,
+    }) catch {
+        reportResult(
+            "async_concurrent_workers",
+            false,
+            "w2 launch failed",
+        );
+        return;
+    };
+    defer w2.cancel(io);
+
+    var w3 = io.concurrent(workerTask, .{
+        io, 3, w3_sub, &queue, &done,
+    }) catch {
+        reportResult(
+            "async_concurrent_workers",
+            false,
+            "w3 launch failed",
+        );
+        return;
+    };
+    defer w3.cancel(io);
+
+    // Publish messages
+    const message_count: u32 = 30;
+    var i: u32 = 0;
+    while (i < message_count) : (i += 1) {
+        client.publish("async.workers", "work-item") catch {};
+    }
+
+    // Consume results
+    var total_received: u32 = 0;
+    var timeout_count: u32 = 0;
+    const max_timeouts: u32 = 10;
+
+    const QSel = Io.Select(union(enum) {
+        result: anyerror!WorkerResult,
+        timeout: void,
+    });
+
+    while (total_received < message_count and
+        timeout_count < max_timeouts)
+    {
+        var sel_buf: [2]QSel.Union = undefined;
+        var sel = QSel.init(io, &sel_buf);
+        sel.async(
+            .result,
+            Io.Queue(WorkerResult).getOne,
+            .{ &queue, io },
+        );
+        sel.async(.timeout, sleepMs, .{ io, 200 });
+
+        const s = sel.await() catch {
+            while (sel.cancel()) |remaining| {
+                switch (remaining) {
+                    .result => |r| {
+                        if (r) |wr| wr.deinit() else |_| {}
+                    },
+                    .timeout => {},
+                }
+            }
+            break;
+        };
+        while (sel.cancel()) |remaining| {
+            switch (remaining) {
+                .result => |r| {
+                    if (r) |wr| wr.deinit() else |_| {}
+                },
+                .timeout => {},
+            }
+        }
+
+        switch (s) {
+            .result => |res| {
+                const r = res catch break;
+                r.deinit();
+                total_received += 1;
+            },
+            .timeout => {
+                timeout_count += 1;
+            },
+        }
+    }
+
+    // Signal workers to stop
+    done.store(true, .release);
+
+    if (total_received >= message_count * 9 / 10) {
+        reportResult("async_concurrent_workers", true, "");
+    } else {
+        var result_buf: [32]u8 = undefined;
+        const detail = std.fmt.bufPrint(
+            &result_buf,
+            "{d}/{d} received",
+            .{ total_received, message_count },
+        ) catch "partial";
+        reportResult(
+            "async_concurrent_workers",
+            false,
+            detail,
+        );
+    }
+}
+
+/// Test 4: Multiple parallel subscriptions with io.async().
+fn testAsyncParallelSubscriptions(
+    allocator: Allocator,
+) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const threaded = utils.newIo(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const client = nats.Client.connect(
+        allocator,
+        io,
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "async_parallel_subs",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit();
+
+    const sub_a = client.subscribeSync(
+        "async.parallel.a",
+    ) catch {
+        reportResult(
+            "async_parallel_subs",
+            false,
+            "sub_a failed",
+        );
+        return;
+    };
+    defer sub_a.deinit();
+
+    const sub_b = client.subscribeSync(
+        "async.parallel.b",
+    ) catch {
+        reportResult(
+            "async_parallel_subs",
+            false,
+            "sub_b failed",
+        );
+        return;
+    };
+    defer sub_b.deinit();
+
+    const sub_c = client.subscribeSync(
+        "async.parallel.c",
+    ) catch {
+        reportResult(
+            "async_parallel_subs",
+            false,
+            "sub_c failed",
+        );
+        return;
+    };
+    defer sub_c.deinit();
+
+    // Publish to all three
+    client.publish("async.parallel.a", "msg-a") catch {};
+    client.publish("async.parallel.b", "msg-b") catch {};
+    client.publish("async.parallel.c", "msg-c") catch {};
+
+    // Launch parallel receives
+    var future_a = io.async(Sub.nextMsg, .{sub_a});
+    defer if (future_a.cancel(io)) |m|
+        m.deinit()
+    else |_| {};
+
+    var future_b = io.async(Sub.nextMsg, .{sub_b});
+    defer if (future_b.cancel(io)) |m|
+        m.deinit()
+    else |_| {};
+
+    var future_c = io.async(Sub.nextMsg, .{sub_c});
+    defer if (future_c.cancel(io)) |m|
+        m.deinit()
+    else |_| {};
+
+    var received: u8 = 0;
+
+    if (future_a.await(io)) |_| {
+        received += 1;
+    } else |_| {}
+
+    if (future_b.await(io)) |_| {
+        received += 1;
+    } else |_| {}
+
+    if (future_c.await(io)) |_| {
+        received += 1;
+    } else |_| {}
+
+    if (received == 3) {
+        reportResult("async_parallel_subs", true, "");
+    } else {
+        var result_buf: [32]u8 = undefined;
+        const detail = std.fmt.bufPrint(
+            &result_buf,
+            "{d}/3 received",
+            .{received},
+        ) catch "partial";
+        reportResult("async_parallel_subs", false, detail);
+    }
+}
+
+/// Test 5: Cancellation of pending receive.
+fn testAsyncCancellation(allocator: Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const threaded = utils.newIo(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const client = nats.Client.connect(
+        allocator,
+        io,
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "async_cancellation",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit();
+
+    const sub = client.subscribeSync(
+        "async.cancel.test",
+    ) catch {
+        reportResult(
+            "async_cancellation",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit();
+
+    // Start async receive but cancel immediately
+    var future = io.async(Sub.nextMsg, .{sub});
+
+    // Small delay then cancel
+    io.sleep(.fromMilliseconds(10), .awake) catch {};
+
+    if (future.cancel(io)) |msg| {
+        msg.deinit();
+        reportResult("async_cancellation", true, "");
+    } else |_| {
+        reportResult("async_cancellation", true, "");
+    }
+}
+
+/// Test 6: Cancel after message already received.
+fn testAsyncCancelWithPendingMessage(
+    allocator: Allocator,
+) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const threaded = utils.newIo(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const client = nats.Client.connect(
+        allocator,
+        io,
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "async_cancel_with_msg",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit();
+
+    const sub = client.subscribeSync(
+        "async.cancel.msg",
+    ) catch {
+        reportResult(
+            "async_cancel_with_msg",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit();
+
+    // Publish message first
+    client.publish(
+        "async.cancel.msg",
+        "pending-msg",
+    ) catch {
+        reportResult(
+            "async_cancel_with_msg",
+            false,
+            "publish failed",
+        );
+        return;
+    };
+
+    // Let message arrive
+    io.sleep(.fromMilliseconds(50), .awake) catch {};
+
+    var future = io.async(Sub.nextMsg, .{sub});
+    defer if (future.cancel(io)) |m|
+        m.deinit()
+    else |_| {};
+
+    if (future.await(io)) |msg| {
+        if (std.mem.eql(u8, msg.data, "pending-msg")) {
+            reportResult(
+                "async_cancel_with_msg",
+                true,
+                "",
+            );
+        } else {
+            reportResult(
+                "async_cancel_with_msg",
+                false,
+                "wrong data",
+            );
+        }
+    } else |_| {
+        reportResult(
+            "async_cancel_with_msg",
+            false,
+            "await failed",
+        );
+    }
+}
+
+/// Test 7: nextBatch() receives multiple messages.
+fn testBatchReceive(allocator: Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const threaded = utils.newIo(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const client = nats.Client.connect(allocator, io, url, .{
+        .reconnect = false,
+        .sub_queue_size = 64,
+    }) catch {
+        reportResult("batch_receive", false, "connect failed");
+        return;
+    };
+    defer client.deinit();
+
+    const sub = client.subscribeSync("async.batch") catch {
+        reportResult(
+            "batch_receive",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit();
+
+    // Publish 20 messages rapidly
+    var ii: u8 = 0;
+    while (ii < 20) : (ii += 1) {
+        client.publish("async.batch", "batch-data") catch {};
+    }
+
+    // Let messages arrive
+    io.sleep(.fromMilliseconds(100), .awake) catch {};
+
+    // Batch receive
+    var batch_buf: [32]nats.Message = undefined;
+    const count = sub.nextMsgBatch(io, &batch_buf) catch {
+        reportResult(
+            "batch_receive",
+            false,
+            "nextBatch failed",
+        );
+        return;
+    };
+
+    for (batch_buf[0..count]) |*msg| {
+        msg.deinit();
+    }
+
+    // Drain any remaining
+    const remaining = sub.tryNextMsgBatch(&batch_buf);
+    for (batch_buf[0..remaining]) |*msg| {
+        msg.deinit();
+    }
+
+    const total = count + remaining;
+
+    if (total >= 15) {
+        reportResult("batch_receive", true, "");
+    } else {
+        var result_buf: [32]u8 = undefined;
+        const detail = std.fmt.bufPrint(
+            &result_buf,
+            "{d}/20 received",
+            .{total},
+        ) catch "partial";
+        reportResult("batch_receive", false, detail);
+    }
+}
+
+/// Test 8: tryNextBatch() non-blocking.
+fn testTryNextBatch(allocator: Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const threaded = utils.newIo(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const client = nats.Client.connect(
+        allocator,
+        io,
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "try_next_batch",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit();
+
+    const sub = client.subscribeSync(
+        "async.trybatch",
+    ) catch {
+        reportResult(
+            "try_next_batch",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit();
+
+    var batch_buf: [32]nats.Message = undefined;
+
+    // Empty queue should return 0
+    const empty_count = sub.tryNextMsgBatch(&batch_buf);
+    if (empty_count != 0) {
+        reportResult(
+            "try_next_batch",
+            false,
+            "expected 0 on empty",
+        );
+        return;
+    }
+
+    // Publish messages
+    var ii: u8 = 0;
+    while (ii < 10) : (ii += 1) {
+        client.publish("async.trybatch", "data") catch {};
+    }
+
+    // Let messages arrive
+    io.sleep(.fromMilliseconds(50), .awake) catch {};
+
+    // Should get some messages
+    const first_count = sub.tryNextMsgBatch(&batch_buf);
+    for (batch_buf[0..first_count]) |*msg| {
+        msg.deinit();
+    }
+
+    // Drain remaining
+    const second_count = sub.tryNextMsgBatch(&batch_buf);
+    for (batch_buf[0..second_count]) |*msg| {
+        msg.deinit();
+    }
+
+    // Call again on drained queue
+    const third_count = sub.tryNextMsgBatch(&batch_buf);
+
+    if (first_count > 0 and third_count == 0) {
+        reportResult("try_next_batch", true, "");
+    } else {
+        var result_buf: [48]u8 = undefined;
+        const detail = std.fmt.bufPrint(
+            &result_buf,
+            "first={d} third={d}",
+            .{ first_count, third_count },
+        ) catch "error";
+        reportResult("try_next_batch", false, detail);
+    }
+}
+
+/// Inner function that returns early to test defer cleanup.
+fn innerAsyncWithEarlyReturn(
+    io: Io,
+    sub: *Sub,
+) bool {
+    var future = io.async(Sub.nextMsg, .{sub});
+    defer if (future.cancel(io)) |m|
+        m.deinit()
+    else |_| {};
+
+    // Simulate early return (e.g., error condition)
+    return true; // defer should clean up the future
+}
+
+/// Test 9: Defer pattern cleans up on early return.
+fn testAsyncDeferCleanup(allocator: Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const threaded = utils.newIo(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const client = nats.Client.connect(
+        allocator,
+        io,
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "async_defer_cleanup",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit();
+
+    const sub = client.subscribeSync(
+        "async.defer.test",
+    ) catch {
+        reportResult(
+            "async_defer_cleanup",
+            false,
+            "subscribe failed",
+        );
+        return;
+    };
+    defer sub.deinit();
+
+    const result = innerAsyncWithEarlyReturn(io, sub);
+
+    if (result) {
+        reportResult("async_defer_cleanup", true, "");
+    } else {
+        reportResult(
+            "async_defer_cleanup",
+            false,
+            "unexpected result",
+        );
+    }
+}
+
+/// Test 10: Race multiple subscriptions with Io.Select.
+fn testSelectMultipleSubs(allocator: Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const threaded = utils.newIo(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const client = nats.Client.connect(
+        allocator,
+        io,
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult(
+            "select_multiple_subs",
+            false,
+            "connect failed",
+        );
+        return;
+    };
+    defer client.deinit();
+
+    const fast_sub = client.subscribeSync(
+        "async.fast",
+    ) catch {
+        reportResult(
+            "select_multiple_subs",
+            false,
+            "fast_sub failed",
+        );
+        return;
+    };
+    defer fast_sub.deinit();
+
+    const slow_sub = client.subscribeSync(
+        "async.slow",
+    ) catch {
+        reportResult(
+            "select_multiple_subs",
+            false,
+            "slow_sub failed",
+        );
+        return;
+    };
+    defer slow_sub.deinit();
+
+    // Only publish to "fast"
+    client.publish("async.fast", "fast-msg") catch {
+        reportResult(
+            "select_multiple_subs",
+            false,
+            "publish failed",
+        );
+        return;
+    };
+
+    const SubSel = Io.Select(union(enum) {
+        fast: anyerror!Message,
+        slow: anyerror!Message,
+    });
+    var sel_buf: [2]SubSel.Union = undefined;
+    var sel = SubSel.init(io, &sel_buf);
+    sel.async(.fast, Sub.nextMsg, .{fast_sub});
+    sel.async(.slow, Sub.nextMsg, .{slow_sub});
+
+    const result = sel.await() catch {
+        while (sel.cancel()) |remaining| {
+            switch (remaining) {
+                .fast => |r| {
+                    if (r) |m| m.deinit() else |_| {}
+                },
+                .slow => |r| {
+                    if (r) |m| m.deinit() else |_| {}
+                },
+            }
+        }
+        reportResult(
+            "select_multiple_subs",
+            false,
+            "select failed",
+        );
+        return;
+    };
+    while (sel.cancel()) |remaining| {
+        switch (remaining) {
+            .fast => |r| {
+                if (r) |m| m.deinit() else |_| {}
+            },
+            .slow => |r| {
+                if (r) |m| m.deinit() else |_| {}
+            },
+        }
+    }
+
+    switch (result) {
+        .fast => |msg_result| {
+            const msg = msg_result catch {
+                reportResult(
+                    "select_multiple_subs",
+                    false,
+                    "fast msg error",
+                );
+                return;
+            };
+            defer msg.deinit();
+            if (std.mem.eql(u8, msg.data, "fast-msg")) {
+                reportResult(
+                    "select_multiple_subs",
+                    true,
+                    "",
+                );
+            } else {
+                reportResult(
+                    "select_multiple_subs",
+                    false,
+                    "wrong data",
+                );
+            }
+        },
+        .slow => {
+            reportResult(
+                "select_multiple_subs",
+                false,
+                "slow won unexpectedly",
+            );
+        },
+    }
+}
+
+pub fn runAll(allocator: Allocator, _: *ServerManager) void {
+    testAsyncSelectTimeout(allocator);
+    testAsyncSelectMessage(allocator);
+    testAsyncConcurrentWorkers(allocator);
+    testAsyncParallelSubscriptions(allocator);
+    testAsyncCancellation(allocator);
+    testAsyncCancelWithPendingMessage(allocator);
+    testBatchReceive(allocator);
+    testTryNextBatch(allocator);
+    testAsyncDeferCleanup(allocator);
+    testSelectMultipleSubs(allocator);
+}

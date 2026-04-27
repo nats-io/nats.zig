@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: 0.16.0
+  NATS_SERVER_VERSION: v2.12.7
+  NATS_CLI_VERSION: v0.3.1
+
+jobs:
+  build:
+    name: Build and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Show Zig version
+        run: zig version
+
+      - name: Check formatting
+        run: zig build fmt-check
+
+      - name: Build examples and package
+        run: zig build
+
+      - name: Run unit tests
+        run: zig build test
+
+  integration:
+    name: Integration tests (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: Debug
+            args: ""
+          - mode: ReleaseFast
+            args: -Doptimize=ReleaseFast
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          cache-key: integration-${{ matrix.mode }}
+
+      - name: Install NATS tools
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          nats_server_archive="nats-server-${NATS_SERVER_VERSION}-linux-amd64.tar.gz"
+          nats_server_url="https://github.com/nats-io/nats-server/releases/download/${NATS_SERVER_VERSION}/${nats_server_archive}"
+          nats_cli_version="${NATS_CLI_VERSION#v}"
+          nats_cli_archive="nats-${nats_cli_version}-linux-amd64.zip"
+          nats_cli_url="https://github.com/nats-io/natscli/releases/download/${NATS_CLI_VERSION}/${nats_cli_archive}"
+
+          mkdir -p "$HOME/.local/bin" "$RUNNER_TEMP/nats-server" "$RUNNER_TEMP/nats-cli"
+
+          curl --fail --location --show-error --silent "$nats_server_url" --output "$RUNNER_TEMP/$nats_server_archive"
+          tar -xzf "$RUNNER_TEMP/$nats_server_archive" -C "$RUNNER_TEMP/nats-server" --strip-components=1
+          install -m 0755 "$RUNNER_TEMP/nats-server/nats-server" "$HOME/.local/bin/nats-server"
+
+          curl --fail --location --show-error --silent "$nats_cli_url" --output "$RUNNER_TEMP/$nats_cli_archive"
+          unzip -q "$RUNNER_TEMP/$nats_cli_archive" -d "$RUNNER_TEMP/nats-cli"
+          nats_cli_bin="$(find "$RUNNER_TEMP/nats-cli" -type f -name nats -print -quit)"
+          test -n "$nats_cli_bin"
+          install -m 0755 "$nats_cli_bin" "$HOME/.local/bin/nats"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Show tool versions
+        run: |
+          zig version
+          nats-server --version
+          nats --version
+
+      - name: Run integration tests
+        run: zig build test-integration ${{ matrix.args }}
