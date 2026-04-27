@@ -640,6 +640,8 @@ state: State = .connecting,
 sub_ptrs: [MAX_SUBSCRIPTIONS]?*Sub = [_]?*Sub{null} ** MAX_SUBSCRIPTIONS,
 free_count: u16 = MAX_SUBSCRIPTIONS,
 next_sid: u64 = 1,
+/// Serializes reader-task routing with unsubscribe/deinit so a
+/// loaded subscription pointer cannot be freed while in use.
 read_mutex: Io.Mutex = .init,
 statistics: Statistics = .{},
 
@@ -2207,9 +2209,9 @@ pub fn flush(
     }
     self.write_mutex.unlock(self.io);
 
-    // Step 2: Poll for PONG with timeout (direct loop, no Io.Select)
-    // Using direct polling avoids io.async()+Io.Select which can deadlock
-    // when multiple clients share the same Io.Threaded instance.
+    // Step 2: Poll for PONG with timeout (direct loop, no Io.Select).
+    // Using direct polling avoids layering a second async wait inside
+    // a synchronous flush call on this client's Io.
     const old_pong_ns = self.last_pong_received_ns.load(.acquire);
     const deadline_ns = getNowNs(self.io) +| timeout_ns;
     var iteration: u32 = 0;
@@ -3223,10 +3225,8 @@ pub fn resetErrorNotifications(self: *Client) void {
 
 /// Get subscription by SID.
 /// Uses cached pointer for fast path when single subscription matches.
-// REVIEWED(2025-03): Lockless read is intentional (hot path).
-// sub_ptrs[slot] is nulled BEFORE sidmap.remove() (both under
-// sub_mutex). Worst case: io_task sees null = message dropped
-// (correct for unsubscribed). Sub not freed until after nulling.
+// Caller must hold read_mutex while using the returned pointer if
+// another task could unsubscribe/deinit the subscription concurrently.
 pub inline fn getSubscriptionBySid(self: *Client, sid: u64) ?*Sub {
     assert(sid > 0);
     // Fast path: cached subscription (common in benchmarks)

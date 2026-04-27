@@ -564,6 +564,9 @@ inline fn routeMessageToSub(
     slab: *TieredSlab,
     args: protocol.MsgArgs,
 ) void {
+    client.read_mutex.lockUncancelable(client.io);
+    defer client.read_mutex.unlock(client.io);
+
     dbg.print("routeMsg[fd={d}]: sid={d} subject={s}", .{ client.stream.socket.handle, args.sid, args.subject });
     const sub = client.getSubscriptionBySid(args.sid) orelse {
         dbg.print("routeMsg[fd={d}]: NO SUB FOUND for sid={d}", .{ client.stream.socket.handle, args.sid });
@@ -651,6 +654,9 @@ inline fn routeHMessageToSub(
     slab: *TieredSlab,
     args: protocol.HMsgArgs,
 ) void {
+    client.read_mutex.lockUncancelable(client.io);
+    defer client.read_mutex.unlock(client.io);
+
     const sub = client.getSubscriptionBySid(args.sid) orelse return;
 
     const subj_len = args.subject.len;
