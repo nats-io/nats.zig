@@ -1383,16 +1383,16 @@ fn drainRequester(
 fn testMicroDrainOnStop(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
-    const io = utils.newIo(allocator);
-    defer io.deinit();
+    const service_io = utils.newIo(allocator);
+    defer service_io.deinit();
 
-    const client = nats.Client.connect(allocator, io.io(), url, .{
+    const service_client = nats.Client.connect(allocator, service_io.io(), url, .{
         .reconnect = false,
     }) catch {
         reportResult("testMicroDrainOnStop", false, "connect failed");
         return;
     };
-    defer client.deinit();
+    defer service_client.deinit();
 
     var started = std.atomic.Value(bool).init(false);
     var release = std.atomic.Value(bool).init(false);
@@ -1403,7 +1403,7 @@ fn testMicroDrainOnStop(allocator: std.mem.Allocator) void {
         .finished = &finished,
     };
 
-    const service = nats.micro.addService(client, .{
+    const service = nats.micro.addService(service_client, .{
         .name = "drain-svc",
         .version = "1.0.0",
         .endpoint = .{
@@ -1416,58 +1416,69 @@ fn testMicroDrainOnStop(allocator: std.mem.Allocator) void {
     };
     defer service.deinit();
 
+    const requester_io = utils.newIo(allocator);
+    defer requester_io.deinit();
+
+    const requester = nats.Client.connect(allocator, requester_io.io(), url, .{
+        .reconnect = false,
+    }) catch {
+        reportResult("testMicroDrainOnStop", false, "requester failed");
+        return;
+    };
+    defer requester.deinit();
+
     var resp: ?nats.Client.Message = null;
-    var fut = io.io().async(drainRequester, .{ client, &resp });
+    var fut = requester_io.io().async(drainRequester, .{ requester, &resp });
 
     // Wait until the handler has actually entered.
     var spins: u32 = 0;
     while (!started.load(.acquire) and spins < 200) {
-        io.io().sleep(.fromMilliseconds(5), .awake) catch {};
+        service_io.io().sleep(.fromMilliseconds(5), .awake) catch {};
         spins += 1;
     }
     if (!started.load(.acquire)) {
-        _ = fut.cancel(io.io());
+        _ = fut.cancel(requester_io.io());
         reportResult("testMicroDrainOnStop", false, "handler never entered");
         return;
     }
 
     var stop_state = StopState{};
-    var stop_fut = io.io().concurrent(stopService, .{ service, &stop_state }) catch
-        io.io().async(stopService, .{ service, &stop_state });
+    var stop_fut = service_io.io().concurrent(stopService, .{ service, &stop_state }) catch
+        service_io.io().async(stopService, .{ service, &stop_state });
 
     spins = 0;
     while (!service.stopping.load(.acquire) and spins < 200) {
-        io.io().sleep(.fromMilliseconds(1), .awake) catch {};
+        service_io.io().sleep(.fromMilliseconds(1), .awake) catch {};
         spins += 1;
     }
     if (!service.stopping.load(.acquire)) {
         release.store(true, .release);
-        stop_fut.await(io.io());
-        fut.await(io.io());
+        stop_fut.await(service_io.io());
+        fut.await(requester_io.io());
         defer if (resp) |m| m.deinit();
         reportResult("testMicroDrainOnStop", false, "stop never started");
         return;
     }
 
-    io.io().sleep(.fromMilliseconds(50), .awake) catch {};
+    service_io.io().sleep(.fromMilliseconds(50), .awake) catch {};
     if (stop_state.done.load(.acquire)) {
         release.store(true, .release);
-        stop_fut.await(io.io());
-        fut.await(io.io());
+        stop_fut.await(service_io.io());
+        fut.await(requester_io.io());
         defer if (resp) |m| m.deinit();
         reportResult("testMicroDrainOnStop", false, "stop returned early");
         return;
     }
 
     release.store(true, .release);
-    stop_fut.await(io.io());
+    stop_fut.await(service_io.io());
     if (stop_state.err != null) {
-        _ = fut.cancel(io.io());
+        _ = fut.cancel(requester_io.io());
         reportResult("testMicroDrainOnStop", false, "stop failed");
         return;
     }
 
-    fut.await(io.io());
+    fut.await(requester_io.io());
     defer if (resp) |m| m.deinit();
 
     if (resp != null and finished.load(.acquire) and service.stopped()) {
