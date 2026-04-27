@@ -10,6 +10,7 @@ const nats = utils.nats;
 const reportResult = utils.reportResult;
 const formatUrl = utils.formatUrl;
 const ServerManager = utils.ServerManager;
+const TestServer = utils.server_manager.TestServer;
 
 const js_port = utils.jetstream_port;
 const js_reconnect_port: u16 = 14240;
@@ -31,6 +32,52 @@ fn deleteStreamIfExists(
 ) void {
     var d = js.deleteStream(name) catch return;
     d.deinit();
+}
+
+fn waitForConnected(
+    io: std.Io,
+    client: *nats.Client,
+    timeout_ms: u32,
+) bool {
+    var waited: u32 = 0;
+    while (waited < timeout_ms) : (waited += 25) {
+        if (client.isConnected()) return true;
+        io.sleep(.fromMilliseconds(25), .awake) catch {};
+    }
+    return client.isConnected();
+}
+
+fn startJsReconnectServer(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+) !TestServer {
+    return TestServer.start(allocator, io, .{
+        .port = js_reconnect_port,
+        .jetstream = true,
+    });
+}
+
+fn restartJsReconnectServer(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    server: *TestServer,
+    client: *nats.Client,
+    name: []const u8,
+) bool {
+    server.stop(io);
+    client.forceReconnect() catch {};
+
+    server.* = startJsReconnectServer(allocator, io) catch {
+        reportResult(name, false, "restart server");
+        return false;
+    };
+
+    if (!waitForConnected(io, client, 5000)) {
+        reportResult(name, false, "reconnect timeout");
+        return false;
+    }
+
+    return true;
 }
 
 fn pushHeartbeatErrHandler(err: anyerror) void {
@@ -9528,19 +9575,15 @@ fn testJsPublishAfterReconnect(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
 ) void {
+    _ = manager;
     const name = "js_pub_after_recon";
 
     const io = utils.newIo(allocator);
     defer io.deinit();
 
-    // Start JS server on reconnect port
-    _ = manager.startServer(
+    var server = startJsReconnectServer(
         allocator,
         io.io(),
-        .{
-            .port = js_reconnect_port,
-            .jetstream = true,
-        },
     ) catch {
         reportResult(
             name,
@@ -9549,7 +9592,7 @@ fn testJsPublishAfterReconnect(
         );
         return;
     };
-    const srv_idx = manager.count() - 1;
+    defer server.deinit(io.io());
 
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(
@@ -9608,29 +9651,13 @@ fn testJsPublishAfterReconnect(
         a.deinit();
     }
 
-    // Stop server
-    manager.stopServer(srv_idx, io.io());
-    threadSleepNs(500_000_000);
-
-    // Restart server
-    _ = manager.startServer(
+    if (!restartJsReconnectServer(
         allocator,
         io.io(),
-        .{
-            .port = js_reconnect_port,
-            .jetstream = true,
-        },
-    ) catch {
-        reportResult(
-            name,
-            false,
-            "restart server",
-        );
-        return;
-    };
-
-    // Wait for reconnect
-    threadSleepNs(2_000_000_000);
+        &server,
+        client,
+        name,
+    )) return;
 
     // Recreate stream (data may be lost)
     if (js.createStream(.{
@@ -9684,19 +9711,15 @@ fn testKvAfterReconnect(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
 ) void {
+    _ = manager;
     const name = "kv_after_recon";
 
     const io = utils.newIo(allocator);
     defer io.deinit();
 
-    // Start JS server
-    _ = manager.startServer(
+    var server = startJsReconnectServer(
         allocator,
         io.io(),
-        .{
-            .port = js_reconnect_port,
-            .jetstream = true,
-        },
     ) catch {
         reportResult(
             name,
@@ -9705,7 +9728,7 @@ fn testKvAfterReconnect(
         );
         return;
     };
-    const srv_idx = manager.count() - 1;
+    defer server.deinit(io.io());
 
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(
@@ -9750,27 +9773,13 @@ fn testKvAfterReconnect(
         return;
     };
 
-    // Stop and restart
-    manager.stopServer(srv_idx, io.io());
-    threadSleepNs(500_000_000);
-
-    _ = manager.startServer(
+    if (!restartJsReconnectServer(
         allocator,
         io.io(),
-        .{
-            .port = js_reconnect_port,
-            .jetstream = true,
-        },
-    ) catch {
-        reportResult(
-            name,
-            false,
-            "restart server",
-        );
-        return;
-    };
-
-    threadSleepNs(2_000_000_000);
+        &server,
+        client,
+        name,
+    )) return;
 
     // Recreate bucket (memory lost)
     kv = js.createKeyValue(.{
@@ -9853,18 +9862,15 @@ fn testJsFetchAfterReconnect(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
 ) void {
+    _ = manager;
     const name = "js_fetch_after_recon";
 
     const io = utils.newIo(allocator);
     defer io.deinit();
 
-    _ = manager.startServer(
+    var server = startJsReconnectServer(
         allocator,
         io.io(),
-        .{
-            .port = js_reconnect_port,
-            .jetstream = true,
-        },
     ) catch {
         reportResult(
             name,
@@ -9873,7 +9879,7 @@ fn testJsFetchAfterReconnect(
         );
         return;
     };
-    const srv_idx = manager.count() - 1;
+    defer server.deinit(io.io());
 
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(
@@ -9971,27 +9977,13 @@ fn testJsFetchAfterReconnect(
     }
     r1.deinit();
 
-    // Stop and restart
-    manager.stopServer(srv_idx, io.io());
-    threadSleepNs(500_000_000);
-
-    _ = manager.startServer(
+    if (!restartJsReconnectServer(
         allocator,
         io.io(),
-        .{
-            .port = js_reconnect_port,
-            .jetstream = true,
-        },
-    ) catch {
-        reportResult(
-            name,
-            false,
-            "restart server",
-        );
-        return;
-    };
-
-    threadSleepNs(2_000_000_000);
+        &server,
+        client,
+        name,
+    )) return;
 
     // Recreate stream + consumer (memory lost)
     var s2 = js.createStream(.{
@@ -10090,18 +10082,15 @@ fn testAsyncDuringDisconnect(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
 ) void {
+    _ = manager;
     const name = "js_async_disconnect";
 
     const io = utils.newIo(allocator);
     defer io.deinit();
 
-    _ = manager.startServer(
+    var server = startJsReconnectServer(
         allocator,
         io.io(),
-        .{
-            .port = js_reconnect_port,
-            .jetstream = true,
-        },
     ) catch {
         reportResult(
             name,
@@ -10110,7 +10099,7 @@ fn testAsyncDuringDisconnect(
         );
         return;
     };
-    const srv_idx = manager.count() - 1;
+    defer server.deinit(io.io());
 
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(
@@ -10171,28 +10160,13 @@ fn testAsyncDuringDisconnect(
         f.deinit();
     }
 
-    // Stop server
-    manager.stopServer(srv_idx, io.io());
-    threadSleepNs(500_000_000);
-
-    // Restart server
-    _ = manager.startServer(
+    if (!restartJsReconnectServer(
         allocator,
         io.io(),
-        .{
-            .port = js_reconnect_port,
-            .jetstream = true,
-        },
-    ) catch {
-        reportResult(
-            name,
-            false,
-            "restart server",
-        );
-        return;
-    };
-
-    threadSleepNs(2_000_000_000);
+        &server,
+        client,
+        name,
+    )) return;
 
     // Recreate stream
     if (js.createStream(.{
@@ -10238,18 +10212,15 @@ fn testPushAfterReconnect(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
 ) void {
+    _ = manager;
     const name = "js_push_after_recon";
 
     const io = utils.newIo(allocator);
     defer io.deinit();
 
-    _ = manager.startServer(
+    var server = startJsReconnectServer(
         allocator,
         io.io(),
-        .{
-            .port = js_reconnect_port,
-            .jetstream = true,
-        },
     ) catch {
         reportResult(
             name,
@@ -10258,7 +10229,7 @@ fn testPushAfterReconnect(
         );
         return;
     };
-    const srv_idx = manager.count() - 1;
+    defer server.deinit(io.io());
 
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(
@@ -10394,27 +10365,13 @@ fn testPushAfterReconnect(
         return;
     }
 
-    // Stop and restart
-    manager.stopServer(srv_idx, io.io());
-    threadSleepNs(500_000_000);
-
-    _ = manager.startServer(
+    if (!restartJsReconnectServer(
         allocator,
         io.io(),
-        .{
-            .port = js_reconnect_port,
-            .jetstream = true,
-        },
-    ) catch {
-        reportResult(
-            name,
-            false,
-            "restart server",
-        );
-        return;
-    };
-
-    threadSleepNs(2_000_000_000);
+        &server,
+        client,
+        name,
+    )) return;
 
     // recreate and push again
     if (js.createStream(.{
