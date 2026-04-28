@@ -39,12 +39,12 @@ Zig ports in [doc/nats-by-example](doc/nats-by-example/README.md).
 - [Request/Reply](#requestreply)
 - [Headers](#headers)
 - [JetStream](#jetstream)
+- [Micro Services](#micro-services)
 - [Async Patterns with std.Io](#async-patterns-with-stdio)
 - [Connections](#connections)
 - [Authentication](#authentication)
 - [Error Handling](#error-handling)
 - [Server Compatibility](#server-compatibility)
-- [API Quick Reference](#api-quick-reference)
 - [Building](#building)
 - [Status](#status)
 
@@ -182,9 +182,8 @@ if (try sub.nextMsgTimeout(5000)) |msg| {
 }
 ```
 
-See [Examples](#examples) and the full [API Reference](#api-quick-reference)
-below for more patterns including request/reply, queue groups, headers,
-and async I/O.
+See [Examples](#examples) below for more patterns including
+request/reply, queue groups, headers, and async I/O.
 
 ## Examples
 
@@ -1021,6 +1020,77 @@ Object store
 
 ---
 
+## Micro Services
+
+The `nats.micro` module implements the NATS service API for
+discoverable request/reply services. Services automatically register
+monitoring endpoints under `$SRV.PING`, `$SRV.INFO`, and `$SRV.STATS`
+including name- and id-specific variants.
+
+```zig
+const std = @import("std");
+const nats = @import("nats");
+
+const Echo = struct {
+    pub fn onRequest(_: *@This(), req: *nats.micro.Request) void {
+        req.respond(req.data()) catch {};
+    }
+};
+
+pub fn main(init: std.process.Init) !void {
+    const client = try nats.Client.connect(
+        init.gpa,
+        init.io,
+        "nats://localhost:4222",
+        .{},
+    );
+    defer client.deinit();
+
+    var echo = Echo{};
+    const service = try nats.micro.addService(client, .{
+        .name = "echo",
+        .version = "1.0.0",
+        .description = "Echo service",
+        .endpoint = .{
+            .subject = "echo",
+            .handler = nats.micro.Handler.init(Echo, &echo),
+        },
+    });
+    defer service.deinit();
+
+    while (true) {
+        init.io.sleep(.fromSeconds(1), .awake) catch {};
+    }
+}
+```
+
+Handlers can be comptime vtable handlers with `Handler.init(T, &value)`
+or plain functions with `Handler.fromFn(fn)`. A request handler can
+read `req.subject()`, `req.data()`, `req.headers()`, and reply with
+`req.respond()`, `req.respondJson()`, or `req.respondError()`.
+
+Services support endpoint groups, queue groups, metadata, stats reset,
+and graceful stop/drain:
+
+```zig
+var api = try service.addGroup("api");
+_ = try api.addEndpoint(.{
+    .subject = "v1.echo",
+    .handler = nats.micro.Handler.init(Echo, &echo),
+});
+
+try service.stop(null);
+try service.waitStopped();
+```
+
+Run the complete example with:
+
+```bash
+zig build run-micro-echo
+```
+
+---
+
 ## Async Patterns with std.Io
 
 ### Cancellation Pattern
@@ -1706,146 +1776,6 @@ if (client.connectedServerVersion()) |version| {
     std.debug.print("Connected to NATS {s}\n", .{version});
 }
 ```
-
----
-
-## API Quick Reference
-
-| Want to... | Method | Returns |
-|------------|--------|---------|
-| Publish message | `client.publish(subject, data)` | `!void` |
-| Publish with reply-to | `client.publishRequest(subject, reply_to, data)` | `!void` |
-| Flush buffer to socket | `client.flushBuffer()` | `!void` |
-| Subscribe | `client.subscribeSync(subject)` | `!*Sub` |
-| Queue subscribe (sync) | `client.queueSubscribeSync(subject, group)` | `!*Sub` |
-| Callback subscribe | `client.subscribe(subject, handler)` | `!*Sub` |
-| Callback queue sub | `client.queueSubscribe(subject, group, handler)` | `!*Sub` |
-| Callback fn sub | `client.subscribeFn(subject, fn)` | `!*Sub` |
-| Callback fn queue sub | `client.queueSubscribeFn(subject, group, fn)` | `!*Sub` |
-| Unsubscribe | `sub.unsubscribe()` | `!void` |
-| Free subscription | `sub.deinit()` | `void` |
-| Request/reply | `client.request(subject, data, timeout_ms)` | `!?Message` |
-| Publish with headers | `client.publishWithHeaders(subject, hdrs, data)` | `!void` |
-| Publish+reply+headers | `client.publishRequestWithHeaders(subject, reply, hdrs, data)` | `!void` |
-| Request with headers | `client.requestWithHeaders(subject, hdrs, data, timeout_ms)` | `!?Message` |
-| Receive (blocking) | `sub.nextMsg()` | `!Message` |
-| Receive (non-blocking) | `sub.tryNextMsg()` | `?Message` |
-| Receive (with timeout) | `sub.nextMsgTimeout(timeout_ms)` | `!?Message` |
-| Batch receive | `sub.nextMsgBatch(io, buf)` | `!usize` |
-| Check drops | `sub.dropped()` | `u64` |
-| Auto-unsubscribe | `sub.autoUnsubscribe(max_msgs)` | `!void` |
-| Check pending | `sub.pending()` | `usize` |
-| Check pending bytes | `sub.pendingBytes()` | `u64` |
-| Check delivered | `sub.delivered()` | `u64` |
-| Check valid | `sub.isValid()` | `bool` |
-| Check sub draining | `sub.isDraining()` | `bool` |
-| Get subscription ID | `sub.getSid()` | `u64` |
-| Get subject | `sub.getSubject()` | `[]const u8` |
-| Get queue group | `sub.queueGroup()` | `?[]const u8` |
-| Set pending limits | `sub.setPendingLimits(msg_limit)` | `void` |
-| Get pending limits | `sub.pendingLimits()` | `usize` |
-| Subscription stats | `sub.subStats()` | `SubStats` |
-| Respond to message | `msg.respond(client, data)` | `!void` |
-| Message size | `msg.size()` | `usize` |
-| No-responders check | `msg.isNoResponders()` | `bool` |
-| Status code | `msg.status()` | `?u16` |
-| Create inbox | `client.newInbox()` | `![]u8` |
-| Connection status | `client.status()` | `State` |
-| Connection stats | `client.stats()` | `Statistics` |
-| Server RTT | `client.rtt()` | `!u64` |
-| Server URL | `client.connectedUrl()` | `?[]const u8` |
-| Server ID | `client.connectedServerId()` | `?[]const u8` |
-| Flush confirmed | `client.flush(timeout_ns)` | `!void` |
-| Force reconnect | `client.forceReconnect()` | `!void` |
-| Generate NKey keypair | `auth.KeyPair.generate(io, key_type)` | `KeyPair` |
-| Encode NKey seed | `kp.encodeSeed(&buf)` | `[]const u8` |
-| Parse NKey seed | `auth.KeyPair.fromSeed(seed)` | `!KeyPair` |
-| Get public key | `kp.publicKey(&buf)` | `[]const u8` |
-| Wipe keypair | `kp.wipe()` | `void` |
-| Encode account JWT | `auth.jwt.encodeAccountClaims(buf, sub, name, signer, iat, opts)` | `![]const u8` |
-| Encode user JWT | `auth.jwt.encodeUserClaims(buf, sub, name, signer, iat, opts)` | `![]const u8` |
-| Format credentials | `auth.creds.format(buf, jwt, seed)` | `[]const u8` |
-| Parse credentials | `auth.creds.parse(content)` | `!Credentials` |
-| **JetStream** | | |
-| Create JS context | `jetstream.JetStream.init(client, opts)` | `JetStream` |
-| Create stream | `js.createStream(config)` | `!Response(StreamInfo)` |
-| Update stream | `js.updateStream(config)` | `!Response(StreamInfo)` |
-| Create or update stream | `js.createOrUpdateStream(config)` | `!Response(StreamInfo)` |
-| Stream info | `js.streamInfo(name)` | `!Response(StreamInfo)` |
-| Purge stream | `js.purgeStream(name)` | `!Response(PurgeResponse)` |
-| Purge subject | `js.purgeStreamSubject(name, subject)` | `!Response(PurgeResponse)` |
-| Delete stream | `js.deleteStream(name)` | `!Response(DeleteResponse)` |
-| Get message | `js.getMsg(stream, seq)` | `!Response(MsgGetResponse)` |
-| Get last msg for subject | `js.getLastMsgForSubject(stream, subject)` | `!Response(MsgGetResponse)` |
-| Delete message | `js.deleteMsg(stream, seq)` | `!Response(DeleteResponse)` |
-| Secure delete message | `js.secureDeleteMsg(stream, seq)` | `!Response(DeleteResponse)` |
-| Stream names | `js.streamNames()` | `!Response(StreamNamesResponse)` |
-| All stream names | `js.allStreamNames(allocator)` | `![][]const u8` |
-| Stream list | `js.streams()` | `!Response(StreamListResponse)` |
-| Stream by subject | `js.streamNameBySubject(subject)` | `!Response(StreamNamesResponse)` |
-| Account info | `js.accountInfo()` | `!Response(AccountInfo)` |
-| Create consumer | `js.createConsumer(stream, config)` | `!Response(ConsumerInfo)` |
-| Update consumer | `js.updateConsumer(stream, config)` | `!Response(ConsumerInfo)` |
-| Create or update consumer | `js.createOrUpdateConsumer(stream, config)` | `!Response(ConsumerInfo)` |
-| Consumer info | `js.consumerInfo(stream, consumer)` | `!Response(ConsumerInfo)` |
-| Delete consumer | `js.deleteConsumer(stream, consumer)` | `!Response(DeleteResponse)` |
-| Consumer names | `js.consumerNames(stream)` | `!Response(ConsumerNamesResponse)` |
-| Pause consumer | `js.pauseConsumer(stream, consumer, until)` | `!Response(ConsumerPauseResponse)` |
-| Resume consumer | `js.resumeConsumer(stream, consumer)` | `!Response(ConsumerPauseResponse)` |
-| Create push consumer | `js.createPushConsumer(stream, config)` | `!Response(ConsumerInfo)` |
-| JS publish | `js.publish(subject, payload)` | `!Response(PubAck)` |
-| JS publish + opts | `js.publishWithOpts(subject, payload, opts)` | `!Response(PubAck)` |
-| Last API error | `js.lastApiError()` | `?ApiError` |
-| **Async Publish** | | |
-| Init async publisher | `AsyncPublisher.init(&js, opts)` | `!AsyncPublisher` |
-| Async publish | `ap.publish(subject, payload)` | `!*PubAckFuture` |
-| Async publish + opts | `ap.publishWithOpts(subject, payload, opts)` | `!*PubAckFuture` |
-| Wait for ack | `future.wait(timeout_ms)` | `!PubAck` |
-| Pending count | `ap.publishAsyncPending()` | `u32` |
-| Wait all complete | `ap.waitComplete(timeout_ms)` | `!void` |
-| Cleanup publisher | `ap.cleanup()` | `void` |
-| **Pull Consumers** | | |
-| Fetch messages | `pull.fetch(opts)` | `!FetchResult` |
-| Fetch no wait | `pull.fetchNoWait(max)` | `!FetchResult` |
-| Fetch bytes | `pull.fetchBytes(max_bytes, opts)` | `!FetchResult` |
-| Next (single msg) | `pull.next(timeout_ms)` | `!?JsMsg` |
-| Messages iterator | `pull.messages(opts)` | `!MessagesContext` |
-| Consume callback | `pull.consume(handler, opts)` | `!ConsumeContext` |
-| **Push Consumers** | | |
-| Push message handler | `jetstream.JsMsgHandler.init(T, &handler)` | `JsMsgHandler` |
-| Push consume | `push.consume(handler, opts)` | `!PushConsumeContext` |
-| Push callback msg | `*JsMsg` | borrowed, no `deinit()` |
-| **Message Ack** | | |
-| Message metadata | `msg.metadata()` | `?MsgMetadata` |
-| Ack message | `msg.ack()` | `!void` |
-| Nak message | `msg.nak()` | `!void` |
-| Nak with delay | `msg.nakWithDelay(delay_ns)` | `!void` |
-| In-progress | `msg.inProgress()` | `!void` |
-| Terminate | `msg.term()` | `!void` |
-| Terminate + reason | `msg.termWithReason(reason)` | `!void` |
-| **Key-Value Store** | | |
-| Create KV bucket | `js.createKeyValue(config)` | `!KeyValue` |
-| Update KV bucket | `js.updateKeyValue(config)` | `!KeyValue` |
-| Create or update KV | `js.createOrUpdateKeyValue(config)` | `!KeyValue` |
-| Bind to bucket | `js.keyValue(bucket)` | `!KeyValue` |
-| Delete bucket | `js.deleteKeyValue(bucket)` | `!Response(DeleteResponse)` |
-| List bucket names | `js.keyValueStoreNames(allocator)` | `![][]const u8` |
-| Get value | `kv.get(key)` | `!?KeyValueEntry` |
-| Get revision | `kv.getRevision(key, rev)` | `!?KeyValueEntry` |
-| Put value | `kv.put(key, value)` | `!u64` (revision) |
-| Create (if new) | `kv.create(key, value)` | `!u64` (revision) |
-| Update (CAS) | `kv.update(key, value, rev)` | `!u64` (revision) |
-| Delete key | `kv.delete(key)` | `!u64` |
-| Purge key | `kv.purge(key)` | `!u64` |
-| List keys | `kv.keys(allocator)` | `![][]const u8` |
-| List keys (streaming) | `kv.listKeys()` | `!KeyLister` |
-| Key history | `kv.history(allocator, key)` | `![]KeyValueEntry` |
-| Watch pattern | `kv.watch(pattern)` | `!KvWatcher` |
-| Watch with options | `kv.watchWithOpts(pattern, opts)` | `!KvWatcher` |
-| Watch all | `kv.watchAll()` | `!KvWatcher` |
-| Watch filtered | `kv.watchFiltered(patterns, opts)` | `!KvWatcher` |
-| Purge delete markers | `kv.purgeDeletes(opts)` | `!u64` |
-| Bucket status | `kv.status()` | `!Response(StreamInfo)` |
 
 ---
 
