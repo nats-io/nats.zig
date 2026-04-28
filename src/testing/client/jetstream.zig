@@ -90,6 +90,30 @@ fn restartJsReconnectServer(
     return true;
 }
 
+fn startSharedJsServer(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+) !TestServer {
+    return TestServer.start(allocator, io, .{
+        .port = js_port,
+        .jetstream = true,
+    });
+}
+
+fn restartSharedJsServer(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    server: *TestServer,
+    name: []const u8,
+) bool {
+    server.stop(io);
+    server.* = startSharedJsServer(allocator, io) catch {
+        reportResult(name, false, "restart JS server");
+        return false;
+    };
+    return true;
+}
+
 fn pushHeartbeatErrHandler(err: anyerror) void {
     if (err == error.NoHeartbeat) {
         push_heartbeat_err_seen.store(true, .release);
@@ -10218,6 +10242,8 @@ pub fn runAll(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
 ) void {
+    _ = manager;
+
     std.debug.print(
         "\n--- JetStream Tests ---\n",
         .{},
@@ -10226,17 +10252,14 @@ pub fn runAll(
     const io = utils.newIo(allocator);
     defer io.deinit();
 
-    _ = manager.startServer(
-        allocator,
-        io.io(),
-        .{ .port = js_port, .jetstream = true },
-    ) catch |err| {
+    var js_server = startSharedJsServer(allocator, io.io()) catch |err| {
         std.debug.print(
             "Failed to start JS server: {}\n",
             .{err},
         );
         return;
     };
+    defer js_server.deinit(io.io());
 
     testStreamCreateAndInfo(allocator);
     testPublishAndAck(allocator);
@@ -10269,14 +10292,71 @@ pub fn runAll(
     testConsumerNotFound(allocator);
     testStreamBySubject(allocator);
     // Key-Value Store
+    // These verify independent bucket semantics. Keep them isolated from
+    // earlier stream/consumer churn and from each other's bucket cleanup.
+    if (!restartSharedJsServer(
+        allocator,
+        io.io(),
+        &js_server,
+        "kv_put_get",
+    )) return;
     testKvPutGet(allocator);
+    if (!restartSharedJsServer(
+        allocator,
+        io.io(),
+        &js_server,
+        "kv_create",
+    )) return;
     testKvCreate(allocator);
+    if (!restartSharedJsServer(
+        allocator,
+        io.io(),
+        &js_server,
+        "kv_update",
+    )) return;
     testKvUpdate(allocator);
+    if (!restartSharedJsServer(
+        allocator,
+        io.io(),
+        &js_server,
+        "kv_delete",
+    )) return;
     testKvDelete(allocator);
+    if (!restartSharedJsServer(
+        allocator,
+        io.io(),
+        &js_server,
+        "kv_keys",
+    )) return;
     testKvKeys(allocator);
+    if (!restartSharedJsServer(
+        allocator,
+        io.io(),
+        &js_server,
+        "kv_history",
+    )) return;
     testKvHistory(allocator);
+    if (!restartSharedJsServer(
+        allocator,
+        io.io(),
+        &js_server,
+        "kv_watch",
+    )) return;
     testKvWatch(allocator);
+    if (!restartSharedJsServer(
+        allocator,
+        io.io(),
+        &js_server,
+        "kv_lifecycle",
+    )) return;
     testKvBucketLifecycle(allocator);
+    // Continue the remaining JetStream tests from clean server state.
+    if (!restartSharedJsServer(
+        allocator,
+        io.io(),
+        &js_server,
+        "js_filtered_consumer",
+    )) return;
     // Behavioral correctness
     testFilteredConsumer(allocator);
     testPurgeSubject(allocator);
