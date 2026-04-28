@@ -7,7 +7,7 @@
 //! next() after the initial batch signals the transition
 //! to live mode.
 //!
-//! Run with: zig-out/bin/example-kv-watch
+//! Run with: zig build run-kv-watch
 //!
 //! Prerequisites: nats-server -js
 

@@ -10,7 +10,7 @@
 //! - Push: server controls pace, good for real-time
 //!   fan-out, simpler for "firehose" scenarios.
 //!
-//! Run with: zig-out/bin/example-jetstream-push
+//! Run with: zig build run-jetstream-push
 //!
 //! Prerequisites: nats-server -js
 

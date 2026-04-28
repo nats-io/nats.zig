@@ -1410,6 +1410,7 @@ std.debug.print("Reconnects: {d}\n", .{stats.reconnects});
 | `bytes_in` | `u64` | Total bytes received |
 | `bytes_out` | `u64` | Total bytes sent |
 | `reconnects` | `u32` | Number of reconnections |
+| `connects` | `u32` | Total successful connections |
 
 ### Connection Control
 

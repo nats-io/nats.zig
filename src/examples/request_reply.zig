@@ -1,7 +1,7 @@
 //! Request/Reply Pattern
 //!
 //! Demonstrates RPC-style request/reply communication.
-//! Run with: zig build example-request-reply
+//! Run with: zig build run-request-reply
 //!
 //! Prerequisites: nats-server running on localhost:4222
 

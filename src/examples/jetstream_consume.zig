@@ -7,7 +7,7 @@
 //! recommended pattern for most workloads -- the client
 //! controls the pace.
 //!
-//! Run with: zig-out/bin/example-jetstream-consume
+//! Run with: zig build run-jetstream-consume
 //!
 //! Prerequisites: nats-server -js
 

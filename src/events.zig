@@ -21,7 +21,7 @@
 //!
 //! var counter: u32 = 0;
 //! var handler = MyHandler{ .counter = &counter };
-//! const client = try nats.connect(allocator, io, url, .{
+//! const client = try nats.Client.connect(allocator, io, url, .{
 //!     .event_handler = nats.EventHandler.init(MyHandler, &handler),
 //! });
 //! ```

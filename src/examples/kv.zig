@@ -5,7 +5,7 @@
 //! payloads. Supports history, optimistic concurrency
 //! (compare-and-swap via revision numbers), and TTL.
 //!
-//! Run with: zig-out/bin/example-kv
+//! Run with: zig build run-kv
 //!
 //! Prerequisites: nats-server -js
 

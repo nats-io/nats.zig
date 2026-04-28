@@ -7,7 +7,7 @@
 //! Use this when throughput matters more than per-message
 //! confirmation.
 //!
-//! Run with: zig-out/bin/example-jetstream-async-publish
+//! Run with: zig build run-jetstream-async-publish
 //!
 //! Prerequisites: nats-server -js
 

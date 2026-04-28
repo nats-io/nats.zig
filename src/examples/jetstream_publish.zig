@@ -5,7 +5,7 @@
 //! acknowledgment, demonstrates deduplication via msg-id,
 //! and queries stream info.
 //!
-//! Run with: zig-out/bin/example-jetstream-publish
+//! Run with: zig build run-jetstream-publish
 //!
 //! Prerequisites: nats-server -js
 

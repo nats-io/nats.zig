@@ -7,9 +7,9 @@
 //! NOTE: Do NOT use Io.Select to race multiple subscriptions -
 //! cancelling a subscription task discards any message it received.
 //! Use polling or io.concurrent() + Io.Queue instead (see
-//! multi_sub.zig, multi_sub_async.zig).
+//! polling_loop.zig and queue_groups.zig).
 //!
-//! Run with: zig build example-select
+//! Run with: zig build run-select
 //!
 //! Prerequisites: nats-server running on localhost:4222
 
