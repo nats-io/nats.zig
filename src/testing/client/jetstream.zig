@@ -15,6 +15,15 @@ const TestServer = utils.server_manager.TestServer;
 
 const js_port = utils.jetstream_port;
 const js_reconnect_port: u16 = 14240;
+const test_js_timeout_ms: u32 = 15_000;
+
+fn initTestJetStream(
+    client: *nats.Client,
+) nats.jetstream.JetStream {
+    return nats.jetstream.JetStream.init(client, .{
+        .timeout_ms = test_js_timeout_ms,
+    });
+}
 
 fn threadSleepNs(ns: u64) void {
     var ts: std.posix.timespec = .{
@@ -111,10 +120,7 @@ pub fn testStreamCreateAndInfo(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create stream
     var resp = js.createStream(.{
@@ -228,10 +234,7 @@ pub fn testPublishAndAck(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create stream
     var stream = js.createStream(.{
@@ -352,10 +355,7 @@ pub fn testConsumerCRUD(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create stream
     var stream = js.createStream(.{
@@ -482,10 +482,7 @@ pub fn testApiError(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Try to get info for non-existent stream
     var info = js.streamInfo("NONEXISTENT");
@@ -556,10 +553,7 @@ pub fn testStreamNames(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create 3 streams
     var s1 = js.createStream(.{
@@ -683,10 +677,7 @@ pub fn testStreamList(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s1 = js.createStream(.{
         .name = "LIST_A",
@@ -782,10 +773,7 @@ pub fn testConsumerNames(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "CONS_NAMES",
@@ -898,10 +886,7 @@ pub fn testConsumerList(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "CONS_LIST",
@@ -1016,10 +1001,7 @@ pub fn testAccountInfo(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var resp = js.accountInfo() catch {
         reportResult(
@@ -1067,10 +1049,7 @@ pub fn testMetadata(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create stream + consumer
     var stream = js.createStream(.{
@@ -1214,10 +1193,7 @@ pub fn testFetchNoWait(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_NOWAIT",
@@ -1314,10 +1290,7 @@ pub fn testMessages(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_MSGS",
@@ -1441,10 +1414,7 @@ pub fn testConsume(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_CONSUME",
@@ -1584,10 +1554,7 @@ pub fn testOrderedConsumer(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_ORDERED",
@@ -1709,10 +1676,7 @@ pub fn testAckPreventsRedeliver(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_ACK",
@@ -1814,10 +1778,7 @@ pub fn testNakCausesRedeliver(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_NAK",
@@ -1943,10 +1904,7 @@ pub fn testTermStopsRedeliver(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_TERM",
@@ -2053,10 +2011,7 @@ pub fn testBatchFetch(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_BATCH",
@@ -2208,10 +2163,7 @@ pub fn testPublishDedup(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_DEDUP",
@@ -2323,10 +2275,7 @@ pub fn testPublishExpectedSeq(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_EXPSEQ",
@@ -2433,10 +2382,7 @@ pub fn testPurgeStream(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_PURGE",
@@ -2559,10 +2505,7 @@ pub fn testStreamUpdate(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_UPDATE",
@@ -2632,10 +2575,7 @@ pub fn testInProgress(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_WPI",
@@ -2745,10 +2685,7 @@ pub fn testConsumerNotFound(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_CNF",
@@ -2838,10 +2775,7 @@ pub fn testStreamBySubject(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_BYSUB",
@@ -2926,10 +2860,7 @@ pub fn testKvPutGet(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "TEST_KV",
@@ -3035,10 +2966,7 @@ pub fn testKvCreate(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "TEST_KV_CREATE",
@@ -3102,10 +3030,7 @@ pub fn testKvUpdate(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "TEST_KV_UPDATE",
@@ -3191,10 +3116,7 @@ pub fn testKvDelete(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "TEST_KV_DEL",
@@ -3275,10 +3197,7 @@ pub fn testKvKeys(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "TEST_KV_KEYS",
@@ -3354,10 +3273,7 @@ pub fn testKvHistory(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "TEST_KV_HIST",
@@ -3455,10 +3371,7 @@ pub fn testKvWatch(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "TEST_KV_WATCH",
@@ -3548,10 +3461,7 @@ pub fn testKvBucketLifecycle(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create
     var kv = js.createKeyValue(.{
@@ -3664,10 +3574,7 @@ pub fn testFilteredConsumer(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_FILTER",
@@ -3815,10 +3722,7 @@ pub fn testPurgeSubject(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_PURGE_S",
@@ -3951,10 +3855,7 @@ pub fn testPaginatedStreamNames(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create 3 streams
     var i: u32 = 0;
@@ -4052,10 +3953,7 @@ pub fn testGetMsg(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_GETMSG",
@@ -4188,10 +4086,7 @@ pub fn testGetLastMsgForSubject(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_GETLAST",
@@ -4355,10 +4250,7 @@ pub fn testDeleteMsg(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_DELMSG",
@@ -4478,10 +4370,7 @@ pub fn testSecureDeleteMsg(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_SECDEL",
@@ -4601,10 +4490,7 @@ pub fn testCreateOrUpdateStream(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create via createOrUpdate
     var r1 = js.createOrUpdateStream(.{
@@ -4722,10 +4608,7 @@ pub fn testCreateOrUpdateConsumer(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_UCONS",
@@ -4861,10 +4744,7 @@ pub fn testPauseResumeConsumer(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_PAUSE",
@@ -5020,10 +4900,7 @@ pub fn testPushConsumerBasic(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Clean up from prior runs
     if (js.deleteStream("TEST_PUSH")) |r| {
@@ -5184,10 +5061,7 @@ pub fn testPushConsumerBorrowedAck(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_PUSH_ACK",
@@ -5351,10 +5225,7 @@ pub fn testPushConsumerHeartbeatErrHandler(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_PUSH_HB",
@@ -5465,10 +5336,7 @@ pub fn testPublishWithTTL(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create stream with TTL support
     var stream = js.createStream(.{
@@ -5570,10 +5438,7 @@ pub fn testPublishMsg(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_PUBLISH_MSG",
@@ -5787,10 +5652,7 @@ pub fn testPublishMsgNoHeaders(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_PUBLISH_MSG_BARE",
@@ -5883,10 +5745,7 @@ pub fn testPublishWithOptsEmpty(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_PUBLISH_OPTS_EMPTY",
@@ -5978,10 +5837,7 @@ pub fn testKvUpdateBucket(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     _ = js.createKeyValue(.{
         .bucket = "UPD_BUCKET",
@@ -6093,10 +5949,7 @@ pub fn testKvCreateOrUpdateBucket(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create via createOrUpdate
     _ = js.createOrUpdateKeyValue(.{
@@ -6213,10 +6066,7 @@ pub fn testKvPurgeDeletes(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "PURGE_DEL",
@@ -6434,10 +6284,7 @@ pub fn testKvStoreNames(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create 3 KV buckets
     _ = js.createKeyValue(.{
@@ -6586,10 +6433,7 @@ pub fn testKvWatchIgnoreDeletes(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "WATCH_IGN",
@@ -6713,10 +6557,7 @@ pub fn testKvWatchUpdatesOnly(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "WATCH_UPD",
@@ -6846,10 +6687,7 @@ pub fn testKvListKeys(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "LIST_KEYS",
@@ -6985,10 +6823,7 @@ pub fn testDoubleAck(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_DACK",
@@ -7097,10 +6932,7 @@ pub fn testUpdatePushConsumer(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_UPDPUSH",
@@ -7213,10 +7045,7 @@ pub fn testGetPushConsumer(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_GETPUSH",
@@ -7303,10 +7132,7 @@ pub fn testKvPutString(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "PUTSTR",
@@ -7392,10 +7218,7 @@ pub fn testKvDeleteLastRev(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "DEL_REV",
@@ -7480,10 +7303,7 @@ pub fn testKvPurgeLastRev(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "PURGE_REV",
@@ -7570,10 +7390,7 @@ pub fn testKvListKeysFiltered(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "FILT_KEYS",
@@ -7667,10 +7484,7 @@ pub fn testKvHistoryWithOpts(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "HIST_OPTS",
@@ -7777,10 +7591,7 @@ pub fn testConnOptions(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Test conn() accessor
     const c = js.conn();
@@ -7841,10 +7652,7 @@ pub fn testKvCreateWithTTL(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create stream with TTL support
     var stream = js.createStream(.{
@@ -7948,10 +7756,7 @@ pub fn testPublishAsync(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     deleteStreamIfExists(&js, stream_name);
 
@@ -8095,10 +7900,7 @@ pub fn testPublishAsyncFutureWait(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var stream = js.createStream(.{
         .name = "TEST_ASYNC_WAIT",
@@ -8232,10 +8034,7 @@ pub fn testPublishAsyncExpectedSeqParity(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "TEST_ASYNC_EXPSEQ",
@@ -8345,10 +8144,7 @@ pub fn testKvEmptyValue(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "EMPTY_VAL",
@@ -8429,10 +8225,7 @@ pub fn testKvKeySpecialChars(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "SPECIAL_KEYS",
@@ -8579,10 +8372,7 @@ pub fn testKvCreateExisting(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "CAS_CREATE",
@@ -8682,10 +8472,7 @@ pub fn testKvUpdateWrongRev(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "CAS_UPDATE",
@@ -8817,10 +8604,7 @@ pub fn testStreamMaxMsgs(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "MAX_MSGS",
@@ -8933,10 +8717,7 @@ pub fn testConsumerMaxDeliver(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "MAX_DEL",
@@ -9060,10 +8841,7 @@ pub fn testFetchTimeout(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s = js.createStream(.{
         .name = "FETCH_TO",
@@ -9157,10 +8935,7 @@ pub fn testAsyncPublishDedup(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     deleteStreamIfExists(&js, "ASYNC_DEDUP");
 
@@ -9269,10 +9044,7 @@ pub fn testAsyncPublishNoStream(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var ap = nats.jetstream.AsyncPublisher.init(
         &js,
@@ -9333,10 +9105,7 @@ pub fn testKvManyKeys(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "MANY_KEYS",
@@ -9454,10 +9223,7 @@ pub fn testAsyncPublishBurst(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     deleteStreamIfExists(&js, "BURST");
 
@@ -9597,10 +9363,7 @@ fn testJsPublishAfterReconnect(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     // Create stream with file storage
     var s1 = js.createStream(.{
@@ -9733,10 +9496,7 @@ fn testKvAfterReconnect(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "RECON_KV",
@@ -9884,10 +9644,7 @@ fn testJsFetchAfterReconnect(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s1 = js.createStream(.{
         .name = "RECON_FETCH",
@@ -10104,10 +9861,7 @@ fn testAsyncDuringDisconnect(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s1 = js.createStream(.{
         .name = "ASYNC_DISC",
@@ -10234,10 +9988,7 @@ fn testPushAfterReconnect(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var s1 = js.createStream(.{
         .name = "PUSH_RECON",
@@ -10655,10 +10406,7 @@ pub fn testCrossVerifyKvPut(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.createKeyValue(.{
         .bucket = "CROSS_PUT",
@@ -10767,10 +10515,7 @@ pub fn testCrossVerifyKvGet(
     };
     defer client.deinit();
 
-    var js = nats.jetstream.JetStream.init(
-        client,
-        .{},
-    );
+    var js = initTestJetStream(client);
 
     var kv = js.keyValue("CROSS_GET") catch {
         reportResult(
