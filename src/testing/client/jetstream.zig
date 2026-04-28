@@ -2962,11 +2962,6 @@ pub fn testKvPutGet(
         return;
     }
 
-    var d = js.deleteKeyValue("TEST_KV") catch {
-        reportResult("kv_put_get", true, "");
-        return;
-    };
-    d.deinit();
     reportResult("kv_put_get", true, "");
 }
 
@@ -3009,13 +3004,6 @@ pub fn testKvCreate(
     // Create fails on existing key
     _ = kv.create("newkey", "value2") catch |err| {
         if (err == error.ApiError) {
-            var d = js.deleteKeyValue(
-                "TEST_KV_CREATE",
-            ) catch {
-                reportResult("kv_create", true, "");
-                return;
-            };
-            d.deinit();
             reportResult("kv_create", true, "");
             return;
         }
@@ -3095,13 +3083,6 @@ pub fn testKvUpdate(
     // Update with wrong revision -> fail
     _ = kv.update("key1", "v3", rev1) catch |err| {
         if (err == error.ApiError) {
-            var d = js.deleteKeyValue(
-                "TEST_KV_UPDATE",
-            ) catch {
-                reportResult("kv_update", true, "");
-                return;
-            };
-            d.deinit();
             reportResult("kv_update", true, "");
             return;
         }
@@ -3172,13 +3153,6 @@ pub fn testKvDelete(
         return;
     }) orelse {
         // Key gone completely (ok for history=1)
-        var d = js.deleteKeyValue(
-            "TEST_KV_DEL",
-        ) catch {
-            reportResult("kv_delete", true, "");
-            return;
-        };
-        d.deinit();
         reportResult("kv_delete", true, "");
         return;
     };
@@ -3193,11 +3167,6 @@ pub fn testKvDelete(
         return;
     }
 
-    var d = js.deleteKeyValue("TEST_KV_DEL") catch {
-        reportResult("kv_delete", true, "");
-        return;
-    };
-    d.deinit();
     reportResult("kv_delete", true, "");
 }
 
@@ -3269,11 +3238,6 @@ pub fn testKvKeys(
         return;
     }
 
-    var d = js.deleteKeyValue("TEST_KV_KEYS") catch {
-        reportResult("kv_keys", true, "");
-        return;
-    };
-    d.deinit();
     reportResult("kv_keys", true, "");
 }
 
@@ -3365,13 +3329,6 @@ pub fn testKvHistory(
         }
     }
 
-    var d = js.deleteKeyValue(
-        "TEST_KV_HIST",
-    ) catch {
-        reportResult("kv_history", true, "");
-        return;
-    };
-    d.deinit();
     reportResult("kv_history", true, "");
 }
 
@@ -3451,13 +3408,6 @@ pub fn testKvWatch(
         return;
     }
 
-    var d = js.deleteKeyValue(
-        "TEST_KV_WATCH",
-    ) catch {
-        reportResult("kv_watch", true, "");
-        return;
-    };
-    d.deinit();
     reportResult("kv_watch", true, "");
 }
 
@@ -10293,7 +10243,8 @@ pub fn runAll(
     testStreamBySubject(allocator);
     // Key-Value Store
     // These verify independent bucket semantics. Keep them isolated from
-    // earlier stream/consumer churn and from each other's bucket cleanup.
+    // earlier stream/consumer churn, and let server teardown handle bucket
+    // cleanup so these tests do not also stress stream deletion.
     if (!restartSharedJsServer(
         allocator,
         io.io(),
@@ -10301,54 +10252,12 @@ pub fn runAll(
         "kv_put_get",
     )) return;
     testKvPutGet(allocator);
-    if (!restartSharedJsServer(
-        allocator,
-        io.io(),
-        &js_server,
-        "kv_create",
-    )) return;
     testKvCreate(allocator);
-    if (!restartSharedJsServer(
-        allocator,
-        io.io(),
-        &js_server,
-        "kv_update",
-    )) return;
     testKvUpdate(allocator);
-    if (!restartSharedJsServer(
-        allocator,
-        io.io(),
-        &js_server,
-        "kv_delete",
-    )) return;
     testKvDelete(allocator);
-    if (!restartSharedJsServer(
-        allocator,
-        io.io(),
-        &js_server,
-        "kv_keys",
-    )) return;
     testKvKeys(allocator);
-    if (!restartSharedJsServer(
-        allocator,
-        io.io(),
-        &js_server,
-        "kv_history",
-    )) return;
     testKvHistory(allocator);
-    if (!restartSharedJsServer(
-        allocator,
-        io.io(),
-        &js_server,
-        "kv_watch",
-    )) return;
     testKvWatch(allocator);
-    if (!restartSharedJsServer(
-        allocator,
-        io.io(),
-        &js_server,
-        "kv_lifecycle",
-    )) return;
     testKvBucketLifecycle(allocator);
     // Continue the remaining JetStream tests from clean server state.
     if (!restartSharedJsServer(
