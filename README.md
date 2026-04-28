@@ -17,9 +17,9 @@ A [Zig](https://ziglang.org/) client for the [NATS messaging system](https://nat
 Built on `std.Io`.
 
 > **Pre-1.0** - This library is under active development.
-> Core pub/sub, server-auth TLS, JetStream (pull + push
-> consumers), Key-Value store, and the micro service API are
-> implemented and covered by integration tests. Object store and
+> Core pub/sub, server-authenticated TLS, JetStream (pull + push
+> consumers), Key-Value Store, and the Micro Services API are
+> supported and covered by integration tests. Object Store and
 > mTLS are not yet implemented. The API may change before 1.0.
 
 Check out [NATS by Example](https://natsbyexample.com) for
@@ -859,9 +859,9 @@ all through a JSON request/reply API on `$JS.API.*` subjects.
 
 For runnable examples, see `src/examples/jetstream_*.zig`,
 `src/examples/kv*.zig`, the focused [JetStream guide](doc/JetStream.md),
-and the API reference below.
+and the feature coverage summary below.
 
-### Quick Example -- JetStream
+### JetStream Example
 
 ```zig
 const nats = @import("nats");
@@ -907,7 +907,7 @@ for (result.messages) |*msg| {
 }
 ```
 
-### Quick Example -- Key-Value Store
+### Key-Value Store Example
 
 ```zig
 const js_mod = nats.jetstream;
@@ -952,71 +952,26 @@ while (try watcher.next(5000)) |*update| {
 }
 ```
 
-### What's Included
+### Supported JetStream Features
 
-**Stream & Consumer Management:**
-- **Stream CRUD** -- create, update, delete, info, purge
-  (with subject filter)
-- **Consumer CRUD** -- create, update, delete, info
-- **Listing** -- streamNames, streams, consumerNames,
-  consumers, accountInfo (with pagination)
+| Area | Supported APIs | Notes |
+|------|----------------|-------|
+| Streams | `createStream()`, `updateStream()`, `deleteStream()`, `streamInfo()`, `purgeStream()`, `purgeStreamSubject()` | Includes stream listing and subject-filtered purge. |
+| Consumers | `createConsumer()`, `updateConsumer()`, `deleteConsumer()`, `consumerInfo()` | Pull, push, and ordered consumer workflows. |
+| Listing | `streamNames()`, `streams()`, `consumerNames()`, `consumers()`, `accountInfo()` | Paginated listing APIs are available for streams and consumers. |
+| Publishing | `publish()`, `publishWithOpts()`, `publishMsg()` | Publish acknowledgments, deduplication headers, optimistic concurrency, and publish TTL. |
+| Pull Consumers | `fetch()`, `fetchNoWait()`, `fetchBytes()`, `next()`, `messages()`, `consume()` | Batch fetch, single-message fetch, continuous pull iteration, callbacks, heartbeat monitoring, and ordered delivery. |
+| Push Consumers | `createPushConsumer()`, `PushSubscription.consume()` | Callback delivery uses `JsMsgHandler`; callback messages are borrowed and valid only during the callback. |
+| Acknowledgment | `ack()`, `doubleAck()`, `nak()`, `nakWithDelay()`, `inProgress()`, `term()`, `termWithReason()` | Metadata can be parsed from JetStream reply subjects. |
+| Key-Value Store | `createKeyValue()`, `keyValue()`, `deleteKeyValue()`, `put()`, `get()`, `create()`, `update()`, `delete()`, `purge()`, `keys()`, `history()`, `watch()`, `watchAll()` | Bucket management, optimistic concurrency by revision, history, filtered key listing, and live watches. |
+| Error Handling | `lastApiError()` | JetStream API errors expose server status, error code, and description. |
+| Domains | `JetStream.init(client, .{ .domain = ... })` | Supports multi-tenant JetStream domains. |
 
-**Publishing:**
-- **JetStream publish** -- with ack confirmation, dedup
-  headers (`Nats-Msg-Id`), optimistic concurrency
-  (`Nats-Expected-Last-Sequence`)
-- **Retry on NoResponders** -- 2 retries with 250ms backoff
-  for transient leadership changes
+### Current Limitations
 
-**Pull Consumers:**
-- **Batch fetch** -- `fetch()`, `fetchNoWait()`,
-  `fetchBytes()`, `next()` (single message)
-- **Messages iterator** -- `messages()` for continuous
-  pull with auto-replenish
-- **Consume callback** -- `consume(handler)` with
-  background task, stop/drain control
-- **Heartbeat monitoring** -- idle heartbeat detection,
-  auto-configured for requests > 10s
-- **Ordered consumer** -- gap-free delivery with
-  auto-recreate on sequence gaps
-
-**Push Consumers:**
-- **Callback delivery** -- `push.consume(handler, opts)`
-  with `JsMsgHandler`
-- **Borrowed callback messages** -- push callbacks
-  receive a borrowed `*JsMsg`, which supports ack/nak/etc
-  but is valid only for the duration of the callback
-- **Heartbeat monitoring** -- optional client-side
-  watchdog via `ConsumeOpts.heartbeat_ms`; set this to
-  match the consumer's server-side `idle_heartbeat`
-  to avoid false positives
-
-**Message Ack Protocol:**
-- ack, nak, nak with delay, in-progress, term,
-  term with reason
-- Metadata parsing from reply subject (stream/consumer
-  seq, timestamp, pending count)
-
-**Key-Value Store:**
-- **Bucket management** -- createKeyValue, keyValue
-  (bind), deleteKeyValue
-- **CRUD** -- get, put, create (if-not-exists), update
-  (optimistic concurrency by revision)
-- **Delete/Purge** -- soft delete (marker), purge (remove
-  history)
-- **Keys & History** -- list all keys, revision history
-  per key
-- **Watch** -- real-time updates via `watch()` /
-  `watchAll()` with last-per-subject delivery
-
-**Error Handling:**
-- Zig error unions + `lastApiError()` for server-side
-  JetStream error codes
-- Domain support -- multi-tenant via `domain` option
-
-### Not Yet Implemented
-
-Object store
+| Feature | Status |
+|---------|--------|
+| Object Store | Not implemented |
 
 ---
 
@@ -1805,24 +1760,24 @@ layout, fixtures, and focused test targets.
 
 | Component | Status |
 |-----------|--------|
-| Core Protocol | Implemented |
-| Pub/Sub | Implemented |
-| Request/Reply | Implemented |
-| Headers | Implemented |
-| Reconnection | Implemented |
-| Event Callbacks | Implemented |
-| NKey Authentication | Implemented |
-| JWT/Credentials | Implemented |
-| Server-auth TLS | Implemented |
+| Core Protocol | Supported |
+| Pub/Sub | Supported |
+| Request/Reply | Supported |
+| Headers | Supported |
+| Reconnection | Supported |
+| Event Callbacks | Supported |
+| NKey Authentication | Supported |
+| JWT/Credentials | Supported |
+| Server-authenticated TLS | Supported |
 | mTLS client certificates | Planned |
-| JetStream Core | Implemented |
-| JetStream Pull Consumers | Implemented |
-| JetStream Push Consumers | Implemented |
-| JetStream Ordered Consumer | Implemented |
-| Key-Value Store | Implemented |
-| Service API (micro) | Implemented |
+| JetStream Core | Supported |
+| JetStream Pull Consumers | Supported |
+| JetStream Push Consumers | Supported |
+| JetStream Ordered Consumer | Supported |
+| Key-Value Store | Supported |
+| Micro Services API | Supported |
 | Object Store | Planned |
-| Async Publish | Implemented |
+| Async Publish | Supported |
 
 ## Related Projects
 
