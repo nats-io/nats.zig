@@ -777,11 +777,24 @@ pub fn testMultiPubMultiSub(
             }
         }
 
+        for (sub_clients) |maybe_client| {
+            if (maybe_client) |c| {
+                c.flush(5 * std.time.ns_per_s) catch {
+                    reportResult(
+                        "multi_pub_sub",
+                        false,
+                        "sub flush",
+                    );
+                    return;
+                };
+            }
+        }
+
         for (0..NUM_SUB) |si| {
             const idx = si * NUM_SUBJECTS + subj_i;
             const sub = all_subs[idx] orelse continue;
             for (0..expected_per_sub) |_| {
-                if (sub.nextMsgTimeout(50) catch null) |m| {
+                if (sub.nextMsgTimeout(1000) catch null) |m| {
                     m.deinit();
                     total_recv += 1;
                 } else break;
