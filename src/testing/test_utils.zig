@@ -48,6 +48,17 @@ pub fn reportResult(name: []const u8, passed: bool, details: []const u8) void {
     }
 }
 
+/// Reports a failed test step with the Zig error name included.
+pub fn reportError(name: []const u8, step: []const u8, err: anyerror) void {
+    var buf: [128]u8 = undefined;
+    const details = std.fmt.bufPrint(
+        &buf,
+        "{s}: {s}",
+        .{ step, @errorName(err) },
+    ) catch step;
+    reportResult(name, false, details);
+}
+
 /// Formats a NATS URL for the given port.
 pub fn formatUrl(buf: []u8, port: u16) []const u8 {
     const fmt = "nats://127.0.0.1:{d}";

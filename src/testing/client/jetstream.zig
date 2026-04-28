@@ -8,6 +8,7 @@ const utils = @import("../test_utils.zig");
 const nats = utils.nats;
 
 const reportResult = utils.reportResult;
+const reportError = utils.reportError;
 const formatUrl = utils.formatUrl;
 const ServerManager = utils.ServerManager;
 const TestServer = utils.server_manager.TestServer;
@@ -3042,18 +3043,14 @@ pub fn testKvCreate(
     var kv = js.createKeyValue(.{
         .bucket = "TEST_KV_CREATE",
         .storage = .memory,
-    }) catch {
-        reportResult(
-            "kv_create",
-            false,
-            "create bucket",
-        );
+    }) catch |err| {
+        reportError("kv_create", "create bucket", err);
         return;
     };
 
     // Create succeeds on new key
-    _ = kv.create("newkey", "value1") catch {
-        reportResult("kv_create", false, "create 1");
+    _ = kv.create("newkey", "value1") catch |err| {
+        reportError("kv_create", "create 1", err);
         return;
     };
 
@@ -3113,17 +3110,13 @@ pub fn testKvUpdate(
     var kv = js.createKeyValue(.{
         .bucket = "TEST_KV_UPDATE",
         .storage = .memory,
-    }) catch {
-        reportResult(
-            "kv_update",
-            false,
-            "create bucket",
-        );
+    }) catch |err| {
+        reportError("kv_update", "create bucket", err);
         return;
     };
 
-    const rev1 = kv.put("key1", "v1") catch {
-        reportResult("kv_update", false, "put");
+    const rev1 = kv.put("key1", "v1") catch |err| {
+        reportError("kv_update", "put", err);
         return;
     };
 
@@ -3470,18 +3463,14 @@ pub fn testKvWatch(
     var kv = js.createKeyValue(.{
         .bucket = "TEST_KV_WATCH",
         .storage = .memory,
-    }) catch {
-        reportResult(
-            "kv_watch",
-            false,
-            "create bucket",
-        );
+    }) catch |err| {
+        reportError("kv_watch", "create bucket", err);
         return;
     };
 
     // Put a key before watching
-    _ = kv.put("pre-watch", "initial") catch {
-        reportResult("kv_watch", false, "put");
+    _ = kv.put("pre-watch", "initial") catch |err| {
+        reportError("kv_watch", "put", err);
         return;
     };
 

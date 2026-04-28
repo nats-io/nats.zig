@@ -21,6 +21,9 @@ pub const ServerConfig = struct {
     debug: bool = false,
     /// Enable JetStream.
     jetstream: bool = false,
+    /// Optional JetStream store directory. If omitted, tests use an
+    /// isolated per-port directory under /tmp and remove it on stop.
+    store_dir: ?[]const u8 = null,
 };
 
 /// A self-contained NATS server for testing.
@@ -30,6 +33,8 @@ pub const TestServer = struct {
     process: ?std.process.Child = null,
     config: ServerConfig,
     port_buf: [8]u8 = undefined,
+    store_dir_buf: [128]u8 = undefined,
+    store_dir_len: u8 = 0,
 
     /// Starts a test server. Returns owned instance.
     /// Usage: `var server = TestServer.start(...) catch return;`
@@ -64,6 +69,9 @@ pub const TestServer = struct {
 
         if (config.jetstream) {
             try args.append(allocator, "-js");
+            const store_dir = try server.prepareJetStreamStore(io);
+            try args.append(allocator, "-sd");
+            try args.append(allocator, store_dir);
         }
 
         if (config.debug) {
@@ -105,6 +113,7 @@ pub const TestServer = struct {
             self.process = null;
             // Give OS time to fully terminate the process and close sockets
             io.sleep(.fromMilliseconds(100), .awake) catch {};
+            self.cleanJetStreamStore(io);
             std.debug.print("[SERVER] Server killed, waited 100ms\n", .{});
         }
     }
@@ -148,6 +157,36 @@ pub const TestServer = struct {
         stream.close(io);
 
         return true;
+    }
+
+    fn prepareJetStreamStore(self: *TestServer, io: Io) ![]const u8 {
+        const dir = if (self.config.store_dir) |configured| blk: {
+            if (configured.len > self.store_dir_buf.len)
+                return error.NameTooLong;
+            @memcpy(self.store_dir_buf[0..configured.len], configured);
+            self.store_dir_len = @intCast(configured.len);
+            break :blk self.store_dir_buf[0..configured.len];
+        } else blk: {
+            const formatted = std.fmt.bufPrint(
+                &self.store_dir_buf,
+                "/tmp/nats-zig-js-{d}",
+                .{self.config.port},
+            ) catch return error.NameTooLong;
+            self.store_dir_len = @intCast(formatted.len);
+            break :blk formatted;
+        };
+
+        // Start from a clean JetStream store so integration tests do not
+        // inherit state from an interrupted previous run on the same host.
+        std.Io.Dir.deleteTree(std.Io.Dir.cwd(), io, dir) catch {};
+        return dir;
+    }
+
+    fn cleanJetStreamStore(self: *TestServer, io: Io) void {
+        if (self.store_dir_len == 0) return;
+        const dir = self.store_dir_buf[0..self.store_dir_len];
+        std.Io.Dir.deleteTree(std.Io.Dir.cwd(), io, dir) catch {};
+        self.store_dir_len = 0;
     }
 };
 

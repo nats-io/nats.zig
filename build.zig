@@ -699,7 +699,6 @@ pub fn build(b: *std.Build) void {
     );
     const integration_cmd = b.addRunArtifact(integration_exe);
     run_integration.dependOn(&integration_cmd.step);
-    integration_cmd.step.dependOn(b.getInstallStep());
 
     // Micro-only integration tests (faster; just the micro suite).
     const micro_integration_exe = b.addExecutable(.{
@@ -726,7 +725,6 @@ pub fn build(b: *std.Build) void {
         micro_integration_exe,
     );
     run_micro_integration.dependOn(&micro_integration_cmd.step);
-    micro_integration_cmd.step.dependOn(b.getInstallStep());
 
     // TLS-only integration tests (focused debugging for the
     // Debug-mode hang around the TLS handshake).
@@ -754,5 +752,4 @@ pub fn build(b: *std.Build) void {
         tls_integration_exe,
     );
     run_tls_integration.dependOn(&tls_integration_cmd.step);
-    tls_integration_cmd.step.dependOn(b.getInstallStep());
 }
