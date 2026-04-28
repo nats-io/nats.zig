@@ -6152,6 +6152,26 @@ pub fn testKvPurgeDeletes(
         return;
     }
 
+    // Fresh delete markers should not match an age filter.
+    const skipped = kv.purgeDeletes(
+        .{ .older_than_ns = @as(i64, 60 * std.time.ns_per_s) },
+    ) catch {
+        reportResult(
+            "kv_purge_deletes",
+            false,
+            "purgeDeletes age",
+        );
+        return;
+    };
+    if (skipped != 0) {
+        reportResult(
+            "kv_purge_deletes",
+            false,
+            "purged fresh markers",
+        );
+        return;
+    }
+
     // Purge delete markers
     const purged = kv.purgeDeletes(
         .{},

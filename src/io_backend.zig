@@ -4,8 +4,8 @@
 //! at compile time, based on the `-Dio_backend=threaded|evented`
 //! build option. The library itself is backend-agnostic and
 //! accepts any `std.Io` via `Client.connect`; this module exists
-//! purely so applications (examples, benchmarks, integration
-//! tests) can flip backends without code changes.
+//! purely so applications, examples, and integration tests can
+//! flip backends without code changes.
 //!
 //! Usage:
 //! ```

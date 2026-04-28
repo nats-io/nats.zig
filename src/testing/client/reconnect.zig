@@ -168,41 +168,21 @@ fn testSubscriptionRestored(
     };
     defer sub.deinit();
 
-    std.debug.print(
-        "\n[TEST reconnect_sub_restored] Stopping server...\n",
-        .{},
-    );
     manager.stopServer(0, io.io());
     io.io().sleep(.fromMilliseconds(200), .awake) catch {};
 
-    std.debug.print(
-        "[TEST reconnect_sub_restored] Restarting server...\n",
-        .{},
-    );
     _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
         reportResult("reconnect_sub_restored", false, "restart failed");
         return;
     };
 
-    std.debug.print("[TEST reconnect_sub_restored] Sleeping 500ms...\n", .{});
     io.io().sleep(.fromMilliseconds(500), .awake) catch {};
 
-    std.debug.print("[TEST reconnect_sub_restored] Publishing...\n", .{});
     client.publish("test.restore.msg", "after-reconnect") catch {
         reportResult("reconnect_sub_restored", false, "publish failed");
         return;
     };
-    std.debug.print("[TEST reconnect_sub_restored] Flushing...\n", .{});
-    client.flushBuffer() catch |e| {
-        std.debug.print(
-            "[TEST reconnect_sub_restored] Flush error: {s}\n",
-            .{@errorName(e)},
-        );
-    };
-    std.debug.print(
-        "[TEST reconnect_sub_restored] Flush done, checking message...\n",
-        .{},
-    );
+    client.flushBuffer() catch {};
 
     if (sub.nextMsgTimeout(500) catch null) |msg| {
         defer msg.deinit();

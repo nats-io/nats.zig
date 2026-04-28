@@ -660,11 +660,19 @@ nats.zig uses a two-layer error system for JetStream:
 
 ```zig
 pub const Error = error{
-    Timeout,        // No response within timeout_ms
-    NoResponders,   // JetStream not available (503)
-    ApiError,       // Server returned an API error
-    JsonParseError, // Failed to parse response JSON
-    SubjectTooLong, // Subject exceeds buffer size
+    Timeout,
+    NoResponders,
+    ApiError,
+    JsonParseError,
+    SubjectTooLong,
+    NoHeartbeat,
+    ConsumerDeleted,
+    OrderedReset,
+    InvalidKey,
+    InvalidData,
+    KeyNotFound,
+    WrongLastRevision,
+    ThreadSpawnFailed,
 };
 ```
 

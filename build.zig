@@ -726,8 +726,7 @@ pub fn build(b: *std.Build) void {
     );
     run_micro_integration.dependOn(&micro_integration_cmd.step);
 
-    // TLS-only integration tests (focused debugging for the
-    // Debug-mode hang around the TLS handshake).
+    // Focused JWT/TLS integration tests.
     const tls_integration_exe = b.addExecutable(.{
         .name = "tls-integration-test",
         .root_module = b.createModule(.{

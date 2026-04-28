@@ -303,7 +303,7 @@ pub const RespMux = struct {
 /// All fields have sensible defaults. Common customizations:
 /// - name: Client identifier visible in server logs
 /// - user/pass or auth_token: Authentication credentials
-/// - buffer_size: Increase for large messages (default 256KB)
+/// - reader_buffer_size/writer_buffer_size: tune protocol buffers
 /// - sub_queue_size: Messages buffered per subscription (default 1024)
 pub const Options = struct {
     /// Client name for identification.
@@ -365,7 +365,7 @@ pub const Options = struct {
     /// Write buffer size. Smaller values force more frequent flushes.
     writer_buffer_size: usize = defaults.Connection.writer_buffer_size,
     /// TCP receive buffer size hint. Larger values allow more messages to
-    /// queue in the kernel before backpressure kicks in. Default 256KB.
+    /// queue in the kernel before backpressure kicks in. Default 1MB.
     /// Set to 0 to use system default.
     tcp_rcvbuf: u32 = defaults.Connection.tcp_rcvbuf,
 

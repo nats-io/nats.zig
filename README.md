@@ -983,9 +983,9 @@ while (try watcher.next(5000)) |*update| {
 
 **Push Consumers:**
 - **Callback delivery** -- `push.consume(handler, opts)`
-  with `PushMsgHandler`
+  with `JsMsgHandler`
 - **Borrowed callback messages** -- push callbacks
-  receive `BorrowedJsMsg`, which supports ack/nak/etc
+  receive a borrowed `*JsMsg`, which supports ack/nak/etc
   but is valid only for the duration of the callback
 - **Heartbeat monitoring** -- optional client-side
   watchdog via `ConsumeOpts.heartbeat_ms`; set this to
@@ -1157,10 +1157,10 @@ const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .
     .name = "my-app",              // Client name (visible in server logs)
 
     // Buffers
-    .reader_buffer_size = 256 * 1024,  // Read buffer (default 1MB)
-    .writer_buffer_size = 256 * 1024,  // Write buffer (default 1MB)
+    .reader_buffer_size = 1024 * 1024 + 8 * 1024, // Read buffer default
+    .writer_buffer_size = 1024 * 1024 + 8 * 1024, // Write buffer default
     .sub_queue_size = 8192,            // Per-subscription queue size
-    .tcp_rcvbuf = 256 * 1024,      // TCP receive buffer hint
+    .tcp_rcvbuf = 1024 * 1024,         // TCP receive buffer hint default
 
     // Timeouts
     .connect_timeout_ns = 5_000_000_000,  // 5 second connect timeout
@@ -1400,8 +1400,8 @@ while (true) {
 const client = try nats.Client.connect(allocator, io, url, .{
     .sub_queue_size = 16384,          // Larger per-subscription queue
     .tcp_rcvbuf = 512 * 1024,         // 512KB TCP buffer
-    .reader_buffer_size = 1024 * 1024, // 1MB read buffer
-    .writer_buffer_size = 1024 * 1024, // 1MB write buffer
+    .reader_buffer_size = 2 * 1024 * 1024, // 2MB read buffer
+    .writer_buffer_size = 2 * 1024 * 1024, // 2MB write buffer
 });
 ```
 
@@ -1682,7 +1682,7 @@ client.publish(subject, data) catch |err| switch (err) {
 | `ConnectionRefused` | Server refused connection |
 | `AuthenticationFailed` | Authentication failed |
 | `PayloadTooLarge` | Message exceeds max_payload |
-| `TooManySubscriptions` | Subscription limit reached (256) |
+| `TooManySubscriptions` | Subscription limit reached (16,384) |
 | `Closed` | Connection was closed |
 | `Canceled` | Operation was cancelled |
 | `Timeout` | Operation timed out |
@@ -1812,9 +1812,9 @@ if (client.connectedServerVersion()) |version| {
 | Messages iterator | `pull.messages(opts)` | `!MessagesContext` |
 | Consume callback | `pull.consume(handler, opts)` | `!ConsumeContext` |
 | **Push Consumers** | | |
-| Push message handler | `jetstream.PushMsgHandler.init(T, &handler)` | `PushMsgHandler` |
+| Push message handler | `jetstream.JsMsgHandler.init(T, &handler)` | `JsMsgHandler` |
 | Push consume | `push.consume(handler, opts)` | `!PushConsumeContext` |
-| Push callback msg | `BorrowedJsMsg` | borrowed, no `deinit()` |
+| Push callback msg | `*JsMsg` | borrowed, no `deinit()` |
 | **Message Ack** | | |
 | Message metadata | `msg.metadata()` | `?MsgMetadata` |
 | Ack message | `msg.ack()` | `!void` |

@@ -1015,8 +1015,14 @@ pub const KeyValue = struct {
         opts: PurgeDeletesOpts,
     ) !u64 {
         std.debug.assert(self.bucket_len > 0);
-        _ = opts; // TODO: age filtering requires
-        // timestamps from metadata; for now purge all
+        const cutoff_ns: i64 = if (opts.older_than_ns > 0) blk: {
+            const now = std.Io.Clock.real.now(self.js.client.io);
+            const now_ns: i64 = @intCast(now.nanoseconds);
+            break :blk if (now_ns > opts.older_than_ns)
+                now_ns - opts.older_than_ns
+            else
+                0;
+        } else 0;
         var subj_buf: [256]u8 = undefined;
         const filter = std.fmt.bufPrint(
             &subj_buf,
@@ -1039,6 +1045,13 @@ pub const KeyValue = struct {
 
             if (msg.headers()) |h| {
                 if (isDeleteOp(h)) {
+                    if (opts.older_than_ns > 0) {
+                        const md = msg.metadata() orelse
+                            continue;
+                        if (md.timestamp <= 0 or
+                            md.timestamp > cutoff_ns)
+                            continue;
+                    }
                     const subj = msg.subject();
                     var pr = self.js.purgeStreamSubject(
                         self.streamName(),

@@ -164,8 +164,7 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
     };
     defer sub.deinit();
 
-    // Wait for subscription to be registered on server
-    // io.io().sleep(.fromMilliseconds(50), .awake) catch {};
+    // Wait for subscription to be registered on server.
     client.flush(50_000_000) catch {};
 
     const NUM_MSGS = 100;
@@ -178,23 +177,17 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
 
     publisher.flush(500_000_000) catch {};
 
-    std.debug.print("[TEST] flush done, starting receive loop\n", .{});
-
     var received: usize = 0;
-    for (0..NUM_MSGS) |i| {
-        std.debug.print("[TEST] recv {d}: calling io.async()\n", .{i});
+    for (0..NUM_MSGS) |_| {
         var future = sub_io.io().async(
             nats.Client.Sub.nextMsg,
             .{sub},
         );
         defer if (future.cancel(sub_io.io())) |m| m.deinit() else |_| {};
 
-        std.debug.print("[TEST] recv {d}: calling future.await()\n", .{i});
         if (future.await(sub_io.io())) |_| {
-            std.debug.print("[TEST] recv {d}: got message\n", .{i});
             received += 1;
         } else |_| {
-            std.debug.print("[TEST] recv {d}: await failed\n", .{i});
             break;
         }
     }
