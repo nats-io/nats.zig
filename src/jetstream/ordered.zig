@@ -195,7 +195,7 @@ pub const OrderedConsumer = struct {
             .js = self.js,
             .stream = self.stream,
         };
-        p.setConsumer(self.consumerName());
+        try p.setConsumer(self.consumerName());
         self.pull = p;
 
         self.reset_count += 1;

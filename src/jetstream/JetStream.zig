@@ -11,6 +11,7 @@ const publish_headers = @import("publish_headers.zig");
 const nats = @import("../nats.zig");
 const Client = nats.Client;
 const headers = nats.protocol.headers;
+const pubsub = @import("../pubsub.zig");
 
 pub const Response = types.Response;
 pub const StreamConfig = types.StreamConfig;
@@ -38,6 +39,14 @@ pub const ApiErrorJson = errors.ApiErrorJson;
 
 const JetStream = @This();
 
+fn returnsErrorUnion(comptime f: anytype) bool {
+    const ret = @typeInfo(@TypeOf(f)).@"fn".return_type orelse return false;
+    return switch (@typeInfo(ret)) {
+        .error_union => true,
+        else => false,
+    };
+}
+
 client: *Client,
 allocator: Allocator,
 api_prefix_buf: [128]u8 = undefined,
@@ -53,8 +62,43 @@ pub const Options = struct {
     domain: ?[]const u8 = null,
 };
 
+pub fn validateName(name: []const u8) errors.Error!void {
+    if (name.len == 0) return errors.Error.InvalidName;
+    for (name) |c| {
+        if (c <= 0x20 or c == 0x7f or
+            c == '.' or c == '*' or c == '>' or
+            c == '/' or c == '\\')
+        {
+            return errors.Error.InvalidName;
+        }
+    }
+}
+
+pub fn validateBucketName(bucket: []const u8) errors.Error!void {
+    if (bucket.len == 0) return errors.Error.InvalidBucket;
+    if (bucket.len > 64) return errors.Error.NameTooLong;
+    for (bucket) |c| {
+        if (c <= 0x20 or c == 0x7f or
+            c == '.' or c == '*' or c == '>' or
+            c == '/' or c == '\\')
+        {
+            return errors.Error.InvalidBucket;
+        }
+    }
+}
+
+fn validateApiPrefix(prefix: []const u8) errors.Error!void {
+    if (prefix.len == 0) return errors.Error.InvalidApiPrefix;
+    if (prefix.len > 128) return errors.Error.NameTooLong;
+    for (prefix) |c| {
+        if (c <= 0x20 or c == 0x7f or c == '*' or c == '>') {
+            return errors.Error.InvalidApiPrefix;
+        }
+    }
+}
+
 /// Initializes a JetStream context bound to the given client.
-pub fn init(client: *Client, opts: Options) JetStream {
+pub fn init(client: *Client, opts: Options) !JetStream {
     std.debug.assert(client.isConnected());
     var js = JetStream{
         .client = client,
@@ -62,9 +106,9 @@ pub fn init(client: *Client, opts: Options) JetStream {
         .timeout_ms = opts.timeout_ms,
     };
     if (opts.domain) |d| {
-        std.debug.assert(d.len > 0);
+        try validateName(d);
         // "$JS." + domain + ".API." = 9 overhead
-        std.debug.assert(d.len <= 119);
+        if (d.len > 119) return errors.Error.NameTooLong;
         var buf: [128]u8 = undefined;
         const p = std.fmt.bufPrint(
             &buf,
@@ -78,8 +122,8 @@ pub fn init(client: *Client, opts: Options) JetStream {
         js.api_prefix_len = @intCast(p.len);
     } else {
         const p = opts.api_prefix;
-        std.debug.assert(p.len > 0);
-        std.debug.assert(p.len <= js.api_prefix_buf.len);
+        try validateApiPrefix(p);
+        if (p.len > js.api_prefix_buf.len) return errors.Error.NameTooLong;
         @memcpy(js.api_prefix_buf[0..p.len], p);
         js.api_prefix_len = @intCast(p.len);
     }
@@ -98,7 +142,7 @@ pub fn createStream(
     self: *JetStream,
     config: StreamConfig,
 ) !Response(StreamInfo) {
-    std.debug.assert(config.name.len > 0);
+    try validateName(config.name);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
@@ -114,7 +158,7 @@ pub fn updateStream(
     self: *JetStream,
     config: StreamConfig,
 ) !Response(StreamInfo) {
-    std.debug.assert(config.name.len > 0);
+    try validateName(config.name);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
@@ -130,7 +174,7 @@ pub fn deleteStream(
     self: *JetStream,
     name: []const u8,
 ) !Response(DeleteResponse) {
-    std.debug.assert(name.len > 0);
+    try validateName(name);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
@@ -151,7 +195,7 @@ pub fn createOrUpdateStream(
     self: *JetStream,
     config: StreamConfig,
 ) !Response(StreamInfo) {
-    std.debug.assert(config.name.len > 0);
+    try validateName(config.name);
     std.debug.assert(self.timeout_ms > 0);
     return self.updateStream(config) catch |err| {
         if (err == error.ApiError) {
@@ -170,7 +214,7 @@ pub fn streamInfo(
     self: *JetStream,
     name: []const u8,
 ) !Response(StreamInfo) {
-    std.debug.assert(name.len > 0);
+    try validateName(name);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
@@ -196,7 +240,7 @@ pub fn purgeStreamSubject(
     name: []const u8,
     subject: []const u8,
 ) !Response(PurgeResponse) {
-    std.debug.assert(subject.len > 0);
+    try pubsub.validateSubscribe(subject);
     return self.purgeStreamFiltered(name, subject);
 }
 
@@ -205,7 +249,7 @@ fn purgeStreamFiltered(
     name: []const u8,
     subject: ?[]const u8,
 ) !Response(PurgeResponse) {
-    std.debug.assert(name.len > 0);
+    try validateName(name);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
@@ -234,7 +278,7 @@ pub fn getMsg(
     stream: []const u8,
     seq: u64,
 ) !Response(types.MsgGetResponse) {
-    std.debug.assert(stream.len > 0);
+    try validateName(stream);
     std.debug.assert(seq > 0);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
@@ -256,8 +300,8 @@ pub fn getLastMsgForSubject(
     stream: []const u8,
     subject: []const u8,
 ) !Response(types.MsgGetResponse) {
-    std.debug.assert(stream.len > 0);
-    std.debug.assert(subject.len > 0);
+    try validateName(stream);
+    try pubsub.validateSubscribe(subject);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
@@ -279,7 +323,7 @@ pub fn deleteMsg(
     stream: []const u8,
     seq: u64,
 ) !Response(DeleteResponse) {
-    std.debug.assert(stream.len > 0);
+    try validateName(stream);
     std.debug.assert(seq > 0);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
@@ -305,7 +349,7 @@ pub fn secureDeleteMsg(
     stream: []const u8,
     seq: u64,
 ) !Response(DeleteResponse) {
-    std.debug.assert(stream.len > 0);
+    try validateName(stream);
     std.debug.assert(seq > 0);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
@@ -331,12 +375,12 @@ pub fn createConsumer(
     stream: []const u8,
     config: ConsumerConfig,
 ) !Response(ConsumerInfo) {
-    std.debug.assert(stream.len > 0);
+    try validateName(stream);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [512]u8 = undefined;
     const name = config.name orelse
         config.durable_name orelse "";
-    std.debug.assert(name.len > 0);
+    try validateName(name);
     const subj = std.fmt.bufPrint(
         &buf,
         "CONSUMER.CREATE.{s}.{s}",
@@ -358,12 +402,12 @@ pub fn createOrUpdateConsumer(
     stream: []const u8,
     config: ConsumerConfig,
 ) !Response(ConsumerInfo) {
-    std.debug.assert(stream.len > 0);
+    try validateName(stream);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [512]u8 = undefined;
     const name = config.name orelse
         config.durable_name orelse "";
-    std.debug.assert(name.len > 0);
+    try validateName(name);
     const subj = std.fmt.bufPrint(
         &buf,
         "CONSUMER.CREATE.{s}.{s}",
@@ -382,12 +426,12 @@ pub fn updateConsumer(
     stream: []const u8,
     config: ConsumerConfig,
 ) !Response(ConsumerInfo) {
-    std.debug.assert(stream.len > 0);
+    try validateName(stream);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [512]u8 = undefined;
     const name = config.name orelse
         config.durable_name orelse "";
-    std.debug.assert(name.len > 0);
+    try validateName(name);
     const subj = std.fmt.bufPrint(
         &buf,
         "CONSUMER.CREATE.{s}.{s}",
@@ -407,8 +451,8 @@ pub fn deleteConsumer(
     stream: []const u8,
     consumer: []const u8,
 ) !Response(DeleteResponse) {
-    std.debug.assert(stream.len > 0);
-    std.debug.assert(consumer.len > 0);
+    try validateName(stream);
+    try validateName(consumer);
     var buf: [512]u8 = undefined;
     const subj = std.fmt.bufPrint(
         &buf,
@@ -427,8 +471,8 @@ pub fn consumerInfo(
     stream: []const u8,
     consumer: []const u8,
 ) !Response(ConsumerInfo) {
-    std.debug.assert(stream.len > 0);
-    std.debug.assert(consumer.len > 0);
+    try validateName(stream);
+    try validateName(consumer);
     var buf: [512]u8 = undefined;
     const subj = std.fmt.bufPrint(
         &buf,
@@ -448,7 +492,7 @@ pub fn createPushConsumer(
     stream: []const u8,
     config: ConsumerConfig,
 ) !Response(ConsumerInfo) {
-    std.debug.assert(stream.len > 0);
+    try validateName(stream);
     std.debug.assert(config.deliver_subject != null);
     std.debug.assert(self.timeout_ms > 0);
     return self.createConsumer(stream, config);
@@ -461,7 +505,7 @@ pub fn createOrUpdatePushConsumer(
     stream: []const u8,
     config: ConsumerConfig,
 ) !Response(ConsumerInfo) {
-    std.debug.assert(stream.len > 0);
+    try validateName(stream);
     std.debug.assert(config.deliver_subject != null);
     std.debug.assert(self.timeout_ms > 0);
     return self.createOrUpdateConsumer(stream, config);
@@ -476,8 +520,8 @@ pub fn pauseConsumer(
     consumer: []const u8,
     pause_until: []const u8,
 ) !Response(ConsumerPauseResponse) {
-    std.debug.assert(stream.len > 0);
-    std.debug.assert(consumer.len > 0);
+    try validateName(stream);
+    try validateName(consumer);
     std.debug.assert(pause_until.len > 0);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [512]u8 = undefined;
@@ -501,8 +545,8 @@ pub fn resumeConsumer(
     stream: []const u8,
     consumer: []const u8,
 ) !Response(ConsumerPauseResponse) {
-    std.debug.assert(stream.len > 0);
-    std.debug.assert(consumer.len > 0);
+    try validateName(stream);
+    try validateName(consumer);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [512]u8 = undefined;
     const subj = std.fmt.bufPrint(
@@ -524,7 +568,7 @@ pub fn updatePushConsumer(
     stream: []const u8,
     config: ConsumerConfig,
 ) !Response(ConsumerInfo) {
-    std.debug.assert(stream.len > 0);
+    try validateName(stream);
     std.debug.assert(config.deliver_subject != null);
     std.debug.assert(self.timeout_ms > 0);
     return self.updateConsumer(stream, config);
@@ -538,8 +582,8 @@ pub fn pushConsumer(
     stream: []const u8,
     consumer_name: []const u8,
 ) !PushSubscription {
-    std.debug.assert(stream.len > 0);
-    std.debug.assert(consumer_name.len > 0);
+    try validateName(stream);
+    try validateName(consumer_name);
     var resp = try self.consumerInfo(
         stream,
         consumer_name,
@@ -555,10 +599,10 @@ pub fn pushConsumer(
         .js = self,
         .stream = stream,
     };
-    ps.setConsumer(consumer_name);
-    ps.setDeliverSubject(ds);
+    try ps.setConsumer(consumer_name);
+    try ps.setDeliverSubject(ds);
     if (cfg.deliver_group) |dg| {
-        ps.setDeliverGroup(dg);
+        try ps.setDeliverGroup(dg);
     }
     return ps;
 }
@@ -571,8 +615,8 @@ pub fn unpinConsumer(
     consumer: []const u8,
     group: []const u8,
 ) !Response(DeleteResponse) {
-    std.debug.assert(stream.len > 0);
-    std.debug.assert(consumer.len > 0);
+    try validateName(stream);
+    try validateName(consumer);
     std.debug.assert(group.len > 0);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [512]u8 = undefined;
@@ -679,7 +723,7 @@ pub fn streamNameBySubject(
     self: *JetStream,
     subject: []const u8,
 ) !Response(StreamNamesResponse) {
-    std.debug.assert(subject.len > 0);
+    try pubsub.validateSubscribe(subject);
     std.debug.assert(self.timeout_ms > 0);
     return self.apiRequest(
         StreamNamesResponse,
@@ -702,7 +746,7 @@ pub fn consumerNamesOffset(
     stream: []const u8,
     offset: u64,
 ) !Response(ConsumerNamesResponse) {
-    std.debug.assert(stream.len > 0);
+    try validateName(stream);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
@@ -722,7 +766,7 @@ pub fn consumers(
     self: *JetStream,
     stream: []const u8,
 ) !Response(ConsumerListResponse) {
-    std.debug.assert(stream.len > 0);
+    try validateName(stream);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
     const subj = std.fmt.bufPrint(
@@ -762,8 +806,7 @@ pub fn createKeyValue(
     self: *JetStream,
     cfg: KeyValueConfig,
 ) !KeyValue {
-    std.debug.assert(cfg.bucket.len > 0);
-    std.debug.assert(cfg.bucket.len <= 64);
+    try validateBucketName(cfg.bucket);
     std.debug.assert(self.timeout_ms > 0);
     const sc = self.kvStreamConfig(cfg);
     var subjects = [_][]const u8{sc.subject()};
@@ -773,7 +816,7 @@ pub fn createKeyValue(
     ));
     resp.deinit();
     try self.confirmServerRoundTrip();
-    return self.initKeyValue(cfg.bucket);
+    return try self.initKeyValue(cfg.bucket);
 }
 
 /// Updates an existing key-value bucket config.
@@ -782,8 +825,7 @@ pub fn updateKeyValue(
     self: *JetStream,
     cfg: KeyValueConfig,
 ) !KeyValue {
-    std.debug.assert(cfg.bucket.len > 0);
-    std.debug.assert(cfg.bucket.len <= 64);
+    try validateBucketName(cfg.bucket);
     std.debug.assert(self.timeout_ms > 0);
     const sc = self.kvStreamConfig(cfg);
     var subjects = [_][]const u8{sc.subject()};
@@ -793,7 +835,7 @@ pub fn updateKeyValue(
     ));
     resp.deinit();
     try self.confirmServerRoundTrip();
-    return self.initKeyValue(cfg.bucket);
+    return try self.initKeyValue(cfg.bucket);
 }
 
 /// Creates or updates a key-value bucket.
@@ -801,8 +843,7 @@ pub fn createOrUpdateKeyValue(
     self: *JetStream,
     cfg: KeyValueConfig,
 ) !KeyValue {
-    std.debug.assert(cfg.bucket.len > 0);
-    std.debug.assert(cfg.bucket.len <= 64);
+    try validateBucketName(cfg.bucket);
     std.debug.assert(self.timeout_ms > 0);
     const sc = self.kvStreamConfig(cfg);
     var subjects = [_][]const u8{sc.subject()};
@@ -811,7 +852,7 @@ pub fn createOrUpdateKeyValue(
     );
     resp.deinit();
     try self.confirmServerRoundTrip();
-    return self.initKeyValue(cfg.bucket);
+    return try self.initKeyValue(cfg.bucket);
 }
 
 /// Binds to an existing key-value bucket.
@@ -820,8 +861,7 @@ pub fn keyValue(
     self: *JetStream,
     bucket_name: []const u8,
 ) !KeyValue {
-    std.debug.assert(bucket_name.len > 0);
-    std.debug.assert(bucket_name.len <= 64);
+    try validateBucketName(bucket_name);
 
     var stream_buf: [68]u8 = undefined;
     const stream_name = std.fmt.bufPrint(
@@ -834,7 +874,7 @@ pub fn keyValue(
     var resp = try self.streamInfo(stream_name);
     resp.deinit();
 
-    return self.initKeyValue(bucket_name);
+    return try self.initKeyValue(bucket_name);
 }
 
 /// Deletes a key-value bucket and its backing stream.
@@ -842,7 +882,7 @@ pub fn deleteKeyValue(
     self: *JetStream,
     bucket_name: []const u8,
 ) !Response(DeleteResponse) {
-    std.debug.assert(bucket_name.len > 0);
+    try validateBucketName(bucket_name);
     var stream_buf: [68]u8 = undefined;
     const stream_name = std.fmt.bufPrint(
         &stream_buf,
@@ -855,8 +895,8 @@ pub fn deleteKeyValue(
 fn initKeyValue(
     self: *JetStream,
     bucket_name: []const u8,
-) KeyValue {
-    std.debug.assert(bucket_name.len > 0);
+) !KeyValue {
+    try validateBucketName(bucket_name);
     var kv = KeyValue{ .js = self };
 
     @memcpy(
@@ -949,6 +989,7 @@ fn kvStreamConfig(
     cfg: KeyValueConfig,
 ) KvStreamCfg {
     std.debug.assert(cfg.bucket.len > 0);
+    std.debug.assert(cfg.bucket.len <= 64);
     var sc = KvStreamCfg{};
 
     const sn = std.fmt.bufPrint(
@@ -1396,4 +1437,8 @@ test "subject building" {
         "$JS.API.",
         js.apiPrefix(),
     );
+}
+
+test "JetStream init reports invalid prefix or domain at runtime" {
+    try std.testing.expect(returnsErrorUnion(JetStream.init));
 }

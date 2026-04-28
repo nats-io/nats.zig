@@ -33,6 +33,7 @@ metadata: []protocol.MetadataPair,
 queue_policy: endpoint_mod.QueuePolicy,
 endpoints: std.ArrayList(*endpoint_mod.Endpoint) = .empty,
 group_prefixes: std.ArrayList([]u8) = .empty,
+group_queues: std.ArrayList([]u8) = .empty,
 monitor_subs: std.ArrayList(*Client.Subscription) = .empty,
 mutex: std.Io.Mutex = .init,
 in_flight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -83,6 +84,7 @@ pub fn addService(client: *Client, config: Config) !*Service {
     const started = try timeutil.nowRfc3339(client.io, &started_buf);
     service.started = try client.allocator.dupe(u8, started);
     errdefer client.allocator.free(service.started);
+    errdefer service.cleanupRuntimeResources();
 
     try service.initMonitorSubs();
 
@@ -119,10 +121,11 @@ pub fn addGroupWithQueue(
     try validation.validateGroup(prefix);
     try pubsub.validateQueueGroup(queue);
     const full = try self.allocGroupPrefix("", prefix);
+    const owned_queue = try self.allocGroupQueue(queue);
     return .{
         .service = self,
         .prefix = full,
-        .queue_policy = .{ .queue = queue },
+        .queue_policy = .{ .queue = owned_queue },
     };
 }
 
@@ -194,8 +197,6 @@ pub fn stop(self: *Service, stop_error: ?anyerror) !void {
     self.stop_error = stop_error;
 
     self.mutex.lockUncancelable(self.client.io);
-    defer self.mutex.unlock(self.client.io);
-
     for (self.monitor_subs.items) |sub| {
         sub.deinit();
     }
@@ -204,17 +205,30 @@ pub fn stop(self: *Service, stop_error: ?anyerror) !void {
     for (self.endpoints.items) |ep| {
         ep.sub.drain() catch {};
     }
+    self.mutex.unlock(self.client.io);
 
     // Ensure UNSUB frames reach the server before stop() returns so no
     // new requests are accepted after shutdown completes.
     self.client.flush(5 * std.time.ns_per_s) catch {};
 
+    const drain_timeout_ms = self.client.options.drain_timeout_ms;
+    var drain_err: ?anyerror = null;
     for (self.endpoints.items) |ep| {
-        ep.sub.waitDrained(5000) catch {};
+        ep.sub.waitDrained(drain_timeout_ms) catch |err| {
+            if (drain_err == null) drain_err = err;
+        };
     }
 
+    const start = std.Io.Timestamp.now(self.client.io, .awake);
+    const timeout_ns =
+        @as(i128, drain_timeout_ms) * std.time.ns_per_ms;
     var spins: u32 = 0;
     while (self.in_flight.load(.acquire) != 0) {
+        const now = std.Io.Timestamp.now(self.client.io, .awake);
+        if (now.nanoseconds - start.nanoseconds >= timeout_ns) {
+            drain_err = drain_err orelse error.Timeout;
+            break;
+        }
         spins += 1;
         if (spins < 100) {
             std.atomic.spinLoopHint();
@@ -224,6 +238,8 @@ pub fn stop(self: *Service, stop_error: ?anyerror) !void {
         }
     }
 
+    self.mutex.lockUncancelable(self.client.io);
+    defer self.mutex.unlock(self.client.io);
     for (self.endpoints.items) |ep| {
         ep.sub.deinit();
     }
@@ -234,6 +250,7 @@ pub fn stop(self: *Service, stop_error: ?anyerror) !void {
     self.client.flush(5 * std.time.ns_per_s) catch {};
 
     self.stopped_flag.store(true, .release);
+    if (drain_err) |err| return err;
 }
 
 pub fn waitStopped(self: *Service) !void {
@@ -247,6 +264,25 @@ pub fn stopped(self: *const Service) bool {
     return self.stopped_flag.load(.acquire);
 }
 
+fn cleanupRuntimeResources(self: *Service) void {
+    for (self.monitor_subs.items) |sub| {
+        sub.deinit();
+    }
+    self.monitor_subs.deinit(self.allocator);
+
+    for (self.endpoints.items) |ep| {
+        ep.sub.deinit();
+        ep.deinit(self.allocator);
+    }
+    self.endpoints.deinit(self.allocator);
+
+    for (self.group_prefixes.items) |prefix| self.allocator.free(prefix);
+    self.group_prefixes.deinit(self.allocator);
+
+    for (self.group_queues.items) |queue| self.allocator.free(queue);
+    self.group_queues.deinit(self.allocator);
+}
+
 pub fn deinit(self: *Service) void {
     self.stop(null) catch {};
 
@@ -255,6 +291,8 @@ pub fn deinit(self: *Service) void {
 
     for (self.group_prefixes.items) |prefix| self.allocator.free(prefix);
     self.group_prefixes.deinit(self.allocator);
+    for (self.group_queues.items) |queue| self.allocator.free(queue);
+    self.group_queues.deinit(self.allocator);
     self.monitor_subs.deinit(self.allocator);
 
     endpoint_mod.freeMetadata(self.allocator, self.metadata);
@@ -323,6 +361,16 @@ pub fn allocGroupPrefix(self: *Service, base: []const u8, next: []const u8) ![]c
     defer self.mutex.unlock(self.client.io);
     try self.group_prefixes.append(self.allocator, full);
     return full;
+}
+
+pub fn allocGroupQueue(self: *Service, queue: []const u8) ![]const u8 {
+    try pubsub.validateQueueGroup(queue);
+    const owned = try self.allocator.dupe(u8, queue);
+    errdefer self.allocator.free(owned);
+    self.mutex.lockUncancelable(self.client.io);
+    defer self.mutex.unlock(self.client.io);
+    try self.group_queues.append(self.allocator, owned);
+    return owned;
 }
 
 pub fn onMessage(self: *Service, msg: *const Client.Message) void {

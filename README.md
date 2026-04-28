@@ -698,8 +698,6 @@ Benefits over the naive per-request subscription approach:
 - **Better concurrent throughput** - relevant for JetStream and KV
   workloads, which are RPC-heavy internally.
 
-The user-facing API is unchanged.
-
 ---
 
 ## Headers
@@ -847,6 +845,9 @@ try client.publishWithHeaderMap("subject", &headers, "payload");
 
 - Header values can contain colons (URLs, timestamps work fine)
 - Case-insensitive lookup for header names
+- Header names must be non-empty and cannot contain whitespace, control
+  characters, DEL, or `:`. Header values cannot contain control characters
+  or DEL. Invalid headers return `error.InvalidHeader`.
 - On parse error: `items()` returns empty slice, `get()` returns null
 
 ---
@@ -868,7 +869,7 @@ const nats = @import("nats");
 const js_mod = nats.jetstream;
 
 // Create a JetStream context (stack-allocated, no heap)
-var js = js_mod.JetStream.init(client, .{});
+var js = try js_mod.JetStream.init(client, .{});
 
 // Create a stream
 var stream = try js.createStream(.{
@@ -895,7 +896,7 @@ var pull = js_mod.PullSubscription{
     .js = &js,
     .stream = "ORDERS",
 };
-pull.setConsumer("processor");
+try pull.setConsumer("processor");
 var result = try pull.fetch(.{
     .max_messages = 10,
     .timeout_ms = 5000,
@@ -912,7 +913,7 @@ for (result.messages) |*msg| {
 ```zig
 const js_mod = nats.jetstream;
 
-var js = js_mod.JetStream.init(client, .{});
+var js = try js_mod.JetStream.init(client, .{});
 
 // Create a KV bucket
 var kv = try js.createKeyValue(.{
@@ -952,6 +953,12 @@ while (try watcher.next(5000)) |*update| {
 }
 ```
 
+Bucket names and keys are validated client-side before API requests are sent.
+Bucket names may not be empty, exceed 64 bytes, or contain wildcards,
+separators, whitespace, control characters, or DEL. KV keys must be non-empty
+NATS subject tokens without wildcards; watch patterns may use `*` and a
+terminal `>`.
+
 ### Supported JetStream Features
 
 | Area | Supported APIs | Notes |
@@ -965,7 +972,7 @@ while (try watcher.next(5000)) |*update| {
 | Acknowledgment | `ack()`, `doubleAck()`, `nak()`, `nakWithDelay()`, `inProgress()`, `term()`, `termWithReason()` | Metadata can be parsed from JetStream reply subjects. |
 | Key-Value Store | `createKeyValue()`, `keyValue()`, `deleteKeyValue()`, `put()`, `get()`, `create()`, `update()`, `delete()`, `purge()`, `keys()`, `history()`, `watch()`, `watchAll()` | Bucket management, optimistic concurrency by revision, history, filtered key listing, and live watches. |
 | Error Handling | `lastApiError()` | JetStream API errors expose server status, error code, and description. |
-| Domains | `JetStream.init(client, .{ .domain = ... })` | Supports multi-tenant JetStream domains. |
+| Domains | `try JetStream.init(client, .{ .domain = ... })` | Supports multi-tenant JetStream domains. |
 
 ### Current Limitations
 

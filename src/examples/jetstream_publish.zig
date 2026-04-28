@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
 
     // JetStream context is stack-allocated -- it holds
     // a pointer to the client plus config (no heap).
-    var js = js_mod.JetStream.init(client, .{});
+    var js = try js_mod.JetStream.init(client, .{});
 
     // Create a memory-backed stream named DEMO_PUBLISH
     // that captures all subjects matching "demo.>".

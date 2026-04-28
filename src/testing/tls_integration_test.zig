@@ -99,6 +99,9 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("[RUN ] tls_multiple_msgs\n", .{});
     tls_tests.testTlsMultipleMessages(allocator);
 
+    std.debug.print("[RUN ] tls_scheme_rejects_plain_server\n", .{});
+    tls_tests.testTlsSchemeRejectsPlainServer(allocator);
+
     std.debug.print("[RUN ] tls_reconnect\n", .{});
     tls_tests.testTlsReconnect(allocator, &manager);
 

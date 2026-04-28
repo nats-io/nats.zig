@@ -18,9 +18,51 @@ const JetStream = @import("JetStream.zig");
 const PullSubscription = @import(
     "pull.zig",
 ).PullSubscription;
+const JsMsg = @import("message.zig").JsMsg;
 
 var ephemeral_counter: std.atomic.Value(u32) =
     std.atomic.Value(u32).init(0);
+
+fn validateKeyToken(token: []const u8, allow_wildcards: bool, last: bool) !void {
+    if (token.len == 0) return errors.Error.InvalidKey;
+    if (std.mem.eql(u8, token, "*")) {
+        if (!allow_wildcards) return errors.Error.InvalidKey;
+        return;
+    }
+    if (std.mem.eql(u8, token, ">")) {
+        if (!allow_wildcards or !last) return errors.Error.InvalidKey;
+        return;
+    }
+    for (token) |c| {
+        if (c <= 0x20 or c == 0x7f or c == '*' or c == '>') {
+            return errors.Error.InvalidKey;
+        }
+    }
+}
+
+fn validateKeyLike(value: []const u8, allow_wildcards: bool) !void {
+    if (value.len == 0) return errors.Error.InvalidKey;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i <= value.len) : (i += 1) {
+        if (i == value.len or value[i] == '.') {
+            try validateKeyToken(
+                value[start..i],
+                allow_wildcards,
+                i == value.len,
+            );
+            start = i + 1;
+        }
+    }
+}
+
+fn validateKey(key: []const u8) !void {
+    try validateKeyLike(key, false);
+}
+
+fn validateKeyPattern(pattern: []const u8) !void {
+    try validateKeyLike(pattern, true);
+}
 
 /// Key-value store bound to a specific bucket.
 /// Created via `JetStream.createKeyValue()` or
@@ -56,12 +98,7 @@ pub const KeyValue = struct {
         key: []const u8,
         buf: []u8,
     ) ![]const u8 {
-        std.debug.assert(key.len > 0);
-        // Reject wildcards and control chars in keys
-        for (key) |c| {
-            if (c == '*' or c == '>' or c < 0x20)
-                return errors.Error.InvalidKey;
-        }
+        try validateKey(key);
         return std.fmt.bufPrint(
             buf,
             "$KV.{s}.{s}",
@@ -531,7 +568,7 @@ pub const KeyValue = struct {
         }
 
         while (true) {
-            var msg = (pull.next(3000) catch break) orelse break;
+            var msg = (try pull.next(3000)) orelse break;
             defer msg.deinit();
 
             const subj = msg.subject();
@@ -583,10 +620,13 @@ pub const KeyValue = struct {
         var result: std.ArrayList(
             types.KeyValueEntry,
         ) = .empty;
-        errdefer result.deinit(allocator);
+        errdefer {
+            for (result.items) |*entry| entry.deinit();
+            result.deinit(allocator);
+        }
 
         while (true) {
-            var msg = (pull.next(3000) catch break) orelse break;
+            var msg = (try pull.next(3000)) orelse break;
             defer msg.deinit();
 
             var op: types.KeyValueOp = .put;
@@ -619,9 +659,9 @@ pub const KeyValue = struct {
                 .revision = seq,
                 .operation = op,
                 .value_allocator = val_alloc,
-            }) catch {
+            }) catch |err| {
                 if (val_alloc) |a| a.free(val);
-                break;
+                return err;
             };
         }
 
@@ -655,10 +695,13 @@ pub const KeyValue = struct {
         var result: std.ArrayList(
             types.KeyValueEntry,
         ) = .empty;
-        errdefer result.deinit(allocator);
+        errdefer {
+            for (result.items) |*entry| entry.deinit();
+            result.deinit(allocator);
+        }
 
         while (true) {
-            var msg = (pull.next(3000) catch break) orelse break;
+            var msg = (try pull.next(3000)) orelse break;
             defer msg.deinit();
 
             var op: types.KeyValueOp = .put;
@@ -677,13 +720,13 @@ pub const KeyValue = struct {
                 0;
 
             if (opts.meta_only) {
-                result.append(allocator, .{
+                try result.append(allocator, .{
                     .bucket = self.bucket(),
                     .key = key,
                     .value = "",
                     .revision = seq,
                     .operation = op,
-                }) catch break;
+                });
                 continue;
             }
 
@@ -702,9 +745,9 @@ pub const KeyValue = struct {
                 .revision = seq,
                 .operation = op,
                 .value_allocator = val_alloc,
-            }) catch {
+            }) catch |err| {
                 if (val_alloc) |a| a.free(val);
-                break;
+                return err;
             };
         }
 
@@ -725,6 +768,7 @@ pub const KeyValue = struct {
         var filter_bufs: [16][256]u8 = undefined;
 
         for (patterns, 0..) |p, i| {
+            try validateKeyPattern(p);
             const f = std.fmt.bufPrint(
                 &filter_bufs[i],
                 "$KV.{s}.{s}",
@@ -762,7 +806,7 @@ pub const KeyValue = struct {
             .js = self.js,
             .stream = self.streamName(),
         };
-        pull.setConsumer(name);
+        try pull.setConsumer(name);
 
         return KeyLister{ .kv = self, .pull = pull };
     }
@@ -785,7 +829,7 @@ pub const KeyValue = struct {
         key_pattern: []const u8,
         opts: types.WatchOpts,
     ) !KvWatcher {
-        std.debug.assert(key_pattern.len > 0);
+        try validateKeyPattern(key_pattern);
         var subj_buf: [256]u8 = undefined;
         const filter = std.fmt.bufPrint(
             &subj_buf,
@@ -863,6 +907,7 @@ pub const KeyValue = struct {
         var filter_lens: [16]u8 = undefined;
 
         for (patterns, 0..) |p, i| {
+            try validateKeyPattern(p);
             const f = std.fmt.bufPrint(
                 &filter_bufs[i],
                 "$KV.{s}.{s}",
@@ -909,7 +954,7 @@ pub const KeyValue = struct {
             .js = self.js,
             .stream = self.streamName(),
         };
-        pull.setConsumer(name);
+        try pull.setConsumer(name);
 
         return KvWatcher{
             .kv = self,
@@ -926,6 +971,14 @@ pub const KeyValue = struct {
         kv: *KeyValue,
         pull: PullSubscription,
         done: bool = false,
+        current_msg: ?JsMsg = null,
+
+        fn clearCurrent(self: *KeyLister) void {
+            if (self.current_msg) |*msg| {
+                msg.deinit();
+                self.current_msg = null;
+            }
+        }
 
         /// Returns the next key, or null when done.
         /// Caller does NOT own the returned slice --
@@ -935,33 +988,37 @@ pub const KeyValue = struct {
             self: *KeyLister,
         ) !?[]const u8 {
             if (self.done) return null;
+            self.clearCurrent();
             while (true) {
-                var msg = (self.pull.next(
-                    3000,
-                ) catch {
-                    self.done = true;
-                    return null;
-                }) orelse {
+                var msg = (try self.pull.next(3000)) orelse {
                     self.done = true;
                     return null;
                 };
-                defer msg.deinit();
 
                 const subj = msg.subject();
                 const plen: usize = 4 +
                     @as(usize, self.kv.bucket_len) + 1;
-                if (subj.len <= plen) continue;
-
-                if (msg.headers()) |h| {
-                    if (KeyValue.isDeleteOp(h)) continue;
+                if (subj.len <= plen) {
+                    msg.deinit();
+                    continue;
                 }
 
-                return subj[plen..];
+                if (msg.headers()) |h| {
+                    if (KeyValue.isDeleteOp(h)) {
+                        msg.deinit();
+                        continue;
+                    }
+                }
+
+                self.current_msg = msg;
+                const stored = self.current_msg.?;
+                return stored.subject()[plen..];
             }
         }
 
         /// Cleans up the lister and its consumer.
         pub fn deinit(self: *KeyLister) void {
+            self.clearCurrent();
             self.kv.deleteEphemeralPull(&self.pull);
         }
     };
@@ -1039,8 +1096,7 @@ pub const KeyValue = struct {
 
         var purged: u64 = 0;
         while (true) {
-            var msg = (pull.next(3000) catch break) orelse
-                break;
+            var msg = (try pull.next(3000)) orelse break;
             defer msg.deinit();
 
             if (msg.headers()) |h| {
@@ -1053,10 +1109,10 @@ pub const KeyValue = struct {
                             continue;
                     }
                     const subj = msg.subject();
-                    var pr = self.js.purgeStreamSubject(
+                    var pr = try self.js.purgeStreamSubject(
                         self.streamName(),
                         subj,
-                    ) catch continue;
+                    );
                     pr.deinit();
                     purged += 1;
                 }
@@ -1104,7 +1160,7 @@ pub const KeyValue = struct {
             .js = self.js,
             .stream = self.streamName(),
         };
-        pull.setConsumer(name);
+        try pull.setConsumer(name);
         return pull;
     }
 
@@ -1220,6 +1276,9 @@ pub const KvWatcher = struct {
                 subj[plen..]
             else
                 "";
+            const allocator = self.kv.js.allocator;
+            const owned_key = try allocator.dupe(u8, key);
+            errdefer allocator.free(owned_key);
 
             const md = msg.metadata();
             const seq = if (md) |m|
@@ -1231,14 +1290,14 @@ pub const KvWatcher = struct {
             if (self.opts.meta_only) {
                 return types.KeyValueEntry{
                     .bucket = self.kv.bucket(),
-                    .key = key,
+                    .key = owned_key,
                     .value = "",
                     .revision = seq,
                     .operation = op,
+                    .key_allocator = allocator,
                 };
             }
 
-            const allocator = self.kv.js.allocator;
             const data = msg.data();
             var val: []const u8 = "";
             var val_alloc: ?Allocator = null;
@@ -1249,10 +1308,11 @@ pub const KvWatcher = struct {
 
             return types.KeyValueEntry{
                 .bucket = self.kv.bucket(),
-                .key = key,
+                .key = owned_key,
                 .value = val,
                 .revision = seq,
                 .operation = op,
+                .key_allocator = allocator,
                 .value_allocator = val_alloc,
             };
         }
@@ -1263,3 +1323,19 @@ pub const KvWatcher = struct {
         self.kv.deleteEphemeralPull(&self.pull);
     }
 };
+
+test "KV keys reject spaces and DEL" {
+    var kv = KeyValue{ .js = undefined };
+    @memcpy(kv.bucket_buf[0..1], "B");
+    kv.bucket_len = 1;
+
+    var buf: [256]u8 = undefined;
+    try std.testing.expectError(
+        errors.Error.InvalidKey,
+        kv.kvSubject("bad key", &buf),
+    );
+    try std.testing.expectError(
+        errors.Error.InvalidKey,
+        kv.kvSubject("bad\x7fkey", &buf),
+    );
+}

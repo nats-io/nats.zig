@@ -107,6 +107,8 @@ pub const ErrHandler = *const fn (anyerror) void;
 pub const ConsumeContext = struct {
     _state: std.atomic.Value(State) =
         std.atomic.Value(State).init(.running),
+    _shared_state: ?*std.atomic.Value(State) = null,
+    _allocator: ?std.mem.Allocator = null,
     _task: ?std.Io.Future(void) = null,
     _io: std.Io = undefined,
     _thread: ?std.Thread = null,
@@ -119,21 +121,25 @@ pub const ConsumeContext = struct {
 
     /// Reads the current state atomically.
     pub fn state(self: *const ConsumeContext) State {
-        return self._state.load(.acquire);
+        const state_ptr = self._shared_state orelse
+            @constCast(&self._state);
+        return state_ptr.load(.acquire);
     }
 
     /// Stops consumption immediately. Buffered messages
     /// that have not been dispatched are discarded.
     pub fn stop(self: *ConsumeContext) void {
         std.debug.assert(self.state() != .stopped);
-        self._state.store(.stopped, .release);
+        const state_ptr = self._shared_state orelse &self._state;
+        state_ptr.store(.stopped, .release);
     }
 
     /// Signals the consumer to process remaining buffered
     /// messages and then stop.
     pub fn drain(self: *ConsumeContext) void {
         std.debug.assert(self.state() == .running);
-        self._state.store(.draining, .release);
+        const state_ptr = self._shared_state orelse &self._state;
+        state_ptr.store(.draining, .release);
     }
 
     /// Returns true if consumption has fully stopped.
@@ -144,13 +150,21 @@ pub const ConsumeContext = struct {
     /// Stops the background task and cleans up. The
     /// background task handles its own sub cleanup.
     pub fn deinit(self: *ConsumeContext) void {
-        self._state.store(.stopped, .release);
+        const state_ptr = self._shared_state orelse &self._state;
+        state_ptr.store(.stopped, .release);
         if (self._thread) |t| {
             t.join();
             self._thread = null;
         } else if (self._task) |*t| {
             t.cancel(self._io);
             self._task = null;
+        }
+        if (self._shared_state) |shared| {
+            if (self._allocator) |allocator| {
+                allocator.destroy(shared);
+            }
+            self._shared_state = null;
+            self._allocator = null;
         }
     }
 };

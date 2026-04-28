@@ -66,10 +66,11 @@ pub const Group = struct {
         try validation.validateGroup(prefix);
         try pubsub.validateQueueGroup(queue);
         const full = try service.allocGroupPrefix(self.prefix, prefix);
+        const owned_queue = try service.allocGroupQueue(queue);
         return .{
             .service = self.service,
             .prefix = full,
-            .queue_policy = .{ .queue = queue },
+            .queue_policy = .{ .queue = owned_queue },
         };
     }
 };
@@ -118,6 +119,7 @@ pub fn dupMetadata(
     errdefer allocator.free(out);
     for (metadata, 0..) |pair, i| {
         out[i].key = try allocator.dupe(u8, pair.key);
+        errdefer allocator.free(out[i].key);
         errdefer {
             for (out[0..i]) |prev| {
                 allocator.free(prev.key);
@@ -142,4 +144,20 @@ pub fn freeMetadata(
 
 fn servicePtr(ptr: *anyopaque) *@import("Service.zig").Service {
     return @ptrCast(@alignCast(ptr));
+}
+
+test "dupMetadata frees current key if value allocation fails" {
+    const pairs = [_]protocol.MetadataPair{
+        .{ .key = "role", .value = "primary" },
+    };
+
+    var failing = std.testing.FailingAllocator.init(
+        std.testing.allocator,
+        .{ .fail_index = 2 },
+    );
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        dupMetadata(failing.allocator(), &pairs),
+    );
 }

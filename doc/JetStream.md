@@ -39,7 +39,7 @@ const nats = @import("nats");
 const js_mod = nats.jetstream;
 
 // Assumes `client` is already connected
-var js = js_mod.JetStream.init(client, .{});
+var js = try js_mod.JetStream.init(client, .{});
 
 // Create a stream
 var stream = try js.createStream(.{
@@ -67,7 +67,7 @@ var pull = js_mod.PullSubscription{
     .js = &js,
     .stream = "ORDERS",
 };
-pull.setConsumer("processor");
+try pull.setConsumer("processor");
 var result = try pull.fetch(.{
     .max_messages = 10,
     .timeout_ms = 5000,
@@ -116,7 +116,9 @@ for msg := range batch.Messages() {
 
 The JetStream context is a lightweight struct (stack-allocated) that
 holds a pointer to the NATS client, the API prefix, and timeout
-settings. No heap allocation needed.
+settings. No heap allocation is needed. `JetStream.init()` is fallible because
+it validates the API prefix or domain before storing it in the fixed-size
+context buffer.
 
 ### Creating a Context
 
@@ -126,19 +128,23 @@ settings. No heap allocation needed.
 const js_mod = nats.jetstream;
 
 // Default settings
-var js = js_mod.JetStream.init(client, .{});
+var js = try js_mod.JetStream.init(client, .{});
 
 // Custom timeout
-var js2 = js_mod.JetStream.init(client, .{
+var js2 = try js_mod.JetStream.init(client, .{
     .timeout_ms = 10000,
 });
 
 // With domain (multi-tenant)
-var js3 = js_mod.JetStream.init(client, .{
+var js3 = try js_mod.JetStream.init(client, .{
     .domain = "hub",
 });
 // API prefix becomes: $JS.hub.API.
 ```
+
+Stream, consumer, domain, and API-prefix names are validated at runtime.
+Invalid names return `error.InvalidName`, `error.InvalidApiPrefix`, or
+`error.NameTooLong` instead of relying on debug-only assertions.
 
 **Go:**
 
@@ -506,7 +512,7 @@ var pull = nats.jetstream.PullSubscription{
     .js = &js,
     .stream = "ORDERS",
 };
-pull.setConsumer("processor");
+try pull.setConsumer("processor");
 
 var result = try pull.fetch(.{
     .max_messages = 100,
@@ -809,7 +815,7 @@ defer allocator.free(name);
 
 | Aspect | Zig (nats.zig) | Go (nats.go) |
 |--------|----------------|--------------|
-| Context | Stack struct, `JetStream.init()` | Interface, `jetstream.New()` |
+| Context | Stack struct, `try JetStream.init()` | Interface, `jetstream.New()` |
 | Timeout | `timeout_ms: u32` on JetStream | `context.Context` per call |
 | Responses | `Response(T)` with `defer deinit()` | Go GC handles memory |
 | Errors | `error.ApiError` + `lastApiError()` | `JetStreamError` interface |

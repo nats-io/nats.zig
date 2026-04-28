@@ -84,6 +84,49 @@ pub const Entry = struct {
     value: []const u8,
 };
 
+pub const ValidationError = error{
+    EmptyHeaders,
+    InvalidHeader,
+};
+
+/// Validates a header field name.
+/// Field names must be non-empty and cannot contain
+/// whitespace, control characters, DEL, or ':'.
+pub fn validateKey(key: []const u8) ValidationError!void {
+    if (key.len == 0) return error.InvalidHeader;
+    for (key) |c| {
+        if (c <= 0x20 or c == 0x7f or c == ':') {
+            return error.InvalidHeader;
+        }
+    }
+}
+
+/// Validates a header field value.
+/// Values cannot contain control characters or DEL; this prevents
+/// CRLF injection when headers are serialized to the NATS wire format.
+pub fn validateValue(value: []const u8) ValidationError!void {
+    for (value) |c| {
+        if (c < 0x20 or c == 0x7f) {
+            return error.InvalidHeader;
+        }
+    }
+}
+
+pub fn validateKeyValue(
+    key: []const u8,
+    value: []const u8,
+) ValidationError!void {
+    try validateKey(key);
+    try validateValue(value);
+}
+
+pub fn validateEntries(entries: []const Entry) ValidationError!void {
+    if (entries.len == 0) return error.EmptyHeaders;
+    for (entries) |entry| {
+        try validateKeyValue(entry.key, entry.value);
+    }
+}
+
 /// Result of header parsing.
 ///
 /// Owns all its data - copies strings to heap. Safe to use after source

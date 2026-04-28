@@ -44,6 +44,7 @@ pub const Encoder = struct {
     /// Includes ValidationError for subject/reply-to/queue-group validation.
     pub const Error = error{
         EmptyHeaders,
+        InvalidHeader,
         InvalidSid,
     } || ValidationError;
 
@@ -126,7 +127,10 @@ pub const Encoder = struct {
         args: HPubWithEntriesArgs,
     ) (Error || Io.Writer.Error)!void {
         try subject.validatePublish(args.subject);
-        if (args.headers.len == 0) return Error.EmptyHeaders;
+        headers.validateEntries(args.headers) catch |err| switch (err) {
+            error.EmptyHeaders => return Error.EmptyHeaders,
+            error.InvalidHeader => return Error.InvalidHeader,
+        };
         assert(args.subject.len > 0);
         assert(args.headers.len > 0);
         assert(args.headers.len <= 1024);

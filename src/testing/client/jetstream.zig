@@ -22,7 +22,7 @@ fn initTestJetStream(
 ) nats.jetstream.JetStream {
     return nats.jetstream.JetStream.init(client, .{
         .timeout_ms = test_js_timeout_ms,
-    });
+    }) catch unreachable;
 }
 
 fn threadSleepNs(ns: u64) void {
@@ -1126,7 +1126,7 @@ pub fn testMetadata(
         .js = &js,
         .stream = "TEST_META",
     };
-    pull.setConsumer("meta-cons");
+    pull.setConsumer("meta-cons") catch unreachable;
 
     var msg = (pull.next(5000) catch {
         reportResult(
@@ -1254,7 +1254,7 @@ pub fn testFetchNoWait(
         .js = &js,
         .stream = "TEST_NOWAIT",
     };
-    pull.setConsumer("nowait-cons");
+    pull.setConsumer("nowait-cons") catch unreachable;
 
     // Fetch no-wait on empty consumer -> 0 messages
     var result = pull.fetchNoWait(10) catch {
@@ -1369,7 +1369,7 @@ pub fn testMessages(
         .js = &js,
         .stream = "TEST_MSGS",
     };
-    pull.setConsumer("msgs-cons");
+    pull.setConsumer("msgs-cons") catch unreachable;
 
     var ctx = pull.messages(.{
         .max_messages = 10,
@@ -1505,7 +1505,7 @@ pub fn testConsume(
         .js = &js,
         .stream = "TEST_CONSUME",
     };
-    pull.setConsumer("consume-cons");
+    pull.setConsumer("consume-cons") catch unreachable;
 
     var ctx = pull.consume(
         nats.jetstream.JsMsgHandler.init(
@@ -1741,7 +1741,7 @@ pub fn testAckPreventsRedeliver(
         .js = &js,
         .stream = "TEST_ACK",
     };
-    pull.setConsumer("ack-cons");
+    pull.setConsumer("ack-cons") catch unreachable;
 
     // Fetch and ACK
     var msg = (pull.next(5000) catch {
@@ -1843,7 +1843,7 @@ pub fn testNakCausesRedeliver(
         .js = &js,
         .stream = "TEST_NAK",
     };
-    pull.setConsumer("nak-cons");
+    pull.setConsumer("nak-cons") catch unreachable;
 
     // Fetch and NAK
     var msg1 = (pull.next(5000) catch {
@@ -1972,7 +1972,7 @@ pub fn testTermStopsRedeliver(
         .js = &js,
         .stream = "TEST_TERM",
     };
-    pull.setConsumer("term-cons");
+    pull.setConsumer("term-cons") catch unreachable;
 
     // Fetch and TERM
     var msg = (pull.next(5000) catch {
@@ -2086,7 +2086,7 @@ pub fn testBatchFetch(
         .js = &js,
         .stream = "TEST_BATCH",
     };
-    pull.setConsumer("batch-cons");
+    pull.setConsumer("batch-cons") catch unreachable;
 
     // Fetch batch of 5
     var r1 = pull.fetch(.{
@@ -2643,7 +2643,7 @@ pub fn testInProgress(
         .js = &js,
         .stream = "TEST_WPI",
     };
-    pull.setConsumer("wpi-cons");
+    pull.setConsumer("wpi-cons") catch unreachable;
 
     var msg = (pull.next(5000) catch {
         reportResult("js_wpi", false, "fetch");
@@ -3613,7 +3613,7 @@ pub fn testFilteredConsumer(
         .js = &js,
         .stream = "TEST_FILTER",
     };
-    pull.setConsumer("filter-cons");
+    pull.setConsumer("filter-cons") catch unreachable;
 
     // Should only get "msg-a" (filtered)
     var msg = (pull.next(5000) catch {
@@ -4816,7 +4816,7 @@ pub fn testPauseResumeConsumer(
         .js = &js,
         .stream = "TEST_PAUSE",
     };
-    pull.setConsumer("pause-c");
+    pull.setConsumer("pause-c") catch unreachable;
 
     var msg = (pull.next(5000) catch {
         reportResult(
@@ -4935,8 +4935,8 @@ pub fn testPushConsumerBasic(
         .js = &js,
         .stream = "TEST_PUSH",
     };
-    push_sub.setConsumer("push-c");
-    push_sub.setDeliverSubject(deliver_subj);
+    push_sub.setConsumer("push-c") catch unreachable;
+    push_sub.setDeliverSubject(deliver_subj) catch unreachable;
 
     var ctx = push_sub.consume(
         nats.jetstream.JsMsgHandler.init(
@@ -5077,8 +5077,8 @@ pub fn testPushConsumerBorrowedAck(
         .js = &js,
         .stream = "TEST_PUSH_ACK",
     };
-    push_sub.setConsumer("push-ack-c");
-    push_sub.setDeliverSubject(deliver_subj);
+    push_sub.setConsumer("push-ack-c") catch unreachable;
+    push_sub.setDeliverSubject(deliver_subj) catch unreachable;
 
     var ctx = push_sub.consume(
         nats.jetstream.JsMsgHandler.init(
@@ -5229,8 +5229,8 @@ pub fn testPushConsumerHeartbeatErrHandler(
         .js = &js,
         .stream = "TEST_PUSH_HB",
     };
-    push_sub.setConsumer("push-hb-c");
-    push_sub.setDeliverSubject(deliver_subj);
+    push_sub.setConsumer("push-hb-c") catch unreachable;
+    push_sub.setDeliverSubject(deliver_subj) catch unreachable;
 
     var ctx = push_sub.consume(
         nats.jetstream.JsMsgHandler.init(
@@ -6860,7 +6860,7 @@ pub fn testDoubleAck(
         .js = &js,
         .stream = "TEST_DACK",
     };
-    pull.setConsumer("dack-c");
+    pull.setConsumer("dack-c") catch unreachable;
 
     var msg = (pull.next(5000) catch {
         reportResult(name, false, "fetch 1");
@@ -8758,7 +8758,7 @@ pub fn testConsumerMaxDeliver(
         .js = &js,
         .stream = "MAX_DEL",
     };
-    pull.setConsumer("maxdel-c");
+    pull.setConsumer("maxdel-c") catch unreachable;
 
     // Fetch 1st delivery, nak
     var msg1 = (pull.next(5000) catch {
@@ -8869,7 +8869,7 @@ pub fn testFetchTimeout(
         .js = &js,
         .stream = "FETCH_TO",
     };
-    pull.setConsumer("fetchto-c");
+    pull.setConsumer("fetchto-c") catch unreachable;
 
     // Fetch on empty stream with short timeout
     var result = pull.fetch(.{
@@ -9693,7 +9693,7 @@ fn testJsFetchAfterReconnect(
         .js = &js,
         .stream = "RECON_FETCH",
     };
-    pull.setConsumer("rfetch-c");
+    pull.setConsumer("rfetch-c") catch unreachable;
 
     var r1 = pull.fetch(.{
         .max_messages = 2,
@@ -9773,7 +9773,7 @@ fn testJsFetchAfterReconnect(
         .js = &js,
         .stream = "RECON_FETCH",
     };
-    pull2.setConsumer("rfetch-c");
+    pull2.setConsumer("rfetch-c") catch unreachable;
 
     // Fetch after reconnect
     var r2 = pull2.fetch(.{
@@ -10017,8 +10017,8 @@ fn testPushAfterReconnect(
         .js = &js,
         .stream = "PUSH_RECON",
     };
-    push1.setConsumer("pushrecon-c");
-    push1.setDeliverSubject(deliver1);
+    push1.setConsumer("pushrecon-c") catch unreachable;
+    push1.setDeliverSubject(deliver1) catch unreachable;
 
     var ctx1 = push1.consume(
         nats.jetstream.JsMsgHandler.init(
@@ -10118,8 +10118,8 @@ fn testPushAfterReconnect(
         .js = &js,
         .stream = "PUSH_RECON",
     };
-    push2.setConsumer("pushrecon-c2");
-    push2.setDeliverSubject(deliver2);
+    push2.setConsumer("pushrecon-c2") catch unreachable;
+    push2.setDeliverSubject(deliver2) catch unreachable;
 
     var ctx2 = push2.consume(
         nats.jetstream.JsMsgHandler.init(

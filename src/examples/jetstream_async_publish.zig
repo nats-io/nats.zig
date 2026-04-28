@@ -29,7 +29,7 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("Connected to NATS!\n\n", .{});
 
-    var js = js_mod.JetStream.init(client, .{});
+    var js = try js_mod.JetStream.init(client, .{});
 
     var stream_resp = try js.createStream(.{
         .name = "DEMO_ASYNC",

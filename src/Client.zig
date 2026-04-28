@@ -589,16 +589,42 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
         }
     }
 
+    if (remaining.len == 0) return error.InvalidUrl;
+
     var host: []const u8 = undefined;
     var port: u16 = 4222;
 
-    if (std.mem.indexOf(u8, remaining, ":")) |colon_pos| {
-        host = remaining[0..colon_pos];
-        port = std.fmt.parseInt(u16, remaining[colon_pos + 1 ..], 10) catch {
+    if (remaining[0] == '[') {
+        const end = std.mem.indexOfScalar(u8, remaining, ']') orelse
             return error.InvalidUrl;
-        };
+        host = remaining[1..end];
+        const after = remaining[end + 1 ..];
+        if (after.len > 0) {
+            if (after[0] != ':' or after.len == 1) return error.InvalidUrl;
+            port = std.fmt.parseInt(u16, after[1..], 10) catch {
+                return error.InvalidUrl;
+            };
+        }
     } else {
-        host = remaining;
+        var colon_count: u8 = 0;
+        var colon_pos: usize = 0;
+        for (remaining, 0..) |c, i| {
+            if (c == '[' or c == ']') return error.InvalidUrl;
+            if (c == ':') {
+                colon_count += 1;
+                colon_pos = i;
+            }
+        }
+
+        if (colon_count == 1) {
+            host = remaining[0..colon_pos];
+            if (colon_pos + 1 >= remaining.len) return error.InvalidUrl;
+            port = std.fmt.parseInt(u16, remaining[colon_pos + 1 ..], 10) catch {
+                return error.InvalidUrl;
+            };
+        } else {
+            host = remaining;
+        }
     }
 
     if (host.len == 0) return error.InvalidUrl;
@@ -612,6 +638,23 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
         .pass = pass,
         .use_tls = use_tls,
     };
+}
+
+fn connectToHost(io: Io, host: []const u8, port: u16) !net.Stream {
+    if (net.IpAddress.resolve(io, host, port)) |address| {
+        return net.IpAddress.connect(&address, io, .{
+            .mode = .stream,
+            .protocol = .tcp,
+        }) catch return error.ConnectionFailed;
+    } else |_| {}
+
+    const hostname = net.HostName.init(host) catch {
+        return error.InvalidAddress;
+    };
+    return net.HostName.connect(hostname, io, port, .{
+        .mode = .stream,
+        .protocol = .tcp,
+    }) catch return error.ConnectionFailed;
 }
 
 /// Subscription type alias.
@@ -784,6 +827,9 @@ pub fn connect(
     if (url.len >= defaults.Server.max_url_len) return error.UrlTooLong;
 
     const parsed = try parseUrl(url);
+    const wants_tls = parsed.use_tls or opts.tls_required or
+        opts.tls_ca_file != null or opts.tls_handshake_first;
+    if (wants_tls and parsed.host.len > 255) return error.HostTooLong;
 
     const client = try allocator.create(Client);
     client.allocator = allocator;
@@ -850,17 +896,13 @@ pub fn connect(
     client.tls_write_buffer = null;
     client.ca_bundle = null;
     client.ca_bundle_lock = .init;
-    client.use_tls = false;
-    client.tls_host_len = 0;
     // Determine if TLS should be used: URL scheme, explicit option, or CA file set
-    client.use_tls = parsed.use_tls or opts.tls_required or
-        opts.tls_ca_file != null or opts.tls_handshake_first;
+    client.use_tls = wants_tls;
     client.tls_host = undefined;
     client.tls_host_len = 0;
 
     // Store host for TLS SNI and certificate verification
     if (client.use_tls) {
-        if (parsed.host.len > 255) return error.HostTooLong;
         const host_len: u8 = @intCast(parsed.host.len);
         @memcpy(client.tls_host[0..host_len], parsed.host);
         client.tls_host_len = host_len;
@@ -896,21 +938,7 @@ pub fn connect(
         allocator.destroy(client);
     }
 
-    const host = if (std.mem.eql(u8, parsed.host, "localhost"))
-        "127.0.0.1"
-    else
-        parsed.host;
-
-    const address = net.IpAddress.parse(host, parsed.port) catch {
-        return error.InvalidAddress;
-    };
-
-    client.stream = net.IpAddress.connect(&address, io, .{
-        .mode = .stream,
-        .protocol = .tcp,
-    }) catch {
-        return error.ConnectionFailed;
-    };
+    client.stream = try connectToHost(io, parsed.host, parsed.port);
     errdefer client.stream.close(io);
 
     // TCP_NODELAY
@@ -1446,7 +1474,9 @@ fn handshake(
     if (self.use_tls and self.tls_client == null) {
         const server_tls =
             if (self.server_info) |info| info.tls_required else false;
-        if (server_tls or opts.tls_required or opts.tls_ca_file != null) {
+        const client_tls_required =
+            parsed.use_tls or opts.tls_required or opts.tls_ca_file != null;
+        if (server_tls or client_tls_required) {
             try self.upgradeTls(opts);
         }
     }
@@ -1559,7 +1589,7 @@ fn handshake(
         .echo = opts.echo,
         .headers = opts.headers,
         .no_responders = opts.no_responders,
-        .tls_required = opts.tls_required,
+        .tls_required = opts.tls_required or parsed.use_tls,
         .jwt = jwt_to_send,
         .nkey = pubkey_slice,
         .sig = sig_slice,
@@ -1575,36 +1605,63 @@ fn handshake(
 
     // Check for auth rejection
     if (self.server_info.?.auth_required) {
-        try self.checkAuthRejection();
+        try self.checkAuthRejection(opts.connect_timeout_ns);
     }
 }
 
-/// Checks for -ERR auth rejection after CONNECT.
-fn checkAuthRejection(self: *Client) !void {
+/// Checks auth by sending a bounded PING and waiting for PONG or -ERR.
+fn checkAuthRejection(self: *Client, timeout_ns: u64) !void {
     assert(self.state == .connected);
+    assert(timeout_ns > 0);
 
     const reader = self.active_reader;
+    const writer = self.active_writer;
 
-    // Brief sleep to allow server to respond with -ERR if auth fails
-    self.io.sleep(.fromMilliseconds(100), .awake) catch {};
-
-    // Check if any data is buffered (non-blocking peek)
-    const buffered_data = reader.buffered();
-    if (buffered_data.len > 0) {
-        if (std.mem.startsWith(u8, buffered_data, "-ERR")) {
-            self.state = .closed;
-            return error.AuthorizationViolation;
-        }
+    writer.writeAll("PING\r\n") catch return error.WriteFailed;
+    writer.flush() catch return error.WriteFailed;
+    if (self.tls_client != null) {
+        self.writer.interface.flush() catch return error.WriteFailed;
     }
 
-    // Try a non-blocking peek to see if more data arrived
-    const response = reader.peekGreedy(1) catch {
-        return;
-    };
+    const start_ns = getNowNs(self.io);
+    while (true) {
+        const now_ns = getNowNs(self.io);
+        if (now_ns - start_ns >= timeout_ns) {
+            return error.ConnectionTimeout;
+        }
+        const remaining = timeout_ns - (now_ns - start_ns);
+        const response = try self.peekWithTimeout(reader, remaining);
 
-    if (std.mem.startsWith(u8, response, "-ERR")) {
-        self.state = .closed;
-        return error.AuthorizationViolation;
+        var consumed: usize = 0;
+        const cmd = self.parser.parse(
+            self.allocator,
+            response,
+            &consumed,
+        ) catch return error.ProtocolError;
+
+        if (consumed > 0) reader.toss(consumed);
+
+        if (cmd) |c| {
+            switch (c) {
+                .pong => return,
+                .err => {
+                    self.state = .closed;
+                    return error.AuthorizationViolation;
+                },
+                .ok => continue,
+                .ping => {
+                    writer.writeAll("PONG\r\n") catch return error.WriteFailed;
+                    writer.flush() catch return error.WriteFailed;
+                },
+                .info => |info| {
+                    var owned = info;
+                    owned.deinit(self.allocator);
+                },
+                else => continue,
+            }
+        } else {
+            self.io.sleep(.fromNanoseconds(0), .awake) catch {};
+        }
     }
 }
 
@@ -1893,15 +1950,25 @@ pub fn publish(
     subject: []const u8,
     payload: []const u8,
 ) !void {
-    if (!State.atomicLoad(&self.state).canSend()) {
-        return error.NotConnected;
-    }
+    const state = State.atomicLoad(&self.state);
     try pubsub.validatePublish(subject);
     if (payload.len > self.max_payload)
         return error.PayloadTooLarge;
 
     self.publish_mutex.lockUncancelable(self.io);
     defer self.publish_mutex.unlock(self.io);
+
+    if (!state.canSend()) {
+        if (self.options.reconnect and
+            (state == .reconnecting or state == .disconnected))
+        {
+            try self.bufferPendingPublish(subject, payload);
+            _ = self.statistics.msgs_out.fetchAdd(1, .monotonic);
+            _ = self.statistics.bytes_out.fetchAdd(payload.len, .monotonic);
+            return;
+        }
+        return error.NotConnected;
+    }
 
     try self.encodePubToRing(
         subject,
@@ -1960,6 +2027,7 @@ pub fn publishWithHeaders(
 ) !void {
     if (!State.atomicLoad(&self.state).canSend()) return error.NotConnected;
     try pubsub.validatePublish(subject);
+    try headers.validateEntries(hdrs);
 
     const hdr_size = headers.encodedSize(hdrs);
     if (hdr_size + payload.len > self.max_payload)
@@ -1995,6 +2063,7 @@ pub fn publishRequestWithHeaders(
     if (!State.atomicLoad(&self.state).canSend()) return error.NotConnected;
     try pubsub.validatePublish(subject);
     try pubsub.validateReplyTo(reply_to);
+    try headers.validateEntries(hdrs);
 
     const hdr_size = headers.encodedSize(hdrs);
     if (hdr_size + payload.len > self.max_payload)
@@ -3166,6 +3235,7 @@ pub fn rtt(self: *Client) !u64 {
 
     // Record start time
     const start_ns = getNowNs(self.io);
+    const old_pong_ns = self.last_pong_received_ns.load(.acquire);
 
     // Send PING
     try self.write_mutex.lock(self.io);
@@ -3187,7 +3257,6 @@ pub fn rtt(self: *Client) !u64 {
 
     // Wait for PONG - poll last_pong_received_ns
     // io_task handles PONG and updates the timestamp
-    const old_pong_ns = self.last_pong_received_ns.load(.acquire);
     const timeout_ns: u64 = 5_000_000_000;
     var spin_count: u32 = 0;
 
@@ -3675,6 +3744,7 @@ fn encodeHPubToRing(
     hdrs: []const headers.Entry,
     payload: []const u8,
 ) !void {
+    try headers.validateEntries(hdrs);
     const hdr_size = headers.encodedSize(hdrs);
     const total_len = hdr_size + payload.len;
 
@@ -4006,24 +4076,8 @@ pub fn tryConnect(
         server.getUrl(),
     );
 
-    // Convert "localhost" to IP (IpAddress.parse only handles numeric IPs)
-    const host = if (std.mem.eql(u8, raw_host, "localhost"))
-        "127.0.0.1"
-    else
-        raw_host;
-
-    // Parse address
-    const address = net.IpAddress.parse(host, port) catch {
-        return error.InvalidAddress;
-    };
-
     // Connect
-    self.stream = net.IpAddress.connect(&address, self.io, .{
-        .mode = .stream,
-        .protocol = .tcp,
-    }) catch {
-        return error.ConnectionFailed;
-    };
+    self.stream = try connectToHost(self.io, raw_host, port);
     errdefer self.stream.close(self.io);
 
     // Set TCP_NODELAY
@@ -4044,21 +4098,25 @@ pub fn tryConnect(
 
     // Parse URL to get auth info and TLS flag
     const parsed = parseUrl(server.getUrl()) catch ParsedUrl{
-        .host = host,
+        .host = raw_host,
         .port = port,
         .user = null,
         .pass = null,
         .use_tls = self.use_tls,
     };
 
+    self.use_tls = self.use_tls or parsed.use_tls or
+        self.options.tls_required or self.options.tls_ca_file != null or
+        self.options.tls_handshake_first;
+
     // Update TLS host for reconnection (server might have different hostname)
     if (self.use_tls) {
-        const actual_host = server.getHost();
-        if (actual_host.len > 0 and actual_host.len <= 255) {
-            const host_len: u8 = @intCast(actual_host.len);
-            @memcpy(self.tls_host[0..host_len], actual_host);
-            self.tls_host_len = host_len;
-        }
+        const actual_host = parsed.host;
+        if (actual_host.len == 0 or actual_host.len > 255)
+            return error.HostTooLong;
+        const host_len: u8 = @intCast(actual_host.len);
+        @memcpy(self.tls_host[0..host_len], actual_host);
+        self.tls_host_len = host_len;
     }
 
     // TLS-first mode: upgrade to TLS before NATS protocol
@@ -4981,6 +5039,15 @@ test "parse url tls scheme" {
         try std.testing.expectEqual(@as(u16, 4222), parsed.port);
         try std.testing.expect(parsed.use_tls);
     }
+}
+
+test "parse url bracketed ipv6 host" {
+    const parsed = try parseUrl("tls://user:pass@[::1]:4223");
+    try std.testing.expectEqualSlices(u8, "::1", parsed.host);
+    try std.testing.expectEqual(@as(u16, 4223), parsed.port);
+    try std.testing.expectEqualSlices(u8, "user", parsed.user.?);
+    try std.testing.expectEqualSlices(u8, "pass", parsed.pass.?);
+    try std.testing.expect(parsed.use_tls);
 }
 
 test "parse url with user only" {

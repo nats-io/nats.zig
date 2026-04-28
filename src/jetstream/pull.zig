@@ -21,6 +21,14 @@ const ConsumeContext = consumer_mod.ConsumeContext;
 const ConsumeOpts = consumer_mod.ConsumeOpts;
 const HeartbeatMonitor = consumer_mod.HeartbeatMonitor;
 
+fn returnsErrorUnion(comptime f: anytype) bool {
+    const ret = @typeInfo(@TypeOf(f)).@"fn".return_type orelse return false;
+    return switch (@typeInfo(ret)) {
+        .error_union => true,
+        else => false,
+    };
+}
+
 /// Pull-based consumer subscription.
 pub const PullSubscription = struct {
     js: *JetStream,
@@ -43,9 +51,11 @@ pub const PullSubscription = struct {
     pub fn setConsumer(
         self: *PullSubscription,
         name: []const u8,
-    ) void {
-        std.debug.assert(name.len > 0);
-        std.debug.assert(name.len <= self.consumer_buf.len);
+    ) errors.Error!void {
+        try JetStream.validateName(name);
+        if (name.len > self.consumer_buf.len) {
+            return errors.Error.NameTooLong;
+        }
         @memcpy(
             self.consumer_buf[0..name.len],
             name,
@@ -291,8 +301,16 @@ pub const PullSubscription = struct {
         );
 
         const io = client.io;
+        const state = try client.allocator.create(
+            std.atomic.Value(ConsumeContext.State),
+        );
+        errdefer client.allocator.destroy(state);
+        state.* = std.atomic.Value(ConsumeContext.State).init(.running);
+
         var ctx = ConsumeContext{
             ._io = io,
+            ._shared_state = state,
+            ._allocator = client.allocator,
         };
 
         ctx._task = io.async(
@@ -303,7 +321,7 @@ pub const PullSubscription = struct {
                 sub,
                 handler,
                 opts,
-                &ctx,
+                state,
                 self.stream,
                 self.consumerName(),
             },
@@ -329,6 +347,10 @@ pub const PullSubscription = struct {
         }
     };
 };
+
+test "PullSubscription setConsumer reports invalid input at runtime" {
+    try std.testing.expect(returnsErrorUnion(PullSubscription.setConsumer));
+}
 
 /// Iterator for continuous pull-based consumption.
 /// Each call to `next()` returns a single JsMsg.
@@ -512,13 +534,13 @@ fn consumeDrainTask(
     sub: *Client.Sub,
     handler: JsMsgHandler,
     opts: ConsumeOpts,
-    ctx: *ConsumeContext,
+    state: *std.atomic.Value(ConsumeContext.State),
     stream: []const u8,
     consumer_name: []const u8,
 ) void {
     defer {
         sub.deinit();
-        ctx._state.store(.stopped, .release);
+        state.store(.stopped, .release);
     }
 
     var hb: ?HeartbeatMonitor = if (opts.heartbeat_ms > 0)
@@ -532,14 +554,14 @@ fn consumeDrainTask(
 
     var delivered: u32 = 0;
 
-    while (ctx.state() == .running or
-        ctx.state() == .draining)
+    while (state.load(.acquire) == .running or
+        state.load(.acquire) == .draining)
     {
         const maybe = sub.nextMsgTimeout(
             recv_ms,
         ) catch |err| {
             if (opts.err_handler) |eh| eh(err);
-            if (ctx.state() == .draining) break;
+            if (state.load(.acquire) == .draining) break;
             issuePull(
                 js,
                 client,
@@ -551,7 +573,7 @@ fn consumeDrainTask(
             continue;
         };
         const msg = maybe orelse {
-            if (ctx.state() == .draining) break;
+            if (state.load(.acquire) == .draining) break;
             // Check heartbeat
             if (hb) |*h| {
                 if (h.recordTimeout()) {
@@ -588,7 +610,7 @@ fn consumeDrainTask(
             msg.deinit();
             switch (code) {
                 404, 408 => {
-                    if (ctx.state() == .draining) break;
+                    if (state.load(.acquire) == .draining) break;
                     // Re-issue pull (batch expired)
                     issuePull(
                         js,

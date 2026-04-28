@@ -17,6 +17,15 @@ const consumer_mod = @import("consumer.zig");
 const JsMsg = @import("message.zig").JsMsg;
 const JsMsgHandler = consumer_mod.JsMsgHandler;
 const JetStream = @import("JetStream.zig");
+const pubsub = @import("../pubsub.zig");
+
+fn returnsErrorUnion(comptime f: anytype) bool {
+    const ret = @typeInfo(@TypeOf(f)).@"fn".return_type orelse return false;
+    return switch (@typeInfo(ret)) {
+        .error_union => true,
+        else => false,
+    };
+}
 
 /// Push-based consumer subscription. Created after a
 /// push consumer exists on the server. Subscribe to
@@ -52,11 +61,11 @@ pub const PushSubscription = struct {
     pub fn setConsumer(
         self: *PushSubscription,
         name: []const u8,
-    ) void {
-        std.debug.assert(name.len > 0);
-        std.debug.assert(
-            name.len <= self.consumer_buf.len,
-        );
+    ) errors.Error!void {
+        try JetStream.validateName(name);
+        if (name.len > self.consumer_buf.len) {
+            return errors.Error.NameTooLong;
+        }
         @memcpy(
             self.consumer_buf[0..name.len],
             name,
@@ -68,11 +77,11 @@ pub const PushSubscription = struct {
     pub fn setDeliverSubject(
         self: *PushSubscription,
         subj: []const u8,
-    ) void {
-        std.debug.assert(subj.len > 0);
-        std.debug.assert(
-            subj.len <= self.deliver_buf.len,
-        );
+    ) !void {
+        try pubsub.validatePublish(subj);
+        if (subj.len > self.deliver_buf.len) {
+            return errors.Error.SubjectTooLong;
+        }
         @memcpy(
             self.deliver_buf[0..subj.len],
             subj,
@@ -84,11 +93,11 @@ pub const PushSubscription = struct {
     pub fn setDeliverGroup(
         self: *PushSubscription,
         group: []const u8,
-    ) void {
-        std.debug.assert(group.len > 0);
-        std.debug.assert(
-            group.len <= self.deliver_group_buf.len,
-        );
+    ) !void {
+        try pubsub.validateQueueGroup(group);
+        if (group.len > self.deliver_group_buf.len) {
+            return errors.Error.NameTooLong;
+        }
         @memcpy(
             self.deliver_group_buf[0..group.len],
             group,
@@ -135,6 +144,7 @@ pub const PushSubscription = struct {
         const wrapper = try client.allocator.create(
             PushCallbackWrapper,
         );
+        errdefer client.allocator.destroy(wrapper);
         wrapper.* = .{
             .handler = handler,
             .client = client,
@@ -162,6 +172,7 @@ pub const PushSubscription = struct {
                 wrapper,
             ),
         );
+        errdefer sub.deinit();
 
         // Flush to ensure SUB reaches the server
         // before the caller creates the push consumer.
@@ -184,6 +195,12 @@ pub const PushSubscription = struct {
         return ctx;
     }
 };
+
+test "PushSubscription setters report invalid input at runtime" {
+    try std.testing.expect(returnsErrorUnion(PushSubscription.setConsumer));
+    try std.testing.expect(returnsErrorUnion(PushSubscription.setDeliverSubject));
+    try std.testing.expect(returnsErrorUnion(PushSubscription.setDeliverGroup));
+}
 
 /// Heap-allocated wrapper that bridges Client.MsgHandler
 /// (receives *const Message) to JsMsgHandler (receives

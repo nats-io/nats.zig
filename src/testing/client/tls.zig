@@ -14,8 +14,10 @@ const reportResult = utils.reportResult;
 const formatTlsUrl = utils.formatTlsUrl;
 const tls_port = utils.tls_port;
 const ServerManager = utils.ServerManager;
+const TestServer = utils.server_manager.TestServer;
 
 const Dir = std.Io.Dir;
+const tls_plain_probe_port: u16 = 14240;
 
 /// Returns absolute path to CA file. Caller owns returned memory.
 fn getCaFilePath(allocator: std.mem.Allocator, io: std.Io) ?[:0]const u8 {
@@ -308,11 +310,48 @@ pub fn testTlsMultipleMessages(allocator: std.mem.Allocator) void {
     }
 }
 
+pub fn testTlsSchemeRejectsPlainServer(allocator: std.mem.Allocator) void {
+    const threaded = utils.newIo(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var server = TestServer.start(allocator, io, .{
+        .port = tls_plain_probe_port,
+    }) catch {
+        reportResult(
+            "tls_scheme_rejects_plain_server",
+            false,
+            "plain server start failed",
+        );
+        return;
+    };
+    defer server.deinit(io);
+
+    var url_buf: [64]u8 = undefined;
+    const url = formatTlsUrl(&url_buf, tls_plain_probe_port);
+
+    const client = nats.Client.connect(allocator, io, url, .{
+        .reconnect = false,
+        .connect_timeout_ns = 500 * std.time.ns_per_ms,
+    });
+    if (client) |c| {
+        c.deinit();
+        reportResult(
+            "tls_scheme_rejects_plain_server",
+            false,
+            "tls:// connected without TLS",
+        );
+    } else |_| {
+        reportResult("tls_scheme_rejects_plain_server", true, "");
+    }
+}
+
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     testTlsConnection(allocator);
     testTlsInsecureSkipVerify(allocator);
     testTlsPubSub(allocator);
     testTlsServerInfo(allocator);
     testTlsMultipleMessages(allocator);
+    testTlsSchemeRejectsPlainServer(allocator);
     testTlsReconnect(allocator, manager);
 }

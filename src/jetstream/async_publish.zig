@@ -268,6 +268,15 @@ pub const AsyncPublisher = struct {
             };
         }
         _ = self.pending_count.fetchAdd(1, .release);
+        errdefer {
+            self.mu.lock(io) catch {};
+            const removed = self.pending.fetchRemove(id_key);
+            self.mu.unlock(io);
+            if (removed) |entry| {
+                _ = self.pending_count.fetchSub(1, .release);
+                self.allocator.destroy(entry.value);
+            }
+        }
 
         var hdrs: publish_headers.PublishHeaderSet = undefined;
         hdrs.populate(opts);

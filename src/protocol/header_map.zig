@@ -19,6 +19,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
+const headers = @import("headers.zig");
 
 /// Builder for NATS message headers.
 /// Supports multiple values per key.
@@ -55,10 +56,7 @@ pub const HeaderMap = struct {
         key: []const u8,
         value: []const u8,
     ) error{ InvalidHeader, OutOfMemory }!void {
-        assert(key.len > 0);
-        if (containsControlChars(key) or
-            containsControlChars(value))
-            return error.InvalidHeader;
+        headers.validateKeyValue(key, value) catch return error.InvalidHeader;
 
         // Remove existing values for this key
         self.deleteInternal(key);
@@ -81,10 +79,7 @@ pub const HeaderMap = struct {
         key: []const u8,
         value: []const u8,
     ) error{ InvalidHeader, OutOfMemory }!void {
-        assert(key.len > 0);
-        if (containsControlChars(key) or
-            containsControlChars(value))
-            return error.InvalidHeader;
+        headers.validateKeyValue(key, value) catch return error.InvalidHeader;
 
         const owned_key = try self.allocator.dupe(u8, key);
         errdefer self.allocator.free(owned_key);
@@ -94,15 +89,6 @@ pub const HeaderMap = struct {
 
         try self.keys.append(self.allocator, owned_key);
         try self.values.append(self.allocator, owned_value);
-    }
-
-    /// Checks for control characters that could
-    /// enable header injection.
-    fn containsControlChars(s: []const u8) bool {
-        for (s) |c| {
-            if (c < 0x20) return true;
-        }
-        return false;
     }
 
     /// Gets the first value for a header (case-insensitive lookup).
@@ -464,5 +450,24 @@ test "header map with empty value" {
 
     try std.testing.expect(
         std.mem.indexOf(u8, encoded, "Empty: \r\n") != null,
+    );
+}
+
+test "header map rejects injection-prone names and values" {
+    const allocator = std.testing.allocator;
+    var hm = HeaderMap.init(allocator);
+    defer hm.deinit();
+
+    try std.testing.expectError(
+        error.InvalidHeader,
+        hm.set("Bad:Name", "value"),
+    );
+    try std.testing.expectError(
+        error.InvalidHeader,
+        hm.add("Bad\x7fName", "value"),
+    );
+    try std.testing.expectError(
+        error.InvalidHeader,
+        hm.add("Good", "bad\x7fvalue"),
     );
 }

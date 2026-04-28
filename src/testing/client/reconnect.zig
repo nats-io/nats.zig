@@ -412,7 +412,7 @@ fn testPendingBufferFlush(
             reportResult("pending_buffer_flush", false, "wrong data");
         }
     } else {
-        reportResult("pending_buffer_flush", true, "");
+        reportResult("pending_buffer_flush", false, "buffered message missing");
     }
 }
 

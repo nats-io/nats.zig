@@ -27,7 +27,7 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("Connected to NATS!\n\n", .{});
 
-    var js = js_mod.JetStream.init(client, .{});
+    var js = try js_mod.JetStream.init(client, .{});
 
     // Create a KV bucket with history=5. This means
     // up to 5 revisions per key are kept. Backed by
