@@ -610,6 +610,30 @@ pub fn testTenClientsManySubs(
     }
 }
 
+fn publishWithBackpressure(
+    client: *nats.Client,
+    subject: []const u8,
+    payload: []const u8,
+    test_name: []const u8,
+) bool {
+    client.publish(subject, payload) catch |err| {
+        if (err == error.PublishBufferFull) {
+            client.flush(5 * std.time.ns_per_s) catch {
+                reportResult(test_name, false, "pub flush");
+                return false;
+            };
+            client.publish(subject, payload) catch {
+                reportResult(test_name, false, "publish");
+                return false;
+            };
+            return true;
+        }
+        reportResult(test_name, false, "publish");
+        return false;
+    };
+    return true;
+}
+
 /// 5 publishers, 5 subscribers, 100 subjects.
 pub fn testMultiPubMultiSub(
     allocator: std.mem.Allocator,
@@ -677,6 +701,19 @@ pub fn testMultiPubMultiSub(
         }
     }
 
+    for (sub_clients) |maybe_client| {
+        if (maybe_client) |c| {
+            c.flush(5 * std.time.ns_per_s) catch {
+                reportResult(
+                    "multi_pub_sub",
+                    false,
+                    "sub flush",
+                );
+                return;
+            };
+        }
+    }
+
     var pub_ios: [NUM_PUB]*utils.TestIo = undefined;
     var pub_clients: [NUM_PUB]?*nats.Client =
         [_]?*nats.Client{null} ** NUM_PUB;
@@ -703,38 +740,48 @@ pub fn testMultiPubMultiSub(
         pub_io_count += 1;
     }
 
-    pub_ios[0].io().sleep(
-        .fromMilliseconds(100),
-        .awake,
-    ) catch {};
-
-    for (0..NUM_PUB) |pi| {
-        const c = pub_clients[pi] orelse continue;
-        for (0..NUM_SUBJECTS) |subj_i| {
-            var sbuf: [32]u8 = undefined;
-            const subj = std.fmt.bufPrint(
-                &sbuf,
-                "mp.{d}",
-                .{subj_i},
-            ) catch continue;
-            for (0..MSGS_PER_SUBJECT) |_| {
-                c.publish(subj, "mp") catch {};
-            }
-        }
-    }
-
-    pub_ios[0].io().sleep(
-        .fromMilliseconds(2000),
-        .awake,
-    ) catch {};
-
     const expected_per_sub =
         NUM_PUB * MSGS_PER_SUBJECT;
     var total_recv: usize = 0;
-    for (all_subs) |s| {
-        if (s) |sub| {
+
+    for (0..NUM_SUBJECTS) |subj_i| {
+        var sbuf: [32]u8 = undefined;
+        const subj = std.fmt.bufPrint(
+            &sbuf,
+            "mp.{d}",
+            .{subj_i},
+        ) catch continue;
+
+        for (0..NUM_PUB) |pi| {
+            const c = pub_clients[pi] orelse continue;
+            for (0..MSGS_PER_SUBJECT) |_| {
+                if (!publishWithBackpressure(
+                    c,
+                    subj,
+                    "mp",
+                    "multi_pub_sub",
+                )) return;
+            }
+        }
+
+        for (pub_clients) |maybe_client| {
+            if (maybe_client) |c| {
+                c.flush(5 * std.time.ns_per_s) catch {
+                    reportResult(
+                        "multi_pub_sub",
+                        false,
+                        "pub flush",
+                    );
+                    return;
+                };
+            }
+        }
+
+        for (0..NUM_SUB) |si| {
+            const idx = si * NUM_SUBJECTS + subj_i;
+            const sub = all_subs[idx] orelse continue;
             for (0..expected_per_sub) |_| {
-                if (sub.nextMsgTimeout(20) catch null) |m| {
+                if (sub.nextMsgTimeout(50) catch null) |m| {
                     m.deinit();
                     total_recv += 1;
                 } else break;
@@ -757,7 +804,6 @@ pub fn testMultiPubMultiSub(
         reportResult("multi_pub_sub", false, msg);
     }
 }
-
 // --- C. Message Size Edge Cases ---
 
 /// Tests payload sizes at slab tier boundaries.

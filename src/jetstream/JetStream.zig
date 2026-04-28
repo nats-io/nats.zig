@@ -766,9 +766,10 @@ pub fn createKeyValue(
     std.debug.assert(cfg.bucket.len <= 64);
     std.debug.assert(self.timeout_ms > 0);
     const sc = self.kvStreamConfig(cfg);
+    var subjects = [_][]const u8{sc.subject()};
     var resp = try self.createStream(sc.config(
         sc.stream_name(),
-        &sc.subjects,
+        &subjects,
     ));
     resp.deinit();
     try self.confirmServerRoundTrip();
@@ -785,9 +786,10 @@ pub fn updateKeyValue(
     std.debug.assert(cfg.bucket.len <= 64);
     std.debug.assert(self.timeout_ms > 0);
     const sc = self.kvStreamConfig(cfg);
+    var subjects = [_][]const u8{sc.subject()};
     var resp = try self.updateStream(sc.config(
         sc.stream_name(),
-        &sc.subjects,
+        &subjects,
     ));
     resp.deinit();
     try self.confirmServerRoundTrip();
@@ -803,8 +805,9 @@ pub fn createOrUpdateKeyValue(
     std.debug.assert(cfg.bucket.len <= 64);
     std.debug.assert(self.timeout_ms > 0);
     const sc = self.kvStreamConfig(cfg);
+    var subjects = [_][]const u8{sc.subject()};
     var resp = try self.createOrUpdateStream(
-        sc.config(sc.stream_name(), &sc.subjects),
+        sc.config(sc.stream_name(), &subjects),
     );
     resp.deinit();
     try self.confirmServerRoundTrip();
@@ -890,7 +893,6 @@ const KvStreamCfg = struct {
     stream_name_len: u8 = 0,
     subj_buf: [128]u8 = undefined,
     subj_len: u8 = 0,
-    subjects: [1][]const u8 = undefined,
     hist: i64 = 1,
     dup_window: ?i64 = null,
     max_bytes: ?i64 = null,
@@ -905,6 +907,13 @@ const KvStreamCfg = struct {
     ) []const u8 {
         std.debug.assert(self.stream_name_len > 0);
         return self.stream_name_buf[0..self.stream_name_len];
+    }
+
+    fn subject(
+        self: *const KvStreamCfg,
+    ) []const u8 {
+        std.debug.assert(self.subj_len > 0);
+        return self.subj_buf[0..self.subj_len];
     }
 
     fn config(
@@ -955,9 +964,6 @@ fn kvStreamConfig(
         .{cfg.bucket},
     ) catch unreachable;
     sc.subj_len = @intCast(sp.len);
-    sc.subjects = .{
-        sc.subj_buf[0..sc.subj_len],
-    };
 
     sc.hist = if (cfg.history) |h|
         @intCast(h)
