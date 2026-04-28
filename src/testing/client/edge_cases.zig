@@ -646,7 +646,14 @@ pub fn testCompletePubSubRoundTrip(allocator: std.mem.Allocator) void {
         return;
     }
 
-    const after = client.stats();
+    var after = client.stats();
+    for (0..50) |_| {
+        if (after.msgs_out > before.msgs_out and
+            after.msgs_in > before.msgs_in)
+            break;
+        io.io().sleep(.fromMilliseconds(1), .awake) catch {};
+        after = client.stats();
+    }
 
     if (after.msgs_out <= before.msgs_out) {
         reportResult("complete_roundtrip", false, "msgs_out not updated");

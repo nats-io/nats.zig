@@ -544,11 +544,11 @@ const RespHandler = struct {
     }
 };
 
-/// Muxer-specific test: proves the 5ms artificial latency floor
-/// is gone. Times a single sequential round-trip against a
-/// loopback responder and asserts elapsed << 5ms (the old floor).
-/// First request bears one PING/PONG round-trip from
-/// ensureRespMux but on loopback that is well under 2ms.
+/// Muxer-specific test: proves the old per-request subscription
+/// path is gone. That path carried a hardcoded 5ms latency floor;
+/// instead of depending on sub-5ms wall-clock timing on CI, assert
+/// that request() creates one wildcard response mux subscription
+/// and reuses it for subsequent requests.
 pub fn testMuxerLatencyFloor(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -589,39 +589,53 @@ pub fn testMuxerLatencyFloor(allocator: std.mem.Allocator) void {
     };
     defer requester.deinit();
 
-    const start = std.Io.Timestamp.now(io_q.io(), .awake);
-    const reply = requester.request(
-        "muxer.lat.test",
-        "ping",
-        2000,
-    ) catch {
-        reportResult("muxer_latency_floor", false, "request failed");
-        return;
-    };
-    const end = std.Io.Timestamp.now(io_q.io(), .awake);
-
-    if (reply) |m| m.deinit() else {
-        reportResult("muxer_latency_floor", false, "no reply");
-        return;
-    }
-
-    const elapsed_ns: u64 = @intCast(start.durationTo(end).nanoseconds);
-    const elapsed_ms = elapsed_ns / std.time.ns_per_ms;
-
-    // Old code burned a hardcoded 5ms sleep before publish.
-    // The muxer replaces it with one PING/PONG which on loopback
-    // is well under 5ms even on the cold-cache first request.
-    if (elapsed_ms < 5) {
-        reportResult("muxer_latency_floor", true, "");
-    } else {
+    const before_subs = requester.numSubscriptions();
+    if (before_subs != 0) {
         var buf: [64]u8 = undefined;
         const detail = std.fmt.bufPrint(
             &buf,
-            "took {d}ms (expected < 5ms)",
-            .{elapsed_ms},
+            "subs before request: {d}",
+            .{before_subs},
         ) catch "e";
         reportResult("muxer_latency_floor", false, detail);
+        return;
     }
+
+    for (0..6) |i| {
+        const reply = requester.request(
+            "muxer.lat.test",
+            "ping",
+            2000,
+        ) catch {
+            reportResult("muxer_latency_floor", false, "request failed");
+            return;
+        };
+
+        if (reply) |m| {
+            defer m.deinit();
+            if (!std.mem.eql(u8, m.data, "pong")) {
+                reportResult("muxer_latency_floor", false, "wrong reply");
+                return;
+            }
+        } else {
+            reportResult("muxer_latency_floor", false, "no reply");
+            return;
+        }
+
+        const subs = requester.numSubscriptions();
+        if (subs != 1) {
+            var buf: [64]u8 = undefined;
+            const detail = std.fmt.bufPrint(
+                &buf,
+                "request {d}: subs={d}, want 1",
+                .{ i + 1, subs },
+            ) catch "e";
+            reportResult("muxer_latency_floor", false, detail);
+            return;
+        }
+    }
+
+    reportResult("muxer_latency_floor", true, "");
 }
 
 /// Muxer-specific test: proves the muxer's PING/PONG init cost
