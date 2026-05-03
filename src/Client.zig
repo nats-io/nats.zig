@@ -48,6 +48,15 @@ pub const HeaderMap = protocol.HeaderMap;
 const nkey_auth = @import("auth.zig");
 const creds_auth = nkey_auth.creds;
 
+// TCP_NODELAY socket option value.
+// std.posix.TCP is void on some platforms (e.g. FreeBSD) where Zig's
+// stdlib does not yet define TCP socket options. TCP_NODELAY is
+// universally 1 on all POSIX platforms (Linux, macOS, *BSD, etc.).
+const TCP_NODELAY: u32 = if (std.posix.TCP != void)
+    std.posix.TCP.NODELAY
+else
+    1;
+
 const Client = @This();
 
 /// Type-erased message handler for callback subscriptions.
@@ -947,7 +956,7 @@ pub fn connect(
     std.posix.setsockopt(
         client.stream.socket.handle,
         std.posix.IPPROTO.TCP,
-        std.posix.TCP.NODELAY,
+        TCP_NODELAY,
         std.mem.asBytes(&enable),
     ) catch {
         client.tcp_nodelay_set = false;
@@ -4085,7 +4094,7 @@ pub fn tryConnect(
     std.posix.setsockopt(
         self.stream.socket.handle,
         std.posix.IPPROTO.TCP,
-        std.posix.TCP.NODELAY,
+        TCP_NODELAY,
         std.mem.asBytes(&enable),
     ) catch {};
 
