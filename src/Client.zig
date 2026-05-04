@@ -103,7 +103,7 @@ pub const MsgHandler = struct {
 fn isValidFd(fd: std.posix.fd_t) bool {
     if (fd < 0) return false;
     const F_GETFD = 1;
-    const rc = std.posix.system.fcntl(fd, F_GETFD, 0);
+    const rc = std.posix.system.fcntl(fd, F_GETFD, @as(usize, 0));
     // fcntl returns the fd flags on success, or a
     // large unsigned value (wrapped errno) on failure
     return rc < 0x1000;
