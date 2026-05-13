@@ -2706,6 +2706,305 @@ pub fn requestMsg(
     return self.requestAwaitResp(&waiter, reply, timeout_ms);
 }
 
+/// Predicate that signals end-of-stream for `requestMany`.
+///
+/// ADR-47 specifies a "standard sentinel" of an empty-payload
+/// reply; `emptyPayloadSentinel()` returns a Sentinel matching
+/// that contract. Custom sentinels can inspect headers, status,
+/// or payload contents to decide termination.
+pub const Sentinel = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        isTerminal: *const fn (
+            *anyopaque,
+            *const Message,
+        ) bool,
+    };
+
+    pub fn init(comptime T: type, ptr: *T) Sentinel {
+        const gen = struct {
+            fn isTerminal(
+                p: *anyopaque,
+                msg: *const Message,
+            ) bool {
+                const self: *T = @ptrCast(@alignCast(p));
+                return self.isTerminal(msg);
+            }
+        };
+        return .{
+            .ptr = ptr,
+            .vtable = &.{ .isTerminal = gen.isTerminal },
+        };
+    }
+
+    pub fn check(
+        self: Sentinel,
+        msg: *const Message,
+    ) bool {
+        return self.vtable.isTerminal(self.ptr, msg);
+    }
+};
+
+/// Standard sentinel from ADR-47: terminates on an empty-payload
+/// reply. Common convention for services that explicitly close
+/// a scatter/gather session.
+pub fn emptyPayloadSentinel() Sentinel {
+    const gen = struct {
+        var dummy: u8 = 0;
+        fn isTerminal(
+            _: *anyopaque,
+            msg: *const Message,
+        ) bool {
+            return msg.data.len == 0;
+        }
+    };
+    return .{
+        .ptr = @ptrCast(&gen.dummy),
+        .vtable = &.{ .isTerminal = gen.isTerminal },
+    };
+}
+
+/// Stop conditions for `requestMany` per ADR-47. All conditions
+/// race; whichever fires first terminates the call. `max_wait_ms`
+/// is a hard upper bound and is always honored.
+pub const RequestManyOptions = struct {
+    /// Overall deadline for the call (ms). Must be > 0.
+    max_wait_ms: u32 = 1000,
+
+    /// Stall timer (ms): terminate if no reply arrives within
+    /// this gap from the previous one (or the request itself).
+    /// 0 disables. Effective per-wait deadline is
+    /// `min(stall_ms, remaining of max_wait_ms)`.
+    stall_ms: u32 = 0,
+
+    /// Terminate after delivering this many replies. 0 disables.
+    max_messages: u32 = 0,
+
+    /// Optional predicate; if it returns true for a reply, that
+    /// reply is consumed (not yielded) and the call terminates.
+    /// Use `emptyPayloadSentinel()` for the ADR-47 standard.
+    sentinel: ?Sentinel = null,
+};
+
+/// Why a `requestMany` call terminated.
+pub const RequestManyTermination = enum {
+    /// Overall `max_wait_ms` deadline reached.
+    max_wait,
+    /// `stall_ms` elapsed since the previous reply.
+    stall,
+    /// Delivered `max_messages` replies.
+    max_messages,
+    /// Sentinel predicate matched (sentinel msg was consumed).
+    sentinel,
+    /// Server reported no responders (503).
+    no_responders,
+    /// Subscription closed before the call terminated normally
+    /// (e.g. connection lost).
+    closed,
+};
+
+/// Summary returned by `requestManyCallback`.
+pub const RequestManyResult = struct {
+    received: u32,
+    termination: RequestManyTermination,
+};
+
+/// Iterator yielded by `requestMany`. The caller MUST call
+/// `deinit()` regardless of termination path; it unsubscribes
+/// the dedicated inbox and frees its subject buffer.
+pub const RequestManyIter = struct {
+    client: *Client,
+    sub: *Sub,
+    inbox: []u8,
+    opts: RequestManyOptions,
+    start_ns: u64,
+    received: u32,
+    termination: RequestManyTermination,
+    done: bool,
+
+    /// Returns the next reply or null if a stop condition fired.
+    /// Caller owns the returned message and must call deinit().
+    pub fn next(
+        self: *RequestManyIter,
+    ) !?Message {
+        assert(self.inbox.len > 0);
+        if (self.done) return null;
+        const io = self.client.io;
+
+        const total_ns: u64 = @as(u64, self.opts.max_wait_ms) *
+            std.time.ns_per_ms;
+        assert(total_ns > 0);
+
+        const now = getNowNs(io);
+        const elapsed_ns = now -| self.start_ns;
+        if (elapsed_ns >= total_ns) {
+            self.termination = .max_wait;
+            self.done = true;
+            return null;
+        }
+
+        const remaining_ns = total_ns - elapsed_ns;
+        const remaining_ms_u64 =
+            (remaining_ns + std.time.ns_per_ms - 1) /
+            std.time.ns_per_ms;
+        var wait_ms: u32 = if (remaining_ms_u64 >
+            std.math.maxInt(u32))
+            std.math.maxInt(u32)
+        else
+            @intCast(remaining_ms_u64);
+        if (wait_ms == 0) wait_ms = 1;
+        // ADR-47: stall timer applies only after the first reply.
+        // Before that, the first message gets the full max_wait_ms.
+        const stall_active = self.opts.stall_ms > 0 and
+            self.received > 0;
+        if (stall_active and self.opts.stall_ms < wait_ms) {
+            wait_ms = self.opts.stall_ms;
+        }
+        assert(wait_ms > 0);
+
+        const maybe = self.sub.nextMsgTimeout(wait_ms) catch |err| {
+            self.done = true;
+            if (err == error.Closed) {
+                self.termination = .closed;
+                return null;
+            }
+            return err;
+        };
+        const msg = maybe orelse {
+            self.done = true;
+            const after = getNowNs(io);
+            const elapsed_after = after -| self.start_ns;
+            // Only classify as .stall when the stall timer was the
+            // condition we waited on; otherwise the deadline is the
+            // overall max_wait_ms (including the no-first-reply case).
+            self.termination = if (stall_active and
+                elapsed_after < total_ns)
+                .stall
+            else
+                .max_wait;
+            return null;
+        };
+
+        if (msg.isNoResponders()) {
+            msg.deinit();
+            self.done = true;
+            self.termination = .no_responders;
+            return null;
+        }
+
+        if (self.opts.sentinel) |s| {
+            if (s.check(&msg)) {
+                msg.deinit();
+                self.done = true;
+                self.termination = .sentinel;
+                return null;
+            }
+        }
+
+        self.received += 1;
+        if (self.opts.max_messages > 0 and
+            self.received >= self.opts.max_messages)
+        {
+            self.done = true;
+            self.termination = .max_messages;
+        }
+        return msg;
+    }
+
+    /// Releases the underlying subscription and inbox buffer.
+    /// Safe to call multiple times.
+    pub fn deinit(self: *RequestManyIter) void {
+        if (self.inbox.len == 0) return;
+        self.sub.deinit();
+        self.client.allocator.free(self.inbox);
+        self.inbox = &[_]u8{};
+    }
+};
+
+/// Scatter/gather request: publishes one request to `subject`
+/// and returns an iterator over multiple replies. Stops on the
+/// first matching condition in `opts` (see `RequestManyOptions`).
+///
+/// Implements ADR-47 "Request Many". Equivalent to orbit.go's
+/// `natsext.RequestMany` and orbit.rs's `request_many`.
+///
+/// The iterator owns a dedicated inbox subscription; call
+/// `deinit()` on it regardless of how the loop exits. Each
+/// yielded message is owned by the caller (call `deinit()`).
+///
+/// Lock-free with respect to the shared response multiplexer
+/// used by single-reply `request()` — the dedicated inbox uses
+/// a two-token subject (`<prefix>.<22 random>`) that cannot
+/// match the muxer's three-token wildcard.
+pub fn requestMany(
+    self: *Client,
+    subject: []const u8,
+    payload: []const u8,
+    opts: RequestManyOptions,
+) !RequestManyIter {
+    assert(subject.len > 0);
+    assert(opts.max_wait_ms > 0);
+    if (!State.atomicLoad(&self.state).canSend()) {
+        return error.NotConnected;
+    }
+
+    const inbox = try self.newInbox();
+    errdefer self.allocator.free(inbox);
+
+    const sub = try self.subscribeSync(inbox);
+    errdefer sub.deinit();
+
+    try self.publishRequest(subject, inbox, payload);
+    try self.flushBuffer();
+
+    return .{
+        .client = self,
+        .sub = sub,
+        .inbox = inbox,
+        .opts = opts,
+        .start_ns = getNowNs(self.io),
+        .received = 0,
+        .termination = .max_wait,
+        .done = false,
+    };
+}
+
+/// Callback variant of `requestMany`. Dispatches each reply to
+/// `handler.onMessage` and frees it. Returns the count of
+/// replies delivered and the reason the call ended.
+///
+/// To stop early on a specific reply, use `requestMany` (the
+/// iterator form) or supply a `sentinel` in `opts`.
+pub fn requestManyCallback(
+    self: *Client,
+    subject: []const u8,
+    payload: []const u8,
+    opts: RequestManyOptions,
+    handler: MsgHandler,
+) !RequestManyResult {
+    assert(subject.len > 0);
+    assert(opts.max_wait_ms > 0);
+
+    var iter = try self.requestMany(subject, payload, opts);
+    defer iter.deinit();
+    while (try iter.next()) |msg| {
+        defer msg.deinit();
+        // ADR-47: blocking handler time must not count against
+        // max_wait_ms. Advance start_ns by the dispatch duration so
+        // the next iter.next() sees the same remaining budget.
+        const dispatch_start = getNowNs(self.io);
+        handler.dispatch(&msg);
+        const dispatch_end = getNowNs(self.io);
+        iter.start_ns +|= dispatch_end -| dispatch_start;
+    }
+    return .{
+        .received = iter.received,
+        .termination = iter.termination,
+    };
+}
+
 /// Helper for connection timeout (nanoseconds).
 fn sleepNs(io: Io, timeout_ns: u64) void {
     io.sleep(.fromNanoseconds(timeout_ns), .awake) catch {};
