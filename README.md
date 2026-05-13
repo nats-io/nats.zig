@@ -208,6 +208,7 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 | events | `run-events` | EventHandler callbacks with external state |
 | callback | `run-callback` | `subscribe()` and `subscribeFn()` callback subscriptions |
 | request_reply_callback | `run-request-reply-callback` | Service responder via callback subscription |
+| request_many | `run-request-many` | Scatter/gather (ADR-47): one request, multiple replies |
 | graceful_shutdown | `run-graceful-shutdown` | `drain()` lifecycle, pre-shutdown health checks |
 | jetstream_publish | `run-jetstream-publish` | Create a stream and publish with ack confirmation |
 | jetstream_consume | `run-jetstream-consume` | Pull consumer fetch and acknowledgement |
@@ -678,6 +679,90 @@ if (reply) |msg| {
     }
 }
 ```
+
+### Scatter/Gather with `requestMany()`
+
+When a single request may have multiple responders -- or when one
+service streams several replies back -- use `requestMany()`. It
+implements [ADR-47 "Request Many"](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-47.md)
+and supports four stop conditions; whichever fires first ends the
+call:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `max_wait_ms` | `u32` (required, > 0) | Overall deadline for the call. |
+| `max_messages` | `u32` (0 disables) | Terminate after N replies. |
+| `stall_ms` | `u32` (0 disables) | Terminate if no reply arrives within this gap. Applies only *after* the first reply. |
+| `sentinel` | `?Sentinel` | Custom predicate that marks end-of-stream. Use `nats.emptyPayloadSentinel()` for the ADR-47 standard empty-payload marker. |
+
+A server 503 ("no responders") is always terminal.
+
+**Iterator form** -- pull replies one at a time, react to each:
+
+```zig
+var iter = try client.requestMany(
+    "rpc.scatter",
+    "ping",
+    .{ .max_wait_ms = 2000, .max_messages = 3 },
+);
+defer iter.deinit();
+
+while (try iter.next()) |msg| {
+    defer msg.deinit();
+    std.debug.print("reply: {s}\n", .{msg.data});
+}
+// iter.termination tells you why the call ended:
+//   .max_messages | .max_wait | .stall | .sentinel | .no_responders | .closed
+```
+
+**Callback form** -- replies dispatched to a `MsgHandler`, freed
+automatically; returns a summary of the run:
+
+```zig
+const Collector = struct {
+    count: u32 = 0,
+    pub fn onMessage(self: *@This(), msg: *const nats.Message) void {
+        self.count += 1;
+    }
+};
+
+var collector = Collector{};
+const result = try client.requestManyCallback(
+    "rpc.scatter",
+    "ping",
+    .{ .max_wait_ms = 2000, .max_messages = 3 },
+    nats.MsgHandler.init(Collector, &collector),
+);
+// result.received, result.termination
+```
+
+**Standard sentinel** -- services that stream replies often publish
+an empty payload to mark end-of-stream:
+
+```zig
+var iter = try client.requestMany(
+    "search.query",
+    "user:42",
+    .{
+        .max_wait_ms = 5000,
+        .sentinel = nats.emptyPayloadSentinel(),
+    },
+);
+defer iter.deinit();
+
+while (try iter.next()) |msg| {
+    defer msg.deinit();
+    // The sentinel message is consumed by the iterator, not yielded.
+}
+```
+
+`requestMany()` uses its own dedicated inbox subscription per call
+(not the shared response multiplexer described below). Each call
+pays one SUB/UNSUB but is fully isolated from concurrent
+single-reply `request()` traffic.
+
+See [`src/examples/request_many.zig`](src/examples/request_many.zig)
+for a runnable demo of both forms.
 
 ### Implementation Note: Response Multiplexer
 
@@ -1776,6 +1861,7 @@ layout, fixtures, and focused test targets.
 | Core Protocol | Supported |
 | Pub/Sub | Supported |
 | Request/Reply | Supported |
+| Scatter/Gather (Request Many, ADR-47) | Supported |
 | Headers | Supported |
 | Reconnection | Supported |
 | Event Callbacks | Supported |
