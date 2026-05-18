@@ -96,17 +96,30 @@ pub const MsgHandler = struct {
     }
 };
 
-/// Checks if a file descriptor is valid using fcntl.
-/// Returns false for negative fds or closed fds.
-/// Used to guard shutdown/close calls that panic on
-/// BADF in debug mode (Io.Threaded treats as bug).
-fn isValidFd(fd: std.posix.fd_t) bool {
-    if (fd < 0) return false;
-    const F_GETFD = 1;
-    const rc = std.posix.system.fcntl(fd, F_GETFD, @as(c_int, 0));
-    // fcntl returns the fd flags on success, or a
-    // large unsigned value (wrapped errno) on failure
-    return rc < 0x1000;
+/// Shutdown the stream's read side iff it is currently open.
+/// Serializes against io_task's reconnect lifecycle via stream_mutex,
+/// so we never call shutdown on an fd that io_task has closed.
+/// Io.Threaded.netShutdownPosix panics in debug on BADF/NOTSOCK/INVAL,
+/// so the flag check must be inside the lock.
+fn shutdownRecvIfOpen(self: *Client) void {
+    self.stream_mutex.lockUncancelable(self.io);
+    defer self.stream_mutex.unlock(self.io);
+    if (self.stream_open) {
+        self.stream.shutdown(self.io, .recv) catch {};
+    }
+}
+
+/// Close the stream iff it is currently open. Clears the flag so a
+/// subsequent close is a no-op (deinit is documented as idempotent).
+/// Caller must ensure io_task has exited before calling, so there
+/// is no concurrent reassignment of self.stream.
+fn closeIfOpen(self: *Client) void {
+    self.stream_mutex.lockUncancelable(self.io);
+    defer self.stream_mutex.unlock(self.io);
+    if (self.stream_open) {
+        self.stream.close(self.io);
+        self.stream_open = false;
+    }
 }
 
 /// Gets current monotonic time in nanoseconds.
@@ -773,6 +786,13 @@ last_error_msg_len: u8 = 0,
 
 // Background I/O task infrastructure
 write_mutex: Io.Mutex = .init,
+/// Serializes lifecycle ops on `stream` (open/close/shutdown/reassign).
+/// Innermost lock — never nested with any other client mutex.
+/// Order: sub_mutex -> read_mutex -> write_mutex -> stream_mutex.
+stream_mutex: Io.Mutex = .init,
+/// True iff `stream` currently holds a live, owned fd.
+/// Only mutated while holding `stream_mutex`.
+stream_open: bool = false,
 /// Future for background I/O task (for proper cancellation in deinit).
 io_task_future: ?Io.Future(void) = null,
 
@@ -879,6 +899,8 @@ pub fn connect(
 
     // Initialize background I/O task infrastructure
     client.write_mutex = .init;
+    client.stream_mutex = .init;
+    client.stream_open = false;
     client.io_task_future = null;
     client.publish_ring_buf = null;
 
@@ -939,7 +961,8 @@ pub fn connect(
     }
 
     client.stream = try connectToHost(io, parsed.host, parsed.port);
-    errdefer client.stream.close(io);
+    client.stream_open = true;
+    errdefer client.closeIfOpen();
 
     // TCP_NODELAY
     const enable: u32 = 1;
@@ -2350,10 +2373,9 @@ pub fn forceReconnect(self: *Client) !void {
     // Shutdown read only -- in-flight writes stay safe.
     // io_task sees EndOfStream, enters handleDisconnect
     // which calls cleanupForReconnect for full close
-    // with write_mutex. Guard: fd may be invalid.
-    if (isValidFd(self.stream.socket.handle)) {
-        self.stream.shutdown(self.io, .recv) catch {};
-    }
+    // with write_mutex. Guarded by stream_mutex so we
+    // never shutdown an fd io_task has already closed.
+    self.shutdownRecvIfOpen();
 }
 
 /// Gracefully drains with a timeout.
@@ -2808,18 +2830,16 @@ pub fn drain(self: *Client) !DrainResult {
     self.pushEvent(.{ .draining = {} });
 
     State.atomicStore(&self.state, .closed);
-    // Shutdown read to unblock io_task. Guard: fd may
-    // already be closed by io_task during disconnect.
-    if (isValidFd(self.stream.socket.handle)) {
-        self.stream.shutdown(self.io, .recv) catch {};
-    }
+    // Shutdown read to unblock io_task. stream_mutex serializes
+    // against io_task closing the fd during reconnect.
+    self.shutdownRecvIfOpen();
     // Wait for io_task to exit
     if (self.io_task_future) |*future| {
         _ = future.cancel(self.io);
         self.io_task_future = null;
     }
-    // Full close -- io_task exited
-    self.stream.close(self.io);
+    // Full close -- io_task exited, no concurrent reassignment.
+    self.closeIfOpen();
 
     if (self.server_info) |*info| {
         info.deinit(alloc);
@@ -3438,15 +3458,11 @@ pub fn deinit(self: *Client) void {
     const was_open = State.atomicLoad(&self.state) != .closed;
     State.atomicStore(&self.state, .closed);
 
-    // 2. Shutdown read side only -- unblocks fillMore()
-    //    Write fd stays valid for in-flight writes.
-    //    Guard: fd may already be closed by io_task during
-    //    disconnect or failed reconnect. BADF panics in
-    //    debug mode (Io.Threaded treats it as programmer
-    //    bug, not catchable). Validate fd before syscall.
-    if (was_open and isValidFd(self.stream.socket.handle)) {
-        self.stream.shutdown(self.io, .recv) catch {};
-    }
+    // 2. Shutdown read side only -- unblocks fillMore().
+    //    stream_mutex serializes against io_task closing the fd
+    //    in cleanupForReconnect; closeIfOpen below handles the
+    //    case where io_task already owns/closed the fd.
+    if (was_open) self.shutdownRecvIfOpen();
 
     // 3. Wait for io_task to exit (no concurrent writers after)
     if (self.io_task_future) |*future| {
@@ -3454,10 +3470,8 @@ pub fn deinit(self: *Client) void {
         self.io_task_future = null;
     }
 
-    // 4. Full close -- io_task exited, no concurrent writers
-    if (was_open and isValidFd(self.stream.socket.handle)) {
-        self.stream.close(self.io);
-    }
+    // 4. Full close -- io_task exited, no concurrent reassignment.
+    self.closeIfOpen();
 
     // 5. Cancel callback task and free event queue
     // SAFETY: Set event_queue = null BEFORE canceling to signal callback_task
@@ -4046,19 +4060,18 @@ pub fn cleanupForReconnect(self: *Client) void {
     // Wait for in-flight main-thread writes.
     // State is already .disconnected -- no new
     // writes will start (canSend() returns false).
-    self.write_mutex.lock(self.io) catch {
-        self.stream.close(self.io);
-        self.tls_client = null;
-        self.active_reader = &self.reader.interface;
-        self.active_writer = &self.writer.interface;
-        return;
-    };
-    self.stream.close(self.io);
+    const write_locked = if (self.write_mutex.lock(self.io))
+        true
+    else |_|
+        false;
+
+    self.closeIfOpen();
     self.tls_client = null;
     // Reset to raw TCP to avoid dangling TLS pointers
     self.active_reader = &self.reader.interface;
     self.active_writer = &self.writer.interface;
-    self.write_mutex.unlock(self.io);
+
+    if (write_locked) self.write_mutex.unlock(self.io);
 }
 
 /// Attempt connection to a single server.
@@ -4076,9 +4089,16 @@ pub fn tryConnect(
         server.getUrl(),
     );
 
-    // Connect
-    self.stream = try connectToHost(self.io, raw_host, port);
-    errdefer self.stream.close(self.io);
+    // Connect, then atomically install the new stream so deinit/drain
+    // see a consistent (handle, stream_open) pair.
+    const new_stream = try connectToHost(self.io, raw_host, port);
+    {
+        self.stream_mutex.lockUncancelable(self.io);
+        defer self.stream_mutex.unlock(self.io);
+        self.stream = new_stream;
+        self.stream_open = true;
+    }
+    errdefer self.closeIfOpen();
 
     // Set TCP_NODELAY
     const enable: u32 = 1;
