@@ -168,3 +168,19 @@ pub const Tls = struct {
     /// Using 32KB for good performance.
     pub const buffer_size: usize = 32 * 1024;
 };
+
+/// Platform-portability shims for socket and OS-level constants
+/// that Zig's stdlib does not yet expose uniformly across targets.
+pub const Posix = struct {
+    const std = @import("std");
+
+    /// TCP_NODELAY socket option value.
+    /// `std.posix.TCP` is `void` on platforms where Zig's stdlib has
+    /// not yet defined TCP socket options (e.g. FreeBSD). POSIX
+    /// defines TCP_NODELAY = 1 on every platform, so we fall back
+    /// to that literal when the stdlib name is unavailable.
+    pub const tcp_nodelay: u32 = if (std.posix.TCP != void)
+        std.posix.TCP.NODELAY
+    else
+        1;
+};
