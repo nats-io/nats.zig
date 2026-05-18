@@ -111,8 +111,10 @@ fn shutdownRecvIfOpen(self: *Client) void {
 
 /// Close the stream iff it is currently open. Clears the flag so a
 /// subsequent close is a no-op (deinit is documented as idempotent).
-/// Caller must ensure io_task has exited before calling, so there
-/// is no concurrent reassignment of self.stream.
+/// Caller must hold exclusive ownership of `self.stream` reassignment
+/// -- either io_task has exited (deinit / drain), or the caller IS
+/// io_task (cleanupForReconnect, tryConnect's errdefer). stream_mutex
+/// protects the close itself, not stream reassignment.
 fn closeIfOpen(self: *Client) void {
     self.stream_mutex.lockUncancelable(self.io);
     defer self.stream_mutex.unlock(self.io);
@@ -4065,6 +4067,12 @@ pub fn cleanupForReconnect(self: *Client) void {
     else |_|
         false;
 
+    // If write_mutex acquisition was cancelled we still proceed:
+    // state == .disconnected blocks any new writes, and an in-flight
+    // write hitting the closing fd will fail at the syscall. The
+    // stream close itself is serialized under stream_mutex by
+    // closeIfOpen, so the unprotected reader/writer resets below are
+    // only racing with writers that canSend() has already rejected.
     self.closeIfOpen();
     self.tls_client = null;
     // Reset to raw TCP to avoid dangling TLS pointers
@@ -4098,6 +4106,9 @@ pub fn tryConnect(
         self.stream = new_stream;
         self.stream_open = true;
     }
+    // errdefer MUST follow the lock block directly: no error-returning
+    // operations may be inserted between them, or new_stream would
+    // leak after stream_open=true but before the errdefer registers.
     errdefer self.closeIfOpen();
 
     // Set TCP_NODELAY
