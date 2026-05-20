@@ -11,13 +11,15 @@ pub fn build(b: *std.Build) void {
         "Enable debug prints for reconnection events (default: false)",
     ) orelse false;
 
-    // Io backend selector.
-    // 'threaded' = std.Io.Threaded (default, OS threads).
-    // 'evented'  = std.Io.Evented (Linux: Uring, BSD: Kqueue, Apple: Dispatch).
+    // Io backend selector. Only 'threaded' is supported today;
+    // 'evented' is a compile error because the internal io_task
+    // uses direct poll(2) and requires std.Io.Threaded as host.
+    // The option is kept so the wiring is in place when an evented
+    // codepath lands.
     const io_backend_choice = b.option(
         []const u8,
         "io_backend",
-        "Io backend: 'threaded' (default) or 'evented'",
+        "Io backend: 'threaded' (default). 'evented' is reserved for future use.",
     ) orelse "threaded";
 
     // Create build options module. Share a single Module instance

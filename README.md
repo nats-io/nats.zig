@@ -14,7 +14,13 @@
 
 A [Zig](https://ziglang.org/) client for the [NATS messaging system](https://nats.io).
 
-Built on `std.Io`.
+The public API is `std.Io`-idiomatic — `io.async`/futures, `Io.Select`,
+`Io.Queue`, cancellation, mutexes, and timers all work through the
+user-facing surface. Internally the client uses a background I/O thread
+with direct `poll(2)` for low-latency read/write interleaving, which
+currently requires `std.Io.Threaded` as the host runtime; a fully
+evented codepath is blocked on `std.Io.Evented` gaining real network
+read/write support upstream.
 
 > **Pre-1.0** - This library is under active development.
 > Core pub/sub, server-authenticated TLS, JetStream (pull + push
