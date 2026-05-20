@@ -1,11 +1,11 @@
 //! Comptime selector for the std.Io backend used by entry points.
 //!
-//! Picks between `std.Io.Threaded` (default) and `std.Io.Evented`
-//! at compile time, based on the `-Dio_backend=threaded|evented`
-//! build option. The library itself is backend-agnostic and
-//! accepts any `std.Io` via `Client.connect`; this module exists
-//! purely so applications, examples, and integration tests can
-//! flip backends without code changes.
+//! Currently only `std.Io.Threaded` is supported. The internal
+//! `io_task` background reader uses direct `poll(2)` for low-latency
+//! read/write interleaving and cannot be hosted by `std.Io.Evented`
+//! today; the build option and module are kept so the wiring is in
+//! place when evented support lands, but selecting
+//! `-Dio_backend=evented` is a compile error.
 //!
 //! Usage:
 //! ```
@@ -27,15 +27,14 @@ const want_evented = std.mem.eql(
     "evented",
 );
 
-/// The selected Io backend type, chosen at compile time from the
-/// `-Dio_backend=...` build option. Defaults to `std.Io.Threaded`.
-pub const Backend = if (want_evented) blk: {
-    if (std.Io.Evented == void) @compileError(
-        "std.Io.Evented is not supported on this target. " ++
-            "Build with -Dio_backend=threaded.",
-    );
-    break :blk std.Io.Evented;
-} else std.Io.Threaded;
+/// The selected Io backend type. Always `std.Io.Threaded` today —
+/// see the module doc for why `evented` is not yet supported.
+pub const Backend = if (want_evented) @compileError(
+    "io_backend=evented is not supported yet. The internal io_task " ++
+        "uses direct posix.poll() for low-latency read/write " ++
+        "interleaving and requires std.Io.Threaded as the host " ++
+        "runtime. Re-run with -Dio_backend=threaded (the default).",
+) else std.Io.Threaded;
 
 comptime {
     std.debug.assert(@sizeOf(Backend) > 0);
