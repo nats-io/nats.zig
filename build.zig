@@ -47,10 +47,12 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
 
     // Backend selector module. Used by entry points (examples,
-    // integration tests) so they can flip between
-    // std.Io.Threaded and std.Io.Evented via -Dio_backend=...
-    // The library module itself does NOT depend on this; only
-    // application code chooses a backend.
+    // integration tests) to obtain an Io backend. Today only
+    // std.Io.Threaded is supported; the indirection is kept so
+    // -Dio_backend=evented can switch transparently once upstream
+    // Io.Evented gains network read/write. The library module
+    // itself does NOT depend on this; only application code
+    // chooses a backend.
     const io_backend_mod = b.createModule(.{
         .root_source_file = b.path("src/io_backend.zig"),
         .target = target,
@@ -63,8 +65,9 @@ pub fn build(b: *std.Build) void {
     });
 
     // Standalone test for the io_backend selector module. Ensures
-    // src/io_backend.zig compiles under -Dio_backend=threaded and
-    // -Dio_backend=evented.
+    // src/io_backend.zig compiles under -Dio_backend=threaded
+    // (the only supported backend today; evented is gated behind
+    // @compileError).
     const io_backend_tests = b.addTest(.{ .root_module = io_backend_mod });
     const run_io_backend_tests = b.addRunArtifact(io_backend_tests);
     test_step.dependOn(&run_io_backend_tests.step);

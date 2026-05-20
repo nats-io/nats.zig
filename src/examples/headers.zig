@@ -4,7 +4,6 @@
 //! received header metadata.
 //!
 //! Run with: zig build run-headers
-//!   or:    zig build run-headers -Dio_backend=evented
 //!
 //! Prerequisites: nats-server running on localhost:4222
 

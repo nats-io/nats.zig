@@ -63,6 +63,10 @@ pub fn initWithEnviron(
     environ: std.process.Environ,
 ) !void {
     std.debug.assert(@sizeOf(Backend) > 0);
+    // The else branch is dead today (Backend is always Threaded;
+    // evented fires @compileError). Zig eliminates it at comptime.
+    // Kept so the wrapper is ready for Io.Evented's init signature
+    // when upstream lands.
     if (Backend == std.Io.Threaded) {
         out.* = std.Io.Threaded.init(gpa, .{ .environ = environ });
     } else {
