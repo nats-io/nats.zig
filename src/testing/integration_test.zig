@@ -30,9 +30,10 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     utils.setProcessEnviron(init.minimal.environ);
 
-    // Use the io_backend selector instead of init.io so
-    // -Dio_backend=threaded|evented is exercised end-to-end by
-    // the test runner itself (server startup, file I/O, sleeps).
+    // Use the io_backend selector instead of init.io so the
+    // -Dio_backend choice (today: threaded only) is exercised
+    // end-to-end by the test runner itself (server startup,
+    // file I/O, sleeps).
     const test_io = utils.newIo(allocator);
     defer test_io.deinit();
     const io = test_io.io();
