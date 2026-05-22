@@ -342,6 +342,31 @@ pub fn build(b: *std.Build) void {
     run_req_rep_cb.dependOn(&req_rep_cb_cmd.step);
     req_rep_cb_cmd.step.dependOn(b.getInstallStep());
 
+    // 11b. Request Many (scatter/gather, ADR-47) example
+    const request_many_exe = b.addExecutable(.{
+        .name = "example-request-many",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(
+                "src/examples/request_many.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+                .{ .name = "io_backend", .module = io_backend_mod },
+            },
+        }),
+    });
+    b.installArtifact(request_many_exe);
+
+    const run_request_many = b.step(
+        "run-request-many",
+        "Run request-many scatter/gather (ADR-47) example",
+    );
+    const request_many_cmd = b.addRunArtifact(request_many_exe);
+    run_request_many.dependOn(&request_many_cmd.step);
+    request_many_cmd.step.dependOn(b.getInstallStep());
+
     // 12. JetStream Publish example
     const js_pub_exe = b.addExecutable(.{
         .name = "example-jetstream-publish",

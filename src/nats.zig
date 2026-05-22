@@ -52,6 +52,14 @@ pub const EventHandler = Client.EventHandler;
 // Message callback type (nested in Client)
 pub const MsgHandler = Client.MsgHandler;
 
+// Scatter/gather request (ADR-47, "Request Many")
+pub const RequestManyOptions = Client.RequestManyOptions;
+pub const RequestManyIter = Client.RequestManyIter;
+pub const RequestManyResult = Client.RequestManyResult;
+pub const RequestManyTermination = Client.RequestManyTermination;
+pub const Sentinel = Client.Sentinel;
+pub const emptyPayloadSentinel = Client.emptyPayloadSentinel;
+
 // Events module exports
 const events = @import("events.zig");
 pub const EventError = events.Error;

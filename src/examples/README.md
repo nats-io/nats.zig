@@ -15,6 +15,7 @@ Run with `zig build run-<name>` (requires `nats-server` on localhost:4222).
 | events | `run-events` | EventHandler callbacks with external state |
 | callback | `run-callback` | `subscribe()` and `subscribeFn()` callback subscriptions |
 | request_reply_callback | `run-request-reply-callback` | Service responder via callback subscription |
+| request_many | `run-request-many` | Scatter/gather (ADR-47): one request, multiple replies, iterator + callback |
 | graceful_shutdown | `run-graceful-shutdown` | `drain()` lifecycle, pre-shutdown health checks |
 | jetstream_publish | `run-jetstream-publish` | Create a stream and publish with ack confirmation |
 | jetstream_consume | `run-jetstream-consume` | Pull consumer fetch and acknowledgement |
