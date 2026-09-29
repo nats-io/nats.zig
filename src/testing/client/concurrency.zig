@@ -752,41 +752,31 @@ pub fn testBlockingNextMsgUnsubscribeWakeup(
     };
     defer sub.deinit();
 
-    var wake_thread = io.async(delayedUnsubscribe, .{ io, sub, 20 });
-    defer _ = wake_thread.cancel(io);
-
-    const Sel = std.Io.Select(union(enum) {
-        recv: anyerror!nats.Client.Message,
-        timeout: void,
-    });
-    var buf: [2]Sel.Union = undefined;
-    var sel = Sel.init(io, &buf);
-    sel.async(.recv, nats.Client.Sub.nextMsg, .{sub});
-    sel.async(.timeout, sleepMs, .{ io, 200 });
-
-    const result = sel.await() catch {
-        sel.cancelDiscard();
-        reportResult("blocking_nextmsg_unsub", false, "select canceled");
+    // delayedUnsubscribe must run *concurrently* with the blocked nextMsg to
+    // wake it -- io.concurrent, not io.async (async can run inline when the
+    // async pool is saturated on ≤2-core machines). The timeout here is a plain
+    // nextMsgTimeout, NOT a Select(nextMsg, sleep) race: with a
+    // third async task (this unsub) already holding the single 2-core async
+    // slot, the Select's recv arm overflowed to an inline nextMsg and paniced.
+    var wake_thread = io.concurrent(delayedUnsubscribe, .{ io, sub, 20 }) catch {
+        reportResult("blocking_nextmsg_unsub", false, "spawn unsub failed");
         return;
     };
-    sel.cancelDiscard();
+    defer _ = wake_thread.cancel(io);
 
-    switch (result) {
-        .recv => |recv_result| {
-            if (recv_result) |msg| {
-                msg.deinit();
-                reportResult("blocking_nextmsg_unsub", false, "unexpected message");
-            } else |err| switch (err) {
-                error.Closed, error.Canceled => {
-                    reportResult("blocking_nextmsg_unsub", true, "");
-                },
-                else => {
-                    reportResult("blocking_nextmsg_unsub", false, @errorName(err));
-                },
-            }
-        },
-        .timeout => {
+    if (sub.nextMsgTimeout(200)) |maybe_msg| {
+        if (maybe_msg) |msg| {
+            msg.deinit();
+            reportResult("blocking_nextmsg_unsub", false, "unexpected message");
+        } else {
             reportResult("blocking_nextmsg_unsub", false, "nextMsg did not wake");
+        }
+    } else |err| switch (err) {
+        error.Closed, error.Canceled => {
+            reportResult("blocking_nextmsg_unsub", true, "");
+        },
+        else => {
+            reportResult("blocking_nextmsg_unsub", false, @errorName(err));
         },
     }
 }

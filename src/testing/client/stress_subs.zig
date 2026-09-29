@@ -28,7 +28,7 @@ pub fn testFiveThousandSubs(
         allocator,
         sub_io.io(),
         url,
-        .{ .sub_queue_size = 64, .reconnect = false },
+        .{ .sub_queue_size = 64, .reconnect = false, .max_subscriptions = NUM_SUBS },
     ) catch {
         reportResult("5k_subs", false, "sub connect");
         return;
@@ -231,7 +231,7 @@ pub fn testSubsThenResubscribe(
         allocator,
         io.io(),
         url,
-        .{ .sub_queue_size = 64, .reconnect = false },
+        .{ .sub_queue_size = 64, .reconnect = false, .max_subscriptions = COUNT },
     ) catch {
         reportResult("resub", false, "connect");
         return;
@@ -355,7 +355,7 @@ pub fn testWildcardFanOut(
         allocator,
         sub_io.io(),
         url,
-        .{ .sub_queue_size = 128, .reconnect = false },
+        .{ .sub_queue_size = 128, .reconnect = false, .max_subscriptions = NUM_SUBS + 1 },
     ) catch {
         reportResult("wildcard_fanout", false, "connect");
         return;

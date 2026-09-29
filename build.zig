@@ -11,15 +11,14 @@ pub fn build(b: *std.Build) void {
         "Enable debug prints for reconnection events (default: false)",
     ) orelse false;
 
-    // Io backend selector. Only 'threaded' is supported today;
-    // 'evented' is a compile error because the internal io_task
-    // uses direct poll(2) and requires std.Io.Threaded as host.
-    // The option is kept so the wiring is in place when an evented
-    // codepath lands.
+    // Io backend for entry points (examples, integration tests). The library
+    // itself takes `io: std.Io` and is backend-agnostic; this only selects what
+    // the fork's own executables construct. 'threaded' is the default while the
+    // evented driver is being brought up; 'zio' runs them on zio's evented Io.
     const io_backend_choice = b.option(
         []const u8,
         "io_backend",
-        "Io backend: 'threaded' (default). 'evented' is reserved for future use.",
+        "Io backend for examples/tests: 'threaded' (default) or 'zio'.",
     ) orelse "threaded";
 
     // Create build options module. Share a single Module instance
@@ -63,6 +62,18 @@ pub fn build(b: *std.Build) void {
             },
         },
     });
+
+    // zio is fetched only when actually selected — a normal `zig build`
+    // (threaded) never pulls it, and neither does a consumer of the `nats`
+    // module. lazyDependency returns null on the fetch-and-restart pass.
+    if (std.mem.eql(u8, io_backend_choice, "zio")) {
+        if (b.lazyDependency("zio", .{
+            .target = target,
+            .optimize = optimize,
+        })) |zio_dep| {
+            io_backend_mod.addImport("zio", zio_dep.module("zio"));
+        }
+    }
 
     // Standalone test for the io_backend selector module. Ensures
     // src/io_backend.zig compiles under -Dio_backend=threaded
@@ -756,4 +767,72 @@ pub fn build(b: *std.Build) void {
         tls_integration_exe,
     );
     run_tls_integration.dependOn(&tls_integration_cmd.step);
+
+    // UNIX domain socket integration tests (nats+uds:// scheme).
+    // Requires a nats-server build with UDS support on PATH.
+    const uds_integration_exe = b.addExecutable(.{
+        .name = "uds-integration-test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(
+                "src/testing/uds_integration_test.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+                .{ .name = "io_backend", .module = io_backend_mod },
+            },
+        }),
+    });
+    b.installArtifact(uds_integration_exe);
+
+    const run_uds_integration = b.step(
+        "test-integration-uds",
+        "Run only the UNIX domain socket integration tests",
+    );
+    const uds_integration_cmd = b.addRunArtifact(
+        uds_integration_exe,
+    );
+    run_uds_integration.dependOn(&uds_integration_cmd.step);
+
+    // Baseline harnesses (bench/*.zig). Import nats + io_backend like the
+    // examples; used to capture the pre-port baseline (doc/zio-port-baseline.md)
+    // and, later, the post-port comparison.
+    const bench_footprint_exe = b.addExecutable(.{
+        .name = "bench-footprint",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/footprint.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+                .{ .name = "io_backend", .module = io_backend_mod },
+            },
+        }),
+    });
+    b.installArtifact(bench_footprint_exe);
+    const run_bench_footprint = b.step(
+        "bench-footprint",
+        "Run the idle-client footprint baseline",
+    );
+    run_bench_footprint.dependOn(&b.addRunArtifact(bench_footprint_exe).step);
+
+    const bench_throughput_exe = b.addExecutable(.{
+        .name = "bench-throughput",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/throughput.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "nats", .module = nats },
+                .{ .name = "io_backend", .module = io_backend_mod },
+            },
+        }),
+    });
+    b.installArtifact(bench_throughput_exe);
+    const run_bench_throughput = b.step(
+        "bench-throughput",
+        "Run the throughput + request/reply RTT baseline",
+    );
+    run_bench_throughput.dependOn(&b.addRunArtifact(bench_throughput_exe).step);
 }

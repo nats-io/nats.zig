@@ -322,10 +322,10 @@ pub fn testHeadersRequestReply(allocator: std.mem.Allocator) void {
         }
     };
 
-    var handler = io_r.io().async(Handler.handle, .{
+    var handler = io_r.io().concurrent(Handler.handle, .{
         responder,
         sub,
-    });
+    }) catch @panic("test: responder spawn failed (io.concurrent unavailable)");
     defer _ = handler.cancel(io_r.io());
 
     const hdrs = [_]headers.Entry{

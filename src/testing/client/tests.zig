@@ -36,10 +36,13 @@ pub const autoflush = @import("autoflush.zig");
 pub const async_patterns = @import("async_patterns.zig");
 pub const dynamic_jwt = @import("dynamic_jwt.zig");
 pub const callback = @import("callback.zig");
+pub const event_driven = @import("event_driven.zig");
 pub const stress_subs = @import("stress_subs.zig");
 pub const jetstream = @import("jetstream.zig");
 pub const multithread = @import("multithread.zig");
 pub const micro = @import("micro.zig");
+pub const cancellation = @import("cancellation.zig");
+pub const backpressure = @import("backpressure.zig");
 
 /// Runs all client tests.
 pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
@@ -73,9 +76,12 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     reconnect.runAll(allocator, manager);
     dynamic_jwt.runAll(allocator, manager);
     callback.runAll(allocator);
+    event_driven.runAll(allocator);
     stress_subs.runAll(allocator);
     jetstream.runAll(allocator, manager);
     jetstream.runReconnectTests(allocator, manager);
     multithread.runAll(allocator);
     micro.runAll(allocator, manager);
+    cancellation.runAll(allocator);
+    backpressure.runAll(allocator);
 }

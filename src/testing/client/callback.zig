@@ -815,6 +815,76 @@ pub fn testCallbackRequestReply(
     reportResult("callback_request_reply", true, "");
 }
 
+// -- Close-from-handler: a handler that deinit()s its own subscription --
+// The delivery fiber IS the caller, so a block-joining teardown would
+// self-deadlock. The reaper defers the join until the fiber exits, so this
+// must complete cleanly (with the old join-in-deinit, the suite would hang).
+
+const SelfCloseHandler = struct {
+    sub: **nats.Client.Sub,
+    fired: *bool,
+
+    pub fn onMessage(self: *@This(), _: *const nats.Message) void {
+        self.fired.* = true;
+        // Close our own subscription from inside its own callback.
+        self.sub.*.deinit();
+    }
+};
+
+pub fn testCallbackCloseFromHandler(allocator: std.mem.Allocator) void {
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const io = utils.newIo(allocator);
+    defer io.deinit();
+
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch {
+        reportResult("callback_close_from_handler", false, "connect failed");
+        return;
+    };
+    defer client.deinit();
+
+    var sub_ptr: *nats.Client.Sub = undefined;
+    var fired = false;
+    var handler = SelfCloseHandler{ .sub = &sub_ptr, .fired = &fired };
+    const sub = client.subscribe(
+        "selfclose.subject",
+        nats.MsgHandler.init(SelfCloseHandler, &handler),
+    ) catch {
+        reportResult("callback_close_from_handler", false, "subscribe failed");
+        return;
+    };
+    sub_ptr = sub;
+    // Teardown is driven from inside the handler; deinit() is idempotent
+    // (reap_queued), so a stray extra deinit would be harmless, but we leave
+    // ownership with the handler here.
+
+    io.io().sleep(.fromMilliseconds(100), .awake) catch {};
+    client.publish("selfclose.subject", "x") catch {
+        reportResult("callback_close_from_handler", false, "publish failed");
+        return;
+    };
+    client.flush(1_000_000_000) catch {};
+    // If the self-close deadlocked, the suite hangs here instead of asserting.
+    io.io().sleep(.fromMilliseconds(200), .awake) catch {};
+
+    if (!fired) {
+        reportResult("callback_close_from_handler", false, "handler never fired");
+        return;
+    }
+    // The client is still usable after the in-handler self-close.
+    client.flush(1_000_000_000) catch {
+        reportResult("callback_close_from_handler", false, "client unusable after self-close");
+        return;
+    };
+    reportResult("callback_close_from_handler", true, "");
+}
+
 pub fn runAll(allocator: std.mem.Allocator) void {
     testCallbackMsgHandler(allocator);
     testCallbackPlainFn(allocator);
@@ -825,4 +895,5 @@ pub fn runAll(allocator: std.mem.Allocator) void {
     testCallbackDataIntegrity(allocator);
     testCallbackMixedModes(allocator);
     testCallbackRequestReply(allocator);
+    testCallbackCloseFromHandler(allocator);
 }

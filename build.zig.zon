@@ -4,7 +4,18 @@
     // Changing fingerprint has security and trust implications.
     .fingerprint = 0x31f7624fb15addf7,
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{},
+    .dependencies = .{
+        // Test/example-only. The library takes `io: std.Io` and depends on
+        // nothing; this backend lets the suite and examples run on zio's evented
+        // Io. `lazy` so consumers of the `nats` module never fetch it. Pinned
+        // past the v0.16.0 tag: it lacks required fixes to cross-thread wakeups
+        // and timed-wait cancellation (zio 7e517a6, f6983a3, eb0a408).
+        .zio = .{
+            .url = "git+https://github.com/lalinsky/zio#5e75fbe9b1af80369189efc3fcf1bfa6d337330f",
+            .hash = "zio-0.16.0-xHbVVOtfJAAANRCJKT7erFSWuE0St8GZDHcEMoxWaEPj",
+            .lazy = true,
+        },
+    },
     .paths = .{
         "CONTRIBUTING.md",
         "LICENSE",

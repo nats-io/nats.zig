@@ -168,10 +168,10 @@ pub fn testRequestMsg(allocator: std.mem.Allocator) void {
     };
 
     // Spawn responder task
-    var responder_future = io_resp.io().async(
+    var responder_future = io_resp.io().concurrent(
         responderTask,
         .{ &sub, responder },
-    );
+    ) catch @panic("test: responder spawn failed (io.concurrent unavailable)");
     defer responder_future.cancel(io_resp.io());
 
     // Create message to send as request
@@ -282,10 +282,10 @@ pub fn testRequestMsgOrdering(allocator: std.mem.Allocator) void {
         return;
     };
 
-    var handler = io_resp.io().async(
+    var handler = io_resp.io().concurrent(
         requestMsgOrderingResponder,
         .{ &sub, responder },
-    );
+    ) catch @panic("test: responder spawn failed (io.concurrent unavailable)");
     defer handler.cancel(io_resp.io());
 
     requester.publish("test.requestmsg.ordering.state", "state-update") catch {

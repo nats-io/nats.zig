@@ -27,6 +27,9 @@ pub const Server = struct {
     last_attempt_ns: u64 = 0,
     /// Whether this server uses TLS (from tls:// scheme).
     use_tls: bool = false,
+    /// Whether this server is reached over a UNIX domain socket
+    /// (from nats+uds:// scheme). When true, getHost() is the socket path.
+    is_uds: bool = false,
 
     /// Get the URL as a slice.
     pub fn getUrl(self: *const Server) []const u8 {
@@ -84,6 +87,10 @@ pub const ServerPool = struct {
             remaining = remaining[6..];
             server.host_start = 6;
             server.use_tls = true;
+        } else if (std.mem.startsWith(u8, remaining, "nats+uds://")) {
+            remaining = remaining["nats+uds://".len..];
+            server.host_start = "nats+uds://".len;
+            server.is_uds = true;
         } else if (std.mem.startsWith(u8, remaining, "nats://")) {
             remaining = remaining[7..];
             server.host_start = 7;
@@ -92,6 +99,19 @@ pub const ServerPool = struct {
         if (std.mem.indexOf(u8, remaining, "@")) |at_pos| {
             remaining = remaining[at_pos + 1 ..];
             server.host_start += @intCast(at_pos + 1);
+        }
+
+        // For nats+uds the remainder is the socket path verbatim; there is
+        // no host/port to split out.
+        if (server.is_uds) {
+            if (remaining.len == 0 or remaining.len > 255)
+                return error.InvalidUrl;
+            server.host_len = @intCast(remaining.len);
+            server.port = 0;
+            assert(server.host_len > 0);
+            self.servers[self.count] = server;
+            self.count += 1;
+            return;
         }
 
         if (remaining.len > 0 and remaining[0] == '[') {
@@ -358,4 +378,31 @@ test "server pool mixed schemes" {
     try std.testing.expectEqual(@as(u8, 2), pool.count);
     try std.testing.expect(!pool.servers[0].use_tls);
     try std.testing.expect(pool.servers[1].use_tls);
+}
+
+test "server pool nats+uds scheme" {
+    const pool = try ServerPool.init("nats+uds:///run/snats/snats.sock");
+    try std.testing.expectEqual(@as(u8, 1), pool.count);
+    try std.testing.expect(pool.servers[0].is_uds);
+    try std.testing.expect(!pool.servers[0].use_tls);
+    try std.testing.expectEqualStrings(
+        "/run/snats/snats.sock",
+        pool.servers[0].getHost(),
+    );
+    try std.testing.expectEqual(@as(u16, 0), pool.servers[0].port);
+}
+
+test "server pool nats+uds with user" {
+    const pool = try ServerPool.init("nats+uds://user:pass@/tmp/snats.sock");
+    try std.testing.expect(pool.servers[0].is_uds);
+    try std.testing.expectEqualStrings("/tmp/snats.sock", pool.servers[0].getHost());
+}
+
+test "server pool nats+uds missing path" {
+    try std.testing.expectError(error.InvalidUrl, ServerPool.init("nats+uds://"));
+}
+
+test "server pool nats scheme not uds" {
+    const pool = try ServerPool.init("nats://localhost:4222");
+    try std.testing.expect(!pool.servers[0].is_uds);
 }

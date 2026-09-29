@@ -37,6 +37,11 @@ pub const Slab = struct {
     slice_count: u32,
     free_head: u32,
     alloc_count: u32,
+    /// Debug-only: one bit per slot, set while the slot is on the free list.
+    /// Gives O(1) double-free detection (freeing a slot whose bit is already
+    /// set is a double free), replacing the old O(n) free-list walk. Empty (and
+    /// unused) in non-Debug builds.
+    free_bits: []u8,
 
     const NONE: u32 = 0xFFFF_FFFF;
 
@@ -60,6 +65,7 @@ pub const Slab = struct {
             .slice_count = slice_count,
             .free_head = 0,
             .alloc_count = 0,
+            .free_bits = &.{},
         };
 
         var i: u32 = 0;
@@ -69,12 +75,25 @@ pub const Slab = struct {
             @as(*u32, @ptrCast(@alignCast(slice.ptr))).* = next;
         }
 
+        if (builtin.mode == .Debug) {
+            const nbytes = (@as(usize, slice_count) + 7) / 8;
+            const bits = std.heap.page_allocator.alloc(u8, nbytes) catch {
+                std.heap.page_allocator.free(raw);
+                return error.MmapFailed;
+            };
+            @memset(bits, 0xFF); // every slot starts on the free list
+            slab.free_bits = bits;
+        }
+
         return slab;
     }
 
     /// Release page-allocated memory.
     pub fn deinit(self: *Slab) void {
         std.heap.page_allocator.free(self.memory);
+        if (builtin.mode == .Debug and self.free_bits.len > 0) {
+            std.heap.page_allocator.free(self.free_bits);
+        }
         self.* = undefined;
     }
 
@@ -88,33 +107,33 @@ pub const Slab = struct {
         self.free_head = @as(*u32, @ptrCast(@alignCast(slice.ptr))).*;
         self.alloc_count += 1;
 
+        if (builtin.mode == .Debug) {
+            // Slot is now allocated: clear its free bit.
+            const shift: u3 = @intCast(idx & 7);
+            self.free_bits[idx >> 3] &= ~(@as(u8, 1) << shift);
+        }
+
         return slice;
     }
 
     /// O(1) deallocation - push to embedded free list.
-    /// Debug builds detect double-free by walking the free list.
+    /// Debug builds detect double-free in O(1) via the per-slot free bit.
     pub inline fn free(self: *Slab, ptr: [*]u8) void {
         const idx = self.ptrToIndex(ptr);
         assert(idx < self.slice_count);
 
         if (builtin.mode == .Debug) {
-            assert(!self.isInFreeList(idx));
+            // The slot's free bit must be clear (currently allocated). A set
+            // bit means it is already on the free list -> double free.
+            const shift: u3 = @intCast(idx & 7);
+            const bit = @as(u8, 1) << shift;
+            assert((self.free_bits[idx >> 3] & bit) == 0);
+            self.free_bits[idx >> 3] |= bit;
         }
 
         @as(*u32, @ptrCast(@alignCast(ptr))).* = self.free_head;
         self.free_head = idx;
         self.alloc_count -= 1;
-    }
-
-    /// Debug helper: check if index is already in free list (O(n)).
-    fn isInFreeList(self: *Slab, target_idx: u32) bool {
-        var current = self.free_head;
-        while (current != NONE) {
-            if (current == target_idx) return true;
-            const slice = self.getSliceByIndex(current);
-            current = @as(*u32, @ptrCast(@alignCast(slice.ptr))).*;
-        }
-        return false;
     }
 
     inline fn getSliceByIndex(self: *Slab, idx: u32) []u8 {
@@ -163,8 +182,21 @@ pub const TieredSlab = struct {
     fallback: Allocator,
     fallback_count: u32,
 
-    /// Initialize all tiers with mmap'd memory.
+    /// Initialize all tiers with mmap'd memory using the comptime default
+    /// tier counts (derived from defaults.Memory.queue_size).
     pub fn init(fallback_allocator: Allocator) !TieredSlab {
+        return initWithCounts(fallback_allocator, Config.tier_counts);
+    }
+
+    /// Initialize all tiers with runtime-supplied slice counts (one per
+    /// tier). Tier slice SIZES stay fixed (comptime); only the per-tier COUNT
+    /// is runtime, so a low-rate client can preallocate a tiny slab while a
+    /// high-throughput client preallocates a large one. Backing memory is
+    /// page-allocated per tier by Slab.init, exactly as the default path.
+    pub fn initWithCounts(
+        fallback_allocator: Allocator,
+        tier_counts: [Config.TIER_COUNT]u32,
+    ) !TieredSlab {
         var ts: TieredSlab = undefined;
         ts.fallback = fallback_allocator;
         ts.fallback_count = 0;
@@ -176,7 +208,7 @@ pub const TieredSlab = struct {
             }
         }
 
-        for (Config.tier_sizes, Config.tier_counts, 0..) |size, count, i| {
+        for (Config.tier_sizes, tier_counts, 0..) |size, count, i| {
             ts.tiers[i] = try Slab.init(size, count);
             initialized += 1;
         }
@@ -211,8 +243,34 @@ pub const TieredSlab = struct {
             }
         }
 
-        self.fallback_count += 1;
+        // Fallback (tier exhausted / oversized). fallback_count is bumped
+        // atomically because a fallback buffer may be freed on a different thread
+        // than the one that allocated it (see freeFallback / Message.deinit).
+        _ = @atomicRmw(u32, &self.fallback_count, .Add, 1, .monotonic);
         return self.fallback.alloc(u8, size) catch null;
+    }
+
+    /// True if `ptr` belongs to one of the preallocated tier pools (as opposed
+    /// to a fallback allocation). Pure range check over fixed tier memory, so it
+    /// is safe to call from any thread.
+    pub inline fn isPooled(self: *const TieredSlab, ptr: [*]u8) bool {
+        inline for (&self.tiers) |*tier| {
+            if (tier.contains(ptr)) return true;
+        }
+        return false;
+    }
+
+    /// Free a fallback (non-pool) buffer directly. Thread-safe: the fallback
+    /// allocator is the client allocator, already used concurrently (non-slab
+    /// Message.deinit frees on producer threads while the reader allocates), and
+    /// fallback_count is atomic. Pool buffers must NOT be passed here -- they go
+    /// back through the reader via the return queue (tier free lists are single
+    /// owner). Asserted in debug via isPooled.
+    pub fn freeFallback(self: *TieredSlab, buf: []u8) void {
+        assert(buf.len > 0);
+        assert(!self.isPooled(buf.ptr));
+        _ = @atomicRmw(u32, &self.fallback_count, .Sub, 1, .monotonic);
+        self.fallback.free(buf);
     }
 
     /// Free to appropriate tier or fallback.
@@ -228,7 +286,7 @@ pub const TieredSlab = struct {
             }
         }
 
-        self.fallback_count -= 1;
+        _ = @atomicRmw(u32, &self.fallback_count, .Sub, 1, .monotonic);
         self.fallback.free(buf);
     }
 
@@ -395,6 +453,39 @@ test "TieredSlab tier selection" {
 
     const stats = ts.getStats();
     try std.testing.expectEqual(@as(u32, 0), stats.totalAllocated());
+}
+
+test "TieredSlab runtime sizing: tiny queue size -> tiny slab" {
+    const fallback = std.testing.allocator;
+
+    // A tiny queue size (like a low-rate isp-acs client) must yield a slab
+    // whose per-tier capacities match the derived counts and whose total
+    // preallocation is a small fraction of the comptime default.
+    const tiny_q: u32 = 128;
+    const counts = defaults.Memory.tierCountsFor(tiny_q);
+    try std.testing.expectEqualSlices(
+        u32,
+        &[_]u32{ 128, 128, 64, 32, 8 },
+        &counts,
+    );
+
+    var ts = try TieredSlab.initWithCounts(fallback, counts);
+    defer ts.deinit();
+
+    const stats = ts.getStats();
+    try std.testing.expectEqual(@as(u32, 0), stats.totalAllocated());
+    // Sum of per-tier capacities equals the sum of the derived counts.
+    var expected_cap: u32 = 0;
+    for (counts) |c| expected_cap += c;
+    try std.testing.expectEqual(expected_cap, stats.totalCapacity());
+
+    // Total preallocated bytes for tiny_q must be far below the comptime
+    // default (which is sized by defaults.Memory.queue_size = 8192).
+    var tiny_bytes: usize = 0;
+    for (Config.tier_sizes, counts) |size, count| {
+        tiny_bytes += @as(usize, size) * count;
+    }
+    try std.testing.expect(tiny_bytes * 16 < Config.total_memory);
 }
 
 test "SlabAllocator interface" {

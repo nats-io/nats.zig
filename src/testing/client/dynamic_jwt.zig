@@ -26,6 +26,10 @@ const Dir = std.Io.Dir;
 const op_raw_seed = [_]u8{11} ** 32;
 const acct_raw_seed = [_]u8{22} ** 32;
 const user_raw_seed = [_]u8{33} ** 32;
+// nats-server runs JetStream, which requires a configured system account; without one
+// the server fatals on startup ("system account not setup"). Generate a minimal
+// operator-signed system account and wire it into the config.
+const sys_raw_seed = [_]u8{44} ** 32;
 
 /// Generates all keypairs and JWTs, writes config.
 /// Returns formatted credentials string in out_creds.
@@ -106,6 +110,26 @@ fn setupDynamicAuth(
         },
     ) catch return null;
 
+    // System account (operator-signed), required by the server's JetStream.
+    const sys_ed = Ed25519.KeyPair.generateDeterministic(
+        sys_raw_seed,
+    ) catch return null;
+    const sys_kp = nkey_mod.KeyPair{ .kp = sys_ed, .key_type = .account };
+    var sys_pk_buf: [56]u8 = undefined;
+    const sys_pub = sys_kp.publicKey(&sys_pk_buf);
+    var sys_jwt_buf: [2048]u8 = undefined;
+    const sys_jwt = jwt_mod.encodeAccountClaims(
+        &sys_jwt_buf,
+        sys_pub,
+        "SYS",
+        op_kp,
+        1700000000,
+        // System account must NOT have JetStream: zero storage disables it
+        // (the default -1 = unlimited enables it, which the server forbids on the
+        // system account).
+        .{ .mem_storage = 0, .disk_storage = 0 },
+    ) catch return null;
+
     // Encode user seed for creds file
     var seed_buf: [58]u8 = undefined;
     const user_seed = user_kp.encodeSeed(&seed_buf);
@@ -118,7 +142,7 @@ fn setupDynamicAuth(
     ) catch return null;
 
     // Write server config file
-    writeConfig(io, op_jwt, acct_pub, acct_jwt) catch
+    writeConfig(io, op_jwt, acct_pub, acct_jwt, sys_pub, sys_jwt) catch
         return null;
 
     return creds_str;
@@ -130,6 +154,8 @@ fn writeConfig(
     op_jwt: []const u8,
     acct_pub: []const u8,
     acct_jwt: []const u8,
+    sys_pub: []const u8,
+    sys_jwt: []const u8,
 ) !void {
     const file = try Dir.createFile(
         Dir.cwd(),
@@ -143,11 +169,13 @@ fn writeConfig(
     var writer = file.writer(io, &buf);
     try writer.interface.print(
         "operator: {s}\n" ++
+            "system_account: {s}\n" ++
             "resolver: MEMORY\n" ++
             "resolver_preload: {{\n" ++
             "  {s}: {s}\n" ++
+            "  {s}: {s}\n" ++
             "}}\n",
-        .{ op_jwt, acct_pub, acct_jwt },
+        .{ op_jwt, sys_pub, acct_pub, acct_jwt, sys_pub, sys_jwt },
     );
     try writer.interface.flush();
 }
@@ -342,15 +370,21 @@ pub fn runAll(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
 ) void {
+    // Only this suite's server may be stopped below. If its start fails
+    // (e.g. the server rejects the generated JWT config), count() does not
+    // grow, so a bare count()-1 would tear down an unrelated, still-needed
+    // server (the primary on test_port), breaking every later suite.
+    const count_before = manager.count();
     testDynamicJwtConnect(allocator, manager);
     testDynamicJwtPubSub(allocator);
 
-    // Stop dynamic JWT server (last started)
-    const idx = manager.count() - 1;
     const threaded = utils.newIo(allocator);
     defer threaded.deinit();
     const io = threaded.io();
 
-    manager.stopServer(idx, io);
+    // Stop the dynamic JWT server only if it actually started.
+    if (manager.count() > count_before) {
+        manager.stopServer(manager.count() - 1, io);
+    }
     cleanupConfig(io);
 }

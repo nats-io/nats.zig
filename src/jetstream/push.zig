@@ -184,13 +184,14 @@ pub const PushSubscription = struct {
             .io = client.io,
         };
         if (opts.heartbeat_ms > 0) {
+            // io.concurrent (never inline); if unavailable (only on OOM, since
+            // concurrent_limit is unlimited) skip the optional heartbeat monitor
+            // rather than fall back to io.async, which can run inline on a
+            // ≤2-core host and block the caller.
             ctx.monitor_future = client.io.concurrent(
                 pushHeartbeatMonitorTask,
                 .{ wrapper, opts.heartbeat_ms },
-            ) catch client.io.async(
-                pushHeartbeatMonitorTask,
-                .{ wrapper, opts.heartbeat_ms },
-            );
+            ) catch null;
         }
         return ctx;
     }

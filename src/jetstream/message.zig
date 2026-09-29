@@ -180,11 +180,10 @@ pub const JsMsg = struct {
     }
 };
 
-/// Metadata parsed from a JetStream message reply subject.
-/// Format: `$JS.ACK.<stream>.<consumer>.<nDel>.<sSeq>
-///          .<cSeq>.<timestamp>.<nPending>`
-/// With domain: `$JS.<domain>.ACK.<stream>.<consumer>
-///              .<nDel>.<sSeq>.<cSeq>.<timestamp>.<nPending>`
+/// Metadata parsed from a JetStream message reply subject. Two layouts:
+///   V1 (9 tokens):  `$JS.ACK.<stream>.<consumer>.<nDel>.<sSeq>.<cSeq>.<ts>.<nPending>`
+///   V2 (>=11):      `$JS.ACK.<domain>.<accHash>.<stream>.<consumer>.<nDel>.<sSeq>.<cSeq>.<ts>.<nPending>[.<token>]`
+/// V2 inserts <domain> and <account hash> after ACK; domain "_" means none.
 pub const MsgMetadata = struct {
     stream: []const u8,
     consumer: []const u8,
@@ -198,46 +197,55 @@ pub const MsgMetadata = struct {
 
 /// Parses JetStream metadata from a reply subject string.
 /// Returns null if the format is invalid.
+///
+/// LOCAL PATCH — version-aware token indexing. The nats-server V2 ACK layout
+/// inserts <domain> and <account hash> after ACK, so field positions must branch
+/// on the token count. The previous single-optional-domain heuristic mis-parsed
+/// real V2 subjects (`$JS.ACK.<domain>.<accHash>.<stream>...`), shifting every
+/// field by two so seq parsing failed. TODO(upstream nats.zig): drop once fixed
+/// upstream. Local fork patch.
 fn parseMsgMetadata(
     reply: []const u8,
 ) ?MsgMetadata {
     std.debug.assert(reply.len > 0);
+
+    // Collect all dot-separated tokens.
+    var toks: [16][]const u8 = undefined;
+    var n: usize = 0;
     var it = std.mem.splitScalar(u8, reply, '.');
-
-    // Token 0: must be "$JS"
-    const t0 = it.next() orelse return null;
-    if (!std.mem.eql(u8, t0, "$JS")) return null;
-
-    // Token 1: "ACK" or domain name
-    const t1 = it.next() orelse return null;
-
-    var domain: ?[]const u8 = null;
-    if (!std.mem.eql(u8, t1, "ACK")) {
-        domain = t1;
-        const ack_tok = it.next() orelse return null;
-        if (!std.mem.eql(u8, ack_tok, "ACK"))
-            return null;
+    while (it.next()) |tok| {
+        if (n >= toks.len) return null; // too many tokens: unexpected format
+        toks[n] = tok;
+        n += 1;
     }
 
-    const stream = it.next() orelse return null;
-    const consumer = it.next() orelse return null;
-    const n_del = it.next() orelse return null;
-    const s_seq = it.next() orelse return null;
-    const c_seq = it.next() orelse return null;
-    const ts = it.next() orelse return null;
-    const n_pend = it.next() orelse return null;
+    if (n < 2) return null;
+    if (!std.mem.eql(u8, toks[0], "$JS")) return null;
+    if (!std.mem.eql(u8, toks[1], "ACK")) return null;
+
+    // base = index of <stream>. V1 = 9 tokens; V2 (>=11) inserts <domain> and
+    // <account hash> after ACK, so <stream> starts at index 4.
+    var base: usize = undefined;
+    var domain: ?[]const u8 = null;
+    if (n == 9) {
+        base = 2;
+    } else if (n >= 11) {
+        const d = toks[2];
+        domain = if (std.mem.eql(u8, d, "_")) null else d;
+        base = 4;
+    } else return null;
 
     return MsgMetadata{
-        .stream = stream,
-        .consumer = consumer,
-        .num_delivered = parseU64(n_del) orelse
+        .stream = toks[base],
+        .consumer = toks[base + 1],
+        .num_delivered = parseU64(toks[base + 2]) orelse
             return null,
-        .stream_seq = parseU64(s_seq) orelse
+        .stream_seq = parseU64(toks[base + 3]) orelse
             return null,
-        .consumer_seq = parseU64(c_seq) orelse
+        .consumer_seq = parseU64(toks[base + 4]) orelse
             return null,
-        .timestamp = parseI64(ts) orelse return null,
-        .num_pending = parseU64(n_pend) orelse
+        .timestamp = parseI64(toks[base + 5]) orelse return null,
+        .num_pending = parseU64(toks[base + 6]) orelse
             return null,
         .domain = domain,
     };
@@ -277,8 +285,9 @@ test "parse standard reply subject" {
 }
 
 test "parse reply with domain" {
+    // Real nats-server V2 layout: $JS.ACK.<domain>.<accHash>.<stream>...
     const reply =
-        "$JS.hub.ACK.ORDERS.worker.1.42.42.1710000000.5";
+        "$JS.ACK.hub.ACCTHASH.ORDERS.worker.1.42.42.1710000000.5";
     const md = parseMsgMetadata(reply).?;
     try std.testing.expectEqualStrings("hub", md.domain.?);
     try std.testing.expectEqualStrings(
@@ -290,6 +299,19 @@ test "parse reply with domain" {
         md.consumer,
     );
     try std.testing.expectEqual(@as(u64, 42), md.stream_seq);
+}
+
+test "parse V2 reply without domain (and trailing token)" {
+    // domain "_" means none; nats-server may append a trailing token.
+    const reply =
+        "$JS.ACK._.ACCTHASH.ORDERS.worker.1.42.43.1710000000.5.xyz";
+    const md = parseMsgMetadata(reply).?;
+    try std.testing.expect(md.domain == null);
+    try std.testing.expectEqualStrings("ORDERS", md.stream);
+    try std.testing.expectEqualStrings("worker", md.consumer);
+    try std.testing.expectEqual(@as(u64, 42), md.stream_seq);
+    try std.testing.expectEqual(@as(u64, 43), md.consumer_seq);
+    try std.testing.expectEqual(@as(u64, 5), md.num_pending);
 }
 
 test "invalid reply returns null" {

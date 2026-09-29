@@ -201,10 +201,10 @@ pub fn testRequestReplySuccess(allocator: std.mem.Allocator) void {
         }
     };
 
-    var handler = io_r.io().async(Handler.handle, .{
+    var handler = io_r.io().concurrent(Handler.handle, .{
         responder,
         sub,
-    });
+    }) catch @panic("test: responder spawn failed (io.concurrent unavailable)");
     defer _ = handler.cancel(io_r.io());
 
     const reply = requester.request(
@@ -278,10 +278,10 @@ pub fn testCrossClientRequestReply(allocator: std.mem.Allocator) void {
         }
     };
 
-    var handler = io_b.io().async(Handler.handle, .{
+    var handler = io_b.io().concurrent(Handler.handle, .{
         client_b,
         sub,
-    });
+    }) catch @panic("test: responder spawn failed (io.concurrent unavailable)");
     defer _ = handler.cancel(io_b.io());
 
     const reply = client_a.request(
@@ -410,10 +410,10 @@ pub fn testRequestWithLargePayload(allocator: std.mem.Allocator) void {
         }
     };
 
-    var handler = io_r.io().async(Handler.handle, .{
+    var handler = io_r.io().concurrent(Handler.handle, .{
         responder,
         sub,
-    });
+    }) catch @panic("test: responder spawn failed (io.concurrent unavailable)");
     defer _ = handler.cancel(io_r.io());
 
     const payload = allocator.alloc(u8, 1024) catch {
@@ -496,10 +496,10 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
         }
     };
 
-    var handler = io_r.io().async(Handler.handle, .{
+    var handler = io_r.io().concurrent(Handler.handle, .{
         responder,
         sub,
-    });
+    }) catch @panic("test: responder spawn failed (io.concurrent unavailable)");
     defer _ = handler.cancel(io_r.io());
 
     var success_count: u32 = 0;
@@ -573,7 +573,7 @@ pub fn testMuxerLatencyFloor(allocator: std.mem.Allocator) void {
     defer sub.deinit();
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    var resp_fut = io_r.io().async(RespHandler.run, .{ responder, sub });
+    var resp_fut = io_r.io().concurrent(RespHandler.run, .{ responder, sub }) catch @panic("test: responder spawn failed (io.concurrent unavailable)");
     defer _ = resp_fut.cancel(io_r.io());
 
     const io_q = utils.newIo(allocator);
@@ -667,7 +667,7 @@ pub fn testMuxerRapidSequential(allocator: std.mem.Allocator) void {
     defer sub.deinit();
     io_r.io().sleep(.fromMilliseconds(50), .awake) catch {};
 
-    var resp_fut = io_r.io().async(RespHandler.run, .{ responder, sub });
+    var resp_fut = io_r.io().concurrent(RespHandler.run, .{ responder, sub }) catch @panic("test: responder spawn failed (io.concurrent unavailable)");
     defer _ = resp_fut.cancel(io_r.io());
 
     const io_q = utils.newIo(allocator);

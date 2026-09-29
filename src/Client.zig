@@ -100,8 +100,9 @@ pub const MsgHandler = struct {
 /// Serializes against io_task's reconnect lifecycle via stream_mutex,
 /// so we never call shutdown on an fd that io_task has closed.
 /// Io.Threaded.netShutdownPosix panics in debug on BADF/NOTSOCK/INVAL,
-/// so the flag check must be inside the lock.
-fn shutdownRecvIfOpen(self: *Client) void {
+/// so the flag check must be inside the lock. `pub` because the writer unit
+/// (io_task) calls it to hand a write error/stale off to the reader.
+pub fn shutdownRecvIfOpen(self: *Client) void {
     self.stream_mutex.lockUncancelable(self.io);
     defer self.stream_mutex.unlock(self.io);
     if (self.stream_open) {
@@ -145,29 +146,42 @@ pub const Message = struct {
     return_queue: ?*SpscQueue([]u8) = null,
     /// Spinlock for multi-thread return_queue.push() safety.
     return_lock: ?*SpinLock = null,
+    /// The client's slab, so deinit can tell a pooled buffer (must go back
+    /// through the reader) from a fallback one (freed directly here).
+    slab: ?*TieredSlab = null,
 
-    /// Frees message data. Pushes to return queue for slab-allocated msgs.
-    /// Thread-safe: return_lock serializes concurrent push().
+    /// Frees message data. Slab-backed messages hand their buffer back for the
+    /// reader fiber (sole slab-pool owner) to free via the return queue; plain
+    /// allocations are freed directly.
+    ///
+    /// Pool vs fallback: only *pool* buffers go through the return queue, and
+    /// the queue is sized (Client.connect) to hold every pool buffer at once, so
+    /// its push can never fail -- a rejected push would be a sizing-invariant
+    /// violation, asserted. *Fallback* buffers (slab overflow) are unbounded, so
+    /// they cannot use the fixed-size queue; they are freed directly via the
+    /// (thread-safe) client allocator, exactly as non-slab messages already are.
+    ///
+    /// Thread-safe: `return_lock` serializes concurrent pushes (the SPSC ring is
+    /// driven as MPSC here); its release/acquire publishes each producer's head
+    /// update to the next.
     // REVIEWED(2025-03): SPSC queue used as MPSC here is safe.
-    // The spinlock's lock/unlock provides acquire/release ordering,
-    // ensuring each thread sees prior push() head updates.
     pub fn deinit(self: *const Message) void {
         if (!self.owned) return;
         if (self.backing_buf) |buf| {
             assert(self.return_queue != null);
+            const slab = self.slab.?;
+            if (!slab.isPooled(buf.ptr)) {
+                // Fallback (slab-overflow) buffer: free directly.
+                slab.freeFallback(buf);
+                return;
+            }
             const rq = self.return_queue.?;
             if (self.return_lock) |sl| {
                 sl.lock();
                 defer sl.unlock();
-                while (!rq.push(buf)) {
-                    sl.unlock();
-                    std.Thread.yield() catch {};
-                    sl.lock();
-                }
+                assert(rq.push(buf));
             } else {
-                while (!rq.push(buf)) {
-                    std.Thread.yield() catch {};
-                }
+                assert(rq.push(buf));
             }
             return;
         }
@@ -219,12 +233,15 @@ pub const Message = struct {
 ///
 /// Lives on the request()'s stack. The dispatcher fills `msg`
 /// with a cloned response Message and sets `done`; the request
-/// task spin-yields on `done` until the response arrives or the
-/// timeout fires.
+/// task blocks on `done` (futex) until the response arrives, the
+/// timeout fires, or it is canceled.
+///
+/// `done` is a u32 (0 = pending, 1 = done) so it can be used directly as a
+/// futex word. The dispatcher stores 1 (release) then futexWakes it.
 pub const RespWaiter = struct {
     msg: ?Message = null,
-    done: std.atomic.Value(bool) =
-        std.atomic.Value(bool).init(false),
+    done: std.atomic.Value(u32) =
+        std.atomic.Value(u32).init(0),
 };
 
 /// Lazy response multiplexer for request/reply.
@@ -305,11 +322,13 @@ pub const RespMux = struct {
             client.allocator,
             msg,
         ) catch {
-            waiter.done.store(true, .release);
+            waiter.done.store(1, .release);
+            io.futexWake(u32, &waiter.done.raw, std.math.maxInt(u32));
             return;
         };
         waiter.msg = cloned;
-        waiter.done.store(true, .release);
+        waiter.done.store(1, .release);
+        io.futexWake(u32, &waiter.done.raw, std.math.maxInt(u32));
     }
 };
 
@@ -337,6 +356,12 @@ pub const Options = struct {
     connect_timeout_ns: u64 = defaults.Connection.timeout_ns,
     /// Per-subscription queue size (messages buffered before dropping).
     sub_queue_size: u32 = defaults.Memory.queue_size.value(),
+    /// Maximum concurrent subscriptions this client can hold. The per-client
+    /// subscription tables (sub_ptrs/free_slots/sub_backups + the sidmap) are
+    /// heap-allocated to this size at connect, so the default is kept modest for
+    /// a small idle footprint; raise it for clients that fan out to thousands of
+    /// subscriptions. Must be > 0.
+    max_subscriptions: u16 = defaults.Client.max_subscriptions,
     /// Echo messages back to sender (default true).
     echo: bool = true,
     /// Enable message headers support.
@@ -563,6 +588,9 @@ pub const ParsedUrl = struct {
     user: ?[]const u8,
     pass: ?[]const u8,
     use_tls: bool,
+    /// Whether this URL uses the nats+uds:// scheme. When true, `host`
+    /// holds the UNIX domain socket path and `port` is unused.
+    is_uds: bool = false,
 };
 
 /// Fixed subscription limits (from defaults.zig).
@@ -581,10 +609,14 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     if (url.len == 0) return error.InvalidUrl;
     var remaining = url;
     var use_tls = false;
+    var is_uds = false;
 
     if (std.mem.startsWith(u8, remaining, "tls://")) {
         remaining = remaining[6..];
         use_tls = true;
+    } else if (std.mem.startsWith(u8, remaining, "nats+uds://")) {
+        remaining = remaining["nats+uds://".len..];
+        is_uds = true;
     } else if (std.mem.startsWith(u8, remaining, "nats://")) {
         remaining = remaining[7..];
     }
@@ -605,6 +637,19 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     }
 
     if (remaining.len == 0) return error.InvalidUrl;
+
+    // For nats+uds the remainder is the socket path verbatim; there is no
+    // host/port to split out.
+    if (is_uds) {
+        return .{
+            .host = remaining,
+            .port = 0,
+            .user = user,
+            .pass = pass,
+            .use_tls = use_tls,
+            .is_uds = true,
+        };
+    }
 
     var host: []const u8 = undefined;
     var port: u16 = 4222;
@@ -660,7 +705,7 @@ fn connectToHost(io: Io, host: []const u8, port: u16) !net.Stream {
         return net.IpAddress.connect(&address, io, .{
             .mode = .stream,
             .protocol = .tcp,
-        }) catch return error.ConnectionFailed;
+        }) catch |err| return canceledOr(err, error.ConnectionFailed);
     } else |_| {}
 
     const hostname = net.HostName.init(host) catch {
@@ -669,7 +714,21 @@ fn connectToHost(io: Io, host: []const u8, port: u16) !net.Stream {
     return net.HostName.connect(hostname, io, port, .{
         .mode = .stream,
         .protocol = .tcp,
-    }) catch return error.ConnectionFailed;
+    }) catch |err| return canceledOr(err, error.ConnectionFailed);
+}
+
+/// Connect to a NATS server over a UNIX domain socket at `path`.
+/// Returns the same net.Stream as the TCP path, so everything
+/// downstream (reader/writer, handshake, TLS upgrade) is unchanged.
+fn connectToUds(io: Io, path: []const u8) !net.Stream {
+    const addr = net.UnixAddress.init(path) catch return error.InvalidAddress;
+    return addr.connect(io) catch |err| return canceledOr(err, error.ConnectionFailed);
+}
+
+/// Preserve `error.Canceled` (cancel must stay distinguishable from a transport
+/// failure) while collapsing every other transport error to a single `fallback`.
+fn canceledOr(err: anyerror, comptime fallback: anyerror) anyerror {
+    return if (err == error.Canceled) error.Canceled else fallback;
 }
 
 /// Subscription type alias.
@@ -690,15 +749,17 @@ read_buffer: []u8,
 write_buffer: []u8,
 
 sidmap: SidMap,
-sidmap_keys: [SIDMAP_CAPACITY]u64,
-sidmap_vals: [SIDMAP_CAPACITY]u16,
-free_slots: [MAX_SUBSCRIPTIONS]u16,
+// Subscription tables, heap-allocated at connect to `options.max_subscriptions`
+// (the sidmap to the next power of two >= 2x that). Sized once, never resized.
+sidmap_keys: []u64 = &.{},
+sidmap_vals: []u16 = &.{},
+free_slots: []u16 = &.{},
 
 parser: Parser = .{},
 server_info: ?ServerInfo = null,
 state: State = .connecting,
-sub_ptrs: [MAX_SUBSCRIPTIONS]?*Sub = [_]?*Sub{null} ** MAX_SUBSCRIPTIONS,
-free_count: u16 = MAX_SUBSCRIPTIONS,
+sub_ptrs: []?*Sub = &.{},
+free_count: u16 = 0,
 next_sid: u64 = 1,
 /// Serializes reader-task routing with unsubscribe/deinit so a
 /// loaded subscription pointer cannot be freed while in use.
@@ -727,6 +788,12 @@ tcp_rcvbuf_set: bool = false,
 // Fast path cache for single-subscription case
 cached_sub: ?*Sub = null,
 
+/// Callback subs whose deinit() was requested but whose delivery fiber may
+/// still be winding down. The reaper joins+frees each once its `done` flag is
+/// set, so deinit() never block-joins a fiber (close-from-handler safe).
+/// Guarded by `sub_mutex`.
+reap_head: ?*Sub = null,
+
 // Cached max_payload from server_info
 max_payload: usize = 1024 * 1024,
 
@@ -741,8 +808,7 @@ return_queue_buf: [][]u8 = undefined,
 // Reconnection state
 server_pool: connection.ServerPool = undefined,
 server_pool_initialized: bool = false,
-sub_backups: [MAX_SUBSCRIPTIONS]SubBackup =
-    [_]SubBackup{.{}} ** MAX_SUBSCRIPTIONS,
+sub_backups: []SubBackup = &.{},
 sub_backup_count: u16 = 0,
 reconnect_attempt: u32 = 0,
 original_url: [256]u8 = undefined,
@@ -760,6 +826,38 @@ last_ping_sent_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 last_pong_received_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 pings_outstanding: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 
+/// PONG eventcount. `flush()` parks on this instead of spinning: on
+/// single-threaded zio a `Thread.yield`/`spinLoopHint` spin never yields to
+/// the reader fiber, so the awaited PONG could never arrive -- a deadlock, not
+/// just wasted CPU. The reader bumps `pong_seq` after each PONG (and teardown
+/// bumps it too, so a parked flush returns promptly rather than timing out).
+/// `pong_seq` -- not the u64 `last_pong_received_ns`, which cannot be a futex
+/// word -- is the occurrence predicate; wraparound-safe u32 compared by
+/// inequality. `pong_waiters` gates the wake so an idle PONG costs no syscall.
+pong_seq: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+pong_waiters: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+// -- Reader/writer bisection cross-unit state --
+/// Writer-wake eventcount. The writer unit parks on this with a timeout of
+/// "time to the next PING"; producers (publish/commitRing, a pending PONG,
+/// teardown, reconnect-complete) bump `wake_seq` and wake it. Replaces the
+/// eventfd waker. Wraparound-safe u32, same idiom as `pong_seq`.
+wake_seq: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+wake_waiters: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+/// Server PINGs the reader observed and flagged for the writer to answer. The
+/// reader increments (never taking `write_mutex`, so a backpressured writer
+/// can't stall it); the writer `swap(0)`s under `write_mutex` and emits that
+/// many PONGs. Atomic RMW throughout.
+pong_pending: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+/// Connection epoch, bumped by the reader on each (re)connect. The writer
+/// captures it before a write and re-checks after a failure, so a stale
+/// write-error can't tear down a socket a concurrent reconnect already replaced.
+conn_generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+/// Set by the writer on a write error (the writer never writes `state`); gates
+/// `canSend`/the drain so publishes divert and the writer stops retrying a dead
+/// fd. Cleared by the reader on reconnect.
+transport_failed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
 /// Auto-flush signal: set by publish(), cleared by io_task after flush.
 flush_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
@@ -770,6 +868,12 @@ publish_ring_buf: ?[]u8 = null,
 
 // Debug counters for io_task (only used when dbg.enabled)
 io_task_stats: IoTaskStats = .{},
+
+/// Always-on count of io_task outer-loop iterations. On an idle connection
+/// the io_task blocks in poll(), so this barely advances -- tests use it to
+/// assert the client is event-driven (no busy poll / spin). Written by
+/// io_task only; read by anyone via ioTaskLoops().
+io_task_loops: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
 // Error rate-limiting state (written by io_task only)
 /// Count of protocol parse errors encountered.
@@ -795,8 +899,11 @@ stream_mutex: Io.Mutex = .init,
 /// True iff `stream` currently holds a live, owned fd.
 /// Only mutated while holding `stream_mutex`.
 stream_open: bool = false,
-/// Future for background I/O task (for proper cancellation in deinit).
+/// Future for the reader unit: read/route/PONG-flag/reconnect. Kept as
+/// `io_task_future` to minimise churn; it is the reader half of the old io_task.
 io_task_future: ?Io.Future(void) = null,
+/// Future for the writer unit: ring drain + PONG + PING/health.
+writer_task_future: ?Io.Future(void) = null,
 
 // Event callback infrastructure
 /// Event queue for io_task -> callback_task communication.
@@ -806,6 +913,12 @@ event_queue: ?*SpscQueue(Event) = null,
 event_queue_mutex: Io.Mutex = .init,
 /// Buffer backing the event queue.
 event_queue_buf: ?[]Event = null,
+/// Event-task eventcount. The callback task parks on this instead of a
+/// `Thread.yield` poll loop (which never yields to fibers on zio); `pushEvent`
+/// bumps it after enqueuing so events dispatch promptly with no idle spin.
+/// Same idiom and wraparound-safety as `pong_seq`.
+event_seq: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+event_waiters: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 /// Future for callback task (dispatches events to user handler).
 callback_task_future: ?Io.Future(void) = null,
 /// Event handler (copied from options for callback_task access).
@@ -858,8 +971,8 @@ pub fn connect(
     client.server_info = null;
     client.parser = .{};
     client.state = .connecting;
-    client.sub_ptrs = [_]?*Sub{null} ** MAX_SUBSCRIPTIONS;
-    client.free_count = MAX_SUBSCRIPTIONS;
+    // Subscription tables (sub_ptrs/free_slots/sub_backups/sidmap) are allocated
+    // below, after the slab/return-queue, so their frees stack correctly.
     client.next_sid = 1;
     client.read_mutex = .init;
     client.sub_mutex = .init;
@@ -867,6 +980,7 @@ pub fn connect(
     client.return_lock = .{};
     client.statistics = .{};
     client.cached_sub = null;
+    client.reap_head = null;
     client.max_payload = 1024 * 1024;
     client.tcp_nodelay_set = false;
     client.tcp_rcvbuf_set = false;
@@ -876,7 +990,6 @@ pub fn connect(
     // Initialize reconnection state
     client.server_pool = undefined;
     client.server_pool_initialized = false;
-    client.sub_backups = [_]SubBackup{.{}} ** MAX_SUBSCRIPTIONS;
     client.sub_backup_count = 0;
     client.reconnect_attempt = 0;
     client.original_url = undefined;
@@ -891,6 +1004,13 @@ pub fn connect(
     client.last_ping_sent_ns.raw = 0;
     client.last_pong_received_ns.raw = 0;
     client.pings_outstanding.raw = 0;
+    client.pong_seq.raw = 0;
+    client.pong_waiters.raw = 0;
+    client.wake_seq.raw = 0;
+    client.wake_waiters.raw = 0;
+    client.pong_pending.raw = 0;
+    client.conn_generation.raw = 0;
+    client.transport_failed.raw = false;
     client.io_task_stats = .{};
 
     // Initialize error tracking state
@@ -904,12 +1024,15 @@ pub fn connect(
     client.stream_mutex = .init;
     client.stream_open = false;
     client.io_task_future = null;
+    client.writer_task_future = null;
     client.publish_ring_buf = null;
 
     // Initialize event callback infrastructure
     client.event_queue = null;
     client.event_queue_mutex = .init;
     client.event_queue_buf = null;
+    client.event_seq.raw = 0;
+    client.event_waiters.raw = 0;
     client.callback_task_future = null;
     client.event_handler = opts.event_handler;
     client.lame_duck_notified = false;
@@ -932,16 +1055,32 @@ pub fn connect(
         client.tls_host_len = host_len;
     }
 
-    // Initialize slab allocator (critical for O(1) message allocation)
-    client.tiered_slab = TieredSlab.init(allocator) catch |err| {
+    // Initialize slab allocator (critical for O(1) message allocation).
+    // Sized at runtime from the sub_queue_size option: the default option
+    // value equals defaults.Memory.queue_size, so a client that does not set
+    // it gets the exact comptime-default slab, while a low-rate client (small
+    // sub_queue_size) preallocates a proportionally tiny slab.
+    client.tiered_slab = TieredSlab.initWithCounts(
+        allocator,
+        defaults.Memory.tierCountsFor(opts.sub_queue_size),
+    ) catch |err| {
         allocator.destroy(client);
         return err;
     };
 
-    // Initialize return queue for cross-thread buffer deallocation
-    // Size must exceed slab tier capacity to avoid blocking when buffers
-    // are split between sub_queue, processing, and return_queue
-    const rq_size = opts.sub_queue_size * 2;
+    // Initialize return queue for cross-thread buffer deallocation. It must be
+    // able to hold EVERY slab buffer at once: a burst of frees (e.g. tearing
+    // down a subscription that buffered thousands of messages) can push all
+    // outstanding buffers here before the io_task drains, and Message.deinit()
+    // spins if the push fails. The slab total is q + q + q/2 + q/4 + q/16 per
+    // tierCountsFor, which exceeds the old `q*2`; size to the exact total (+1
+    // for the SPSC ring's reserved slot) so the push can never block.
+    const rq_tier_counts = defaults.Memory.tierCountsFor(opts.sub_queue_size);
+    var rq_total: usize = 0;
+    for (rq_tier_counts) |c| rq_total += c;
+    // SpscQueue requires a power-of-two capacity and can hold cap-1 items, so
+    // round the slab total up to the next power of two (which is >= total + 1).
+    const rq_size = std.math.ceilPowerOfTwo(usize, rq_total + 1) catch rq_total + 1;
     client.return_queue_buf = allocator.alloc([]u8, rq_size) catch |err| {
         client.tiered_slab.deinit();
         allocator.destroy(client);
@@ -962,7 +1101,33 @@ pub fn connect(
         allocator.destroy(client);
     }
 
-    client.stream = try connectToHost(io, parsed.host, parsed.port);
+    // Subscription tables, sized to options.max_subscriptions (sidmap to the
+    // next power of two >= 2x). Declared after the errdefer above so these frees
+    // run before it destroys the client. Freed on the success path in deinit.
+    if (opts.max_subscriptions == 0) return error.InvalidOptions;
+    const max_subs = opts.max_subscriptions;
+    const sidmap_cap = std.math.ceilPowerOfTwo(u32, @as(u32, max_subs) *| 2) catch
+        return error.InvalidOptions;
+    client.sub_ptrs = try allocator.alloc(?*Sub, max_subs);
+    errdefer allocator.free(client.sub_ptrs);
+    @memset(client.sub_ptrs, null);
+    client.free_slots = try allocator.alloc(u16, max_subs);
+    errdefer allocator.free(client.free_slots);
+    client.sub_backups = try allocator.alloc(SubBackup, max_subs);
+    errdefer allocator.free(client.sub_backups);
+    @memset(client.sub_backups, .{});
+    client.sidmap_keys = try allocator.alloc(u64, sidmap_cap);
+    errdefer allocator.free(client.sidmap_keys);
+    client.sidmap_vals = try allocator.alloc(u16, sidmap_cap);
+    errdefer allocator.free(client.sidmap_vals);
+    client.sidmap = .init(client.sidmap_keys, client.sidmap_vals);
+    client.free_count = max_subs;
+    for (0..max_subs) |i| client.free_slots[i] = @intCast(max_subs - 1 - i);
+
+    client.stream = if (parsed.is_uds)
+        try connectToUds(io, parsed.host)
+    else
+        try connectToHost(io, parsed.host, parsed.port);
     client.stream_open = true;
     errdefer client.closeIfOpen();
 
@@ -1032,13 +1197,8 @@ pub fn connect(
     client.active_reader = &client.reader.interface;
     client.active_writer = &client.writer.interface;
     client.options = opts;
-
-    client.sidmap_keys = undefined;
-    client.sidmap_vals = undefined;
-    client.sidmap = .init(&client.sidmap_keys, &client.sidmap_vals);
-    for (0..MAX_SUBSCRIPTIONS) |i| {
-        client.free_slots[i] = @intCast(MAX_SUBSCRIPTIONS - 1 - i);
-    }
+    // sidmap + free_slots were initialized with the subscription-table
+    // allocation above.
 
     // TLS-first mode: upgrade to TLS before NATS protocol
     if (client.use_tls and opts.tls_handshake_first) {
@@ -1087,14 +1247,35 @@ pub fn connect(
     client.last_ping_sent_ns.store(now_ns, .monotonic);
     client.last_pong_received_ns.store(now_ns, .monotonic);
 
-    // concurrent() required - async() may deadlock on flush()
-    client.io_task_future = io.concurrent(
-        connection.io_task.run,
+    // Spawn the two driver units: the reader (read/route/PONG-flag/
+    // reconnect) and the writer (ring drain + PONG + PING/health). concurrent()
+    // is required (async() runs inline and may deadlock on flush()); a failed
+    // spawn is a hard error, never a silent async fallback. On both supported
+    // backends concurrent() always succeeds.
+    client.io_task_future = try io.concurrent(
+        connection.io_task.readerRun,
         .{client},
-    ) catch blk: {
-        dbg.print("WARNING: concurrent() failed, using async()", .{});
-        break :blk io.async(connection.io_task.run, .{client});
-    };
+    );
+    // Rollback: if a later step in connect() fails, drive both units to exit
+    // and cancel+join them before unwinding. The caller is not a delivery unit,
+    // so the joins cannot self-deadlock.
+    errdefer {
+        State.atomicStore(&client.state, .closed);
+        client.shutdownRecvIfOpen();
+        client.signalWriter();
+        if (client.writer_task_future) |*f| {
+            _ = f.cancel(client.io);
+            client.writer_task_future = null;
+        }
+        if (client.io_task_future) |*f| {
+            _ = f.cancel(client.io);
+            client.io_task_future = null;
+        }
+    }
+    client.writer_task_future = try io.concurrent(
+        connection.io_task.writerRun,
+        .{client},
+    );
 
     // Spawn callback task if event handler provided
     if (opts.event_handler != null) {
@@ -1116,16 +1297,10 @@ pub fn connect(
         }
 
         // Spawn callback task
-        client.callback_task_future = io.concurrent(
+        client.callback_task_future = try io.concurrent(
             callbackTaskFn,
             .{client},
-        ) catch blk: {
-            dbg.print(
-                "WARNING: callback concurrent() failed, using async()",
-                .{},
-            );
-            break :blk io.async(callbackTaskFn, .{client});
-        };
+        );
 
         // Push initial connected event
         _ = eq.push(.{ .connected = {} });
@@ -1165,6 +1340,10 @@ pub fn pushEvent(self: *Client, event: Event) void {
 
     if (self.event_queue) |q| {
         _ = q.push(event);
+        // Wake the event task, which now parks on the eventcount instead of
+        // polling. Bump-after-push keeps it lost-wakeup-safe (the task snapshots
+        // the seq only after draining, then re-checks the queue before parking).
+        self.signalEvent();
     }
 }
 
@@ -1211,10 +1390,16 @@ fn callbackTaskFn(client: *Client) void {
                 },
             }
         }
-        // REVIEWED(2025-03): yield-based polling is intentional.
-        // Blocking alternatives (futex/condvar) add complexity
-        // for the event dispatch path with minimal benefit.
-        std.Thread.yield() catch {};
+        // Park on the event eventcount instead of yield-polling: on
+        // single-threaded zio `Thread.yield` does not yield to fibers, so the
+        // producer (io_task) never runs and events stall. Snapshot the seq
+        // after draining, re-check the predicate, then park (the nextRaw idiom);
+        // `pushEvent` bumps the seq so a racing push wakes us immediately.
+        const observed = client.event_seq.load(.seq_cst);
+        if (!queue.isEmpty()) continue;
+        if (State.atomicLoad(&client.state) == .closed) break;
+        if (client.event_queue == null) break;
+        client.parkOnEvent(observed);
     }
 
     // Drain any remaining events queued during shutdown
@@ -1260,6 +1445,9 @@ fn callbackDrainFn(
     handler: MsgHandler,
 ) void {
     assert(sub.mode == .callback);
+    // Signal the reaper on every exit path (normal, Closed, Canceled) that this
+    // sub's fiber has stopped touching it and is safe to join+free.
+    defer sub.done.store(true, .release);
     const io = sub.client.io;
     while (sub.state == .active or sub.state == .draining) {
         const msg = sub.nextRaw(io) catch |err| {
@@ -1279,6 +1467,7 @@ fn callbackDrainFnPlain(
     cb: *const fn (*const Message) void,
 ) void {
     assert(sub.mode == .callback);
+    defer sub.done.store(true, .release);
     const io = sub.client.io;
     while (sub.state == .active or sub.state == .draining) {
         const msg = sub.nextRaw(io) catch |err| {
@@ -1692,6 +1881,75 @@ fn checkAuthRejection(self: *Client, timeout_ns: u64) !void {
 
 /// Reads from socket with connection timeout using Io.Select.
 /// Returns data or error.ConnectionTimeout if timeout expires.
+/// Run `func(args)` on its own task and wait up to `timeout_ns` for it, per the
+/// wrap-and-cancel timeout pattern: a single `io.concurrent` task, a
+/// spurious-safe `futexWaitTimeout` deadline loop, and cancel-then-join on
+/// timeout so the task never outlives `func`'s stack-held args/result. For the
+/// timeout to be prompt, `func` must be cancelable -- a blocking syscall is
+/// interrupted by a signal on Threaded, a fiber is woken on zio.
+///
+/// Returns `func`'s result on completion, `error.Timeout` if it does not finish
+/// in time, or `error.Canceled` if the *waiting* fiber is itself cancelled.
+///
+/// Never model a timeout as `Io.Select(op, sleep)`: on Threaded the sleep arm can
+/// run inline on the caller (async-pool overflow) and block it for the full
+/// duration -- every connect paid its full connect_timeout on ≤2-core machines.
+fn callWithTimeout(
+    io: Io,
+    timeout_ns: u64,
+    comptime func: anytype,
+    args: anytype,
+) error{ Timeout, Canceled }!@typeInfo(@TypeOf(func)).@"fn".return_type.? {
+    const Ret = @typeInfo(@TypeOf(func)).@"fn".return_type.?;
+    const Ctx = struct {
+        args: @TypeOf(args),
+        io: Io,
+        result: Ret = undefined,
+        done: std.atomic.Value(u32) = .init(0),
+        fn run(ctx: *@This()) void {
+            ctx.result = @call(.auto, func, ctx.args);
+            ctx.done.store(1, .release);
+            ctx.io.futexWake(u32, &ctx.done.raw, 1);
+        }
+    };
+    var ctx: Ctx = .{ .args = args, .io = io };
+
+    var future = io.concurrent(Ctx.run, .{&ctx}) catch {
+        // concurrent_limit is .unlimited on both backends, so this only fires on
+        // resource exhaustion; degrade to a direct (untimed) call rather than
+        // fail the whole operation.
+        return @call(.auto, func, args);
+    };
+
+    const deadline_ns = getNowNs(io) +| timeout_ns;
+    while (ctx.done.load(.acquire) == 0) {
+        const now = getNowNs(io);
+        if (now >= deadline_ns) {
+            // Still running at the deadline: interrupt + join, report Timeout. A
+            // genuine completion is caught by the loop condition above, so
+            // reaching here means the task did NOT finish -- we must never return
+            // its cancel-interrupted result (e.g. a read that errored on the
+            // signal) as if it were a real one.
+            _ = future.cancel(io); // interrupt the still-running task, then joins
+            return error.Timeout;
+        }
+        const remaining_ns: i96 = @intCast(deadline_ns - now);
+        io.futexWaitTimeout(
+            u32,
+            &ctx.done.raw,
+            0,
+            .{ .duration = .{ .raw = .fromNanoseconds(remaining_ns), .clock = .awake } },
+        ) catch {
+            // The waiting fiber itself was cancelled: interrupt + join the task,
+            // report Canceled (not the task's interrupted error).
+            _ = future.cancel(io);
+            return error.Canceled;
+        };
+    }
+    future.await(io); // task finished on its own: join and return its result
+    return ctx.result;
+}
+
 fn peekWithTimeout(
     self: *Client,
     reader: *Io.Reader,
@@ -1699,29 +1957,18 @@ fn peekWithTimeout(
 ) ![]u8 {
     assert(timeout_ns > 0);
 
-    const Sel = Io.Select(union(enum) {
-        read: anyerror![]u8,
-        timeout: void,
-    });
-    var buf: [2]Sel.Union = undefined;
-    var sel = Sel.init(self.io, &buf);
-    sel.async(.read, peekGreedyAsync, .{ reader, self.io });
-    sel.async(.timeout, sleepNs, .{ self.io, timeout_ns });
-
-    const result = sel.await() catch {
-        sel.cancelDiscard();
+    // NOTE: wrap-and-cancel rather than a `net_receive` Batch operation,
+    // because the read goes through the TLS-aware `active_reader` -- a raw
+    // `net_receive` would read ciphertext under TLS. If a reader-level timed fill
+    // lands upstream, this can move to the Batch (case 1) path.
+    const read_result = callWithTimeout(self.io, timeout_ns, peekGreedyAsync, .{ reader, self.io }) catch |err| switch (err) {
+        error.Timeout => return error.ConnectionTimeout,
+        error.Canceled => return error.Canceled,
+    };
+    return read_result catch |err| {
+        if (err == error.Canceled) return error.Canceled;
         return error.ConnectionFailed;
     };
-    sel.cancelDiscard();
-
-    switch (result) {
-        .read => |read_result| {
-            return read_result catch error.ConnectionFailed;
-        },
-        .timeout => {
-            return error.ConnectionTimeout;
-        },
-    }
 }
 
 /// Async wrapper for peekGreedy (used with io.async).
@@ -1919,10 +2166,9 @@ pub fn queueSubscribe(
     );
     errdefer sub.deinit();
     sub.mode = .callback;
-    sub.callback_future = self.io.concurrent(
-        callbackDrainFn,
-        .{ sub, handler },
-    ) catch self.io.async(
+    // Strict spawn: no silent async fallback. errdefer sub.deinit()
+    // above rolls back the sid/SUB (sends UNSUB) on failure.
+    sub.callback_future = try self.io.concurrent(
         callbackDrainFn,
         .{ sub, handler },
     );
@@ -1956,10 +2202,9 @@ pub fn queueSubscribeFn(
     );
     errdefer sub.deinit();
     sub.mode = .callback;
-    sub.callback_future = self.io.concurrent(
-        callbackDrainFnPlain,
-        .{ sub, cb },
-    ) catch self.io.async(
+    // Strict spawn: no silent async fallback. errdefer sub.deinit()
+    // above rolls back the sid/SUB (sends UNSUB) on failure.
+    sub.callback_future = try self.io.concurrent(
         callbackDrainFnPlain,
         .{ sub, cb },
     );
@@ -2269,6 +2514,93 @@ fn flushBufferLocked(self: *Client) !void {
     }
 }
 
+/// Wake any `flush()` parked on the PONG eventcount. Called by the reader
+/// after each PONG and by teardown. Same lost-wakeup-safe idiom as
+/// `Subscription.signalWaiters`: bump the seq, then wake only if a waiter is
+/// registered. Safe from any thread (`futexWake` is thread-safe). `pub`
+/// because the reader (io_task) calls it on the PONG path.
+pub fn signalPong(self: *Client) void {
+    _ = self.pong_seq.fetchAdd(1, .seq_cst);
+    if (self.pong_waiters.load(.seq_cst) != 0) {
+        self.io.futexWake(u32, &self.pong_seq.raw, std.math.maxInt(u32));
+    }
+}
+
+/// Wake the writer unit parked on the writer eventcount. Called by
+/// producers: commitRing (new outbound work), the reader (pending PONG),
+/// reconnect-complete, and teardown. Same lost-wakeup-safe idiom as
+/// `signalPong`. Safe from any thread, including foreign publisher threads.
+pub fn signalWriter(self: *Client) void {
+    _ = self.wake_seq.fetchAdd(1, .seq_cst);
+    if (self.wake_waiters.load(.seq_cst) != 0) {
+        self.io.futexWake(u32, &self.wake_seq.raw, std.math.maxInt(u32));
+    }
+}
+
+/// Park the writer until `wake_seq` changes past `observed`, the deadline
+/// passes (a PING is due), or it is canceled (teardown). `deadline_ns == 0`
+/// means "no deadline" (keepalive disabled): park untimed. Timeout is absorbed
+/// (the writer re-checks its own work/deadline); cancellation is absorbed too
+/// (the loop re-checks state and exits on `.closed`).
+pub fn parkWriter(self: *Client, observed: u32, deadline_ns: u64) void {
+    _ = self.wake_waiters.fetchAdd(1, .seq_cst);
+    defer _ = self.wake_waiters.fetchSub(1, .monotonic);
+
+    if (deadline_ns == 0) {
+        self.io.futexWait(u32, &self.wake_seq.raw, observed) catch {};
+        return;
+    }
+    const now = getNowNs(self.io);
+    if (now >= deadline_ns) return;
+    const remaining_ns: i96 = @intCast(deadline_ns - now);
+    self.io.futexWaitTimeout(
+        u32,
+        &self.wake_seq.raw,
+        observed,
+        .{ .duration = .{ .raw = .fromNanoseconds(remaining_ns), .clock = .awake } },
+    ) catch {};
+}
+
+/// Park until `pong_seq` changes past `observed`, the deadline passes, or the
+/// caller is canceled. The caller must have re-checked its predicate with the
+/// `observed` seq immediately before calling (see `flush`). Timeout is absorbed
+/// (the caller re-checks its own deadline); cancellation propagates.
+fn parkOnPong(self: *Client, observed: u32, deadline_ns: u64) error{Canceled}!void {
+    _ = self.pong_waiters.fetchAdd(1, .seq_cst);
+    defer _ = self.pong_waiters.fetchSub(1, .monotonic);
+
+    const now = getNowNs(self.io);
+    if (now >= deadline_ns) return;
+    const remaining_ns: i96 = @intCast(deadline_ns - now);
+    self.io.futexWaitTimeout(
+        u32,
+        &self.pong_seq.raw,
+        observed,
+        .{ .duration = .{ .raw = .fromNanoseconds(remaining_ns), .clock = .awake } },
+    ) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
+    };
+}
+
+/// Wake the event task parked on the event eventcount. Called by `pushEvent`
+/// after enqueuing. Same idiom as `signalPong`.
+fn signalEvent(self: *Client) void {
+    _ = self.event_seq.fetchAdd(1, .seq_cst);
+    if (self.event_waiters.load(.seq_cst) != 0) {
+        self.io.futexWake(u32, &self.event_seq.raw, std.math.maxInt(u32));
+    }
+}
+
+/// Park the event task until `event_seq` changes past `observed` or it is
+/// canceled (teardown). Untimed: the task has no periodic work. Cancellation
+/// and spurious wakes are absorbed -- the caller re-checks state/queue and
+/// exits on `.closed`.
+fn parkOnEvent(self: *Client, observed: u32) void {
+    _ = self.event_waiters.fetchAdd(1, .seq_cst);
+    defer _ = self.event_waiters.fetchSub(1, .monotonic);
+    self.io.futexWait(u32, &self.event_seq.raw, observed) catch {};
+}
+
 /// Flushes all buffered data and confirms server received it.
 ///
 /// Sends all buffered data, then sends PING and waits for PONG response.
@@ -2287,7 +2619,13 @@ pub fn flush(
     assert(timeout_ns > 0);
     if (!State.atomicLoad(&self.state).canSend()) return error.NotConnected;
 
-    const old_pong_ns = self.last_pong_received_ns.load(.acquire);
+    // Snapshot the PONG barrier BEFORE transmitting our PING. Capturing
+    // *after* the write would fold a PONG that lands
+    // between the write and the snapshot into `observed`, and the waiter would
+    // then wait for a *further* PONG and time out. `pong_seq` is the occurrence
+    // predicate (any bump past `observed` is a PONG), so we do not rely on the
+    // u64 timestamp being strictly greater per PONG.
+    const observed = self.pong_seq.load(.acquire);
 
     // Step 1: Drain publish ring + flush + send PING (holding mutex)
     try self.write_mutex.lock(self.io);
@@ -2329,33 +2667,25 @@ pub fn flush(
     }
     self.write_mutex.unlock(self.io);
 
-    // Step 2: Poll for PONG with timeout (direct loop, no Io.Select).
-    // Using direct polling avoids layering a second async wait inside
-    // a synchronous flush call on this client's Io.
+    // Step 2: park on the PONG eventcount until it advances, the deadline
+    // passes, or teardown wakes us. No spin: the old `Thread.yield`/
+    // `spinLoopHint` loop never yields to the reader fiber on single-threaded
+    // zio, so the PONG it waits for could never be read -- a deadlock.
     const deadline_ns = getNowNs(self.io) +| timeout_ns;
-    var iteration: u32 = 0;
 
-    dbg.print("flush: waiting for PONG, old_pong_ns={d}", .{old_pong_ns});
+    dbg.print("flush: waiting for PONG, observed_seq={d}", .{observed});
 
     while (true) {
-        // Check for PONG
-        const current = self.last_pong_received_ns.load(.acquire);
-        if (current > old_pong_ns) {
-            dbg.print("flush: got PONG, current={d}", .{current});
-            return; // Success!
+        if (self.pong_seq.load(.acquire) != observed) {
+            // Seq advanced: a PONG, or a teardown/terminal wake. A concurrent
+            // teardown bumps the seq without a real PONG, so classify by state.
+            if (!State.atomicLoad(&self.state).canSend()) return error.ConnectionClosed;
+            dbg.print("flush: got PONG, seq advanced", .{});
+            return;
         }
-
-        // Check timeout
-        const now = getNowNs(self.io);
-        if (now >= deadline_ns) return error.Timeout;
-
-        // Yield periodically to allow io_task to process incoming PONG
-        iteration += 1;
-        if (iteration >= 100) {
-            iteration = 0;
-            std.Thread.yield() catch {};
-        }
-        std.atomic.spinLoopHint();
+        if (!State.atomicLoad(&self.state).canSend()) return error.ConnectionClosed;
+        if (getNowNs(self.io) >= deadline_ns) return error.Timeout;
+        try self.parkOnPong(observed, deadline_ns);
     }
 }
 
@@ -2391,29 +2721,9 @@ pub fn drainTimeout(
         return error.NotConnected;
     }
 
-    const Sel = Io.Select(union(enum) {
-        drain: anyerror!DrainResult,
-        timeout: void,
-    });
-    var buf: [2]Sel.Union = undefined;
-    var sel = Sel.init(self.io, &buf);
-    sel.async(.drain, drainHelper, .{self});
-    sel.async(.timeout, sleepNs, .{ self.io, timeout_ns });
-
-    const select_result = sel.await() catch {
-        sel.cancelDiscard();
-        return error.Canceled;
-    };
-    sel.cancelDiscard();
-
-    switch (select_result) {
-        .drain => |result| {
-            return result;
-        },
-        .timeout => {
-            return error.Timeout;
-        },
-    }
+    // Wrap-and-cancel: drain is compound app logic, not a single Io.Operation,
+    // so it cannot use the Batch path.
+    return try callWithTimeout(self.io, timeout_ns, drainHelper, .{self});
 }
 
 /// Helper for async drain.
@@ -2570,13 +2880,12 @@ fn requestAwaitResp(
     waiter: *RespWaiter,
     reply: []const u8,
     timeout_ms: u32,
-) ?Message {
+) error{Canceled}!?Message {
     assert(self.resp_mux.prefix_len > 0);
     const map_key = reply[self.resp_mux.prefix_len..];
     const timeout_ns: u64 =
         @as(u64, timeout_ms) * std.time.ns_per_ms;
-    const start = getNowNs(self.io);
-    var spin_count: u32 = 0;
+    const deadline_ns: u64 = getNowNs(self.io) +| timeout_ns;
 
     defer {
         self.resp_mux.mutex.lockUncancelable(self.io);
@@ -2584,24 +2893,32 @@ fn requestAwaitResp(
         self.resp_mux.mutex.unlock(self.io);
     }
 
-    while (!waiter.done.load(.acquire)) {
-        spin_count += 1;
-        if (spin_count < defaults.Spin.max_spins) {
-            std.atomic.spinLoopHint();
-        } else {
-            self.io.sleep(
-                .fromNanoseconds(0),
-                .awake,
-            ) catch |err| {
-                if (err == error.Canceled)
-                    return waiter.msg;
-            };
-            spin_count = 0;
-
-            const now = getNowNs(self.io);
-            if (now -| start >= timeout_ns)
-                return waiter.msg;
-        }
+    // Block on `done` (futex word) until the dispatcher delivers the reply,
+    // the timeout expires, or the request is canceled.
+    //
+    // LOST-WAKEUP SAFETY: the dispatcher sets done=1 (release) THEN futexWakes.
+    // futexWait only parks while *done == 0, so a done=1 that lands before we
+    // park makes futexWait return immediately -- the reply is never missed.
+    while (waiter.done.load(.acquire) == 0) {
+        const now = getNowNs(self.io);
+        if (now >= deadline_ns) return waiter.msg; // timeout
+        const remaining_ns: i96 = @intCast(deadline_ns - now);
+        self.io.futexWaitTimeout(
+            u32,
+            &waiter.done.raw,
+            0,
+            .{ .duration = .{ .raw = .fromNanoseconds(remaining_ns), .clock = .awake } },
+        ) catch |err| {
+            // Cancellation surfaces as error.Canceled, distinct from a
+            // timeout (which returns a null msg). A reply that landed in the
+            // same instant still wins -- the dispatcher sets done=1 before it
+            // wakes us, so re-check before reporting cancel. The `defer` above
+            // removes the reply-token from the mux either way.
+            if (err == error.Canceled) {
+                if (waiter.done.load(.acquire) != 0) return waiter.msg;
+                return error.Canceled;
+            }
+        };
     }
 
     return waiter.msg;
@@ -2616,7 +2933,9 @@ fn closeRespMux(self: *Client) void {
     self.resp_mux.mutex.lockUncancelable(io);
     var it = self.resp_mux.map.iterator();
     while (it.next()) |entry| {
-        entry.value_ptr.*.done.store(true, .release);
+        const waiter = entry.value_ptr.*;
+        waiter.done.store(1, .release);
+        io.futexWake(u32, &waiter.done.raw, std.math.maxInt(u32));
     }
     self.resp_mux.map.clearAndFree(self.allocator);
     self.resp_mux.mutex.unlock(io);
@@ -2730,11 +3049,6 @@ pub fn requestMsg(
     return self.requestAwaitResp(&waiter, reply, timeout_ms);
 }
 
-/// Helper for connection timeout (nanoseconds).
-fn sleepNs(io: Io, timeout_ns: u64) void {
-    io.sleep(.fromNanoseconds(timeout_ns), .awake) catch {};
-}
-
 /// Reads NKey seed from file, trimming whitespace.
 /// Returns slice into buf containing the seed.
 /// File system errors (FileNotFound, AccessDenied, etc.) propagate directly.
@@ -2800,6 +3114,8 @@ pub fn drain(self: *Client) !DrainResult {
 
             // Close queue and clear from data structures
             sub.queue.close(self.io);
+            // Wake any parked consumer so it observes the close.
+            sub.signalWaiters(self.io);
             _ = self.sidmap.remove(sub.sid);
             self.sub_ptrs[slot_idx] = null;
             if (self.cached_sub == sub) self.cached_sub = null;
@@ -2835,12 +3151,22 @@ pub fn drain(self: *Client) !DrainResult {
     // Shutdown read to unblock io_task. stream_mutex serializes
     // against io_task closing the fd during reconnect.
     self.shutdownRecvIfOpen();
-    // Wait for io_task to exit
+    // Wake the writer so it observes .closed and exits (the reader is unblocked
+    // by shutdownRecvIfOpen above / the future cancel below).
+    self.wakeIoTask();
+    // Wake any flush() parked on the PONG eventcount so it returns
+    // error.ConnectionClosed now instead of waiting out its full timeout.
+    self.signalPong();
+    // Wait for both driver units to exit.
+    if (self.writer_task_future) |*future| {
+        _ = future.cancel(self.io);
+        self.writer_task_future = null;
+    }
     if (self.io_task_future) |*future| {
         _ = future.cancel(self.io);
         self.io_task_future = null;
     }
-    // Full close -- io_task exited, no concurrent reassignment.
+    // Full close -- both units exited, no concurrent reassignment.
     self.closeIfOpen();
 
     if (self.server_info) |*info| {
@@ -2872,6 +3198,13 @@ pub fn isConnected(self: *const Client) bool {
 pub fn stats(self: *const Client) StatsSnapshot {
     assert(self.next_sid >= 1);
     return self.statistics.snapshot();
+}
+
+/// Number of io_task outer-loop iterations so far. On an idle connection the
+/// io_task blocks in poll(), so this stays nearly constant -- a proxy for
+/// "spends ~no CPU while idle". Intended for tests/diagnostics.
+pub fn ioTaskLoops(self: *const Client) u64 {
+    return self.io_task_loops.load(.monotonic);
 }
 
 /// Returns server info.
@@ -3245,7 +3578,7 @@ pub fn isReconnecting(self: *const Client) bool {
 pub fn numSubscriptions(self: *const Client) usize {
     assert(self.next_sid >= 1);
     // free_count tracks available slots; total - free = active
-    return MAX_SUBSCRIPTIONS - self.free_count;
+    return self.sub_ptrs.len - self.free_count;
 }
 
 /// Measures round-trip time to the server by sending PING and waiting for PONG.
@@ -3277,10 +3610,11 @@ pub fn rtt(self: *Client) !u64 {
     }
     self.write_mutex.unlock(self.io);
 
-    // Wait for PONG - poll last_pong_received_ns
-    // io_task handles PONG and updates the timestamp
+    // Wait for PONG - poll last_pong_received_ns (updated by io_task, which is
+    // woken by the incoming PONG making the socket readable). Coarse 1ms poll
+    // bounded by the timeout: this is an explicit blocking call, not an idle
+    // path, and last_pong_received_ns is a u64 (not futex-sized).
     const timeout_ns: u64 = 5_000_000_000;
-    var spin_count: u32 = 0;
 
     while (true) {
         const current_pong_ns = self.last_pong_received_ns.load(.acquire);
@@ -3288,21 +3622,11 @@ pub fn rtt(self: *Client) !u64 {
             const end_ns = getNowNs(self.io);
             return end_ns - start_ns;
         }
-
-        spin_count += 1;
-        if (spin_count < defaults.Spin.max_spins) {
-            std.atomic.spinLoopHint();
-        } else {
-            self.io.sleep(
-                .fromNanoseconds(0),
-                .awake,
-            ) catch {};
-            spin_count = 0;
-            const now_ns = getNowNs(self.io);
-            if (now_ns - start_ns >= timeout_ns) {
-                return error.Timeout;
-            }
+        const now_ns = getNowNs(self.io);
+        if (now_ns - start_ns >= timeout_ns) {
+            return error.Timeout;
         }
+        self.io.sleep(.fromMilliseconds(1), .awake) catch {};
     }
 }
 
@@ -3362,11 +3686,18 @@ pub inline fn getSubscriptionBySid(self: *Client, sid: u64) ?*Sub {
 /// Sends PONG response.
 /// Sends PING for health check.
 fn sendPing(self: *Client) !void {
-    assert(self.state == .connected);
     self.write_mutex.lock(self.io) catch {
         return error.WriteFailed;
     };
     defer self.write_mutex.unlock(self.io);
+    // Re-check state UNDER write_mutex, don't assert it before locking. The
+    // reader owns reconnect and can flip `state` out of `.connected` at any
+    // moment on a real thread (Threaded / multi-executor zio); the writer's
+    // health check races that. `cleanupForReconnect` swaps the stream under
+    // write_mutex, so a `.connected` observed here holds for this write; if the
+    // reader has moved on, skip the PING (the writer re-evaluates next wake).
+    // Mirrors drainWriter's guard.
+    if (State.atomicLoad(&self.state) != .connected) return;
     const writer = self.active_writer;
     writer.writeAll("PING\r\n") catch {
         return error.WriteFailed;
@@ -3434,13 +3765,59 @@ pub fn checkHealthAndDetectStale(self: *Client) bool {
     return false;
 }
 
+/// Join + free callback subs whose delivery fiber has finished (`done` set).
+/// Never joins a still-running fiber, so it cannot self-deadlock when reached
+/// from inside a handler (via `sub.deinit()`). Frees each sub outside
+/// `sub_mutex` to avoid nesting the independent `return_lock` under it.
+fn reapDoneSubs(self: *Client) void {
+    while (true) {
+        self.sub_mutex.lockUncancelable(self.io);
+        var prev: ?*Sub = null;
+        var reaped: ?*Sub = null;
+        var cur = self.reap_head;
+        while (cur) |sub| {
+            if (sub.done.load(.acquire)) {
+                if (prev) |p| p.reap_next = sub.reap_next else self.reap_head = sub.reap_next;
+                reaped = sub;
+                break;
+            }
+            prev = sub;
+            cur = sub.reap_next;
+        }
+        self.sub_mutex.unlock(self.io);
+
+        const sub = reaped orelse break;
+        if (sub.callback_future) |*f| {
+            _ = f.cancel(self.io);
+            sub.callback_future = null;
+        }
+        sub.freeStorage();
+    }
+}
+
 /// Closes all subscription queues (wakes waiters with error).
 pub fn closeAllQueues(self: *Client) void {
     for (self.sub_ptrs) |maybe_sub| {
         if (maybe_sub) |sub| {
             sub.queue.close(self.io);
+            // Wake any parked consumer so it observes the close.
+            sub.signalWaiters(self.io);
         }
     }
+}
+
+/// Wake every caller parked on a blocking call when the connection closes for
+/// good -- reconnect gave up, or reconnect was disabled. Without this a
+/// parked `nextMsg`/`request`/`flush` would hang until `deinit` (or, for flush,
+/// a full ping interval) instead of returning promptly with a closed error.
+/// Closes the sub queues (`nextMsg`/`nextRaw` -> `error.Closed`), bumps
+/// `pong_seq` (parked `flush` re-checks `canSend()` -> `error.ConnectionClosed`),
+/// and signals the response-mux waiters (`request` unblocks). Called from the
+/// reader unit at terminal close; idempotent, since `deinit` runs the same paths.
+pub fn wakeBlockedOnClose(self: *Client) void {
+    self.closeAllQueues();
+    self.signalPong();
+    self.closeRespMux();
 }
 
 /// Closes the connection and frees all resources.
@@ -3465,8 +3842,17 @@ pub fn deinit(self: *Client) void {
     //    in cleanupForReconnect; closeIfOpen below handles the
     //    case where io_task already owns/closed the fd.
     if (was_open) self.shutdownRecvIfOpen();
+    // Wake the writer so it observes .closed and exits.
+    self.wakeIoTask();
+    // Wake any flush() parked on the PONG eventcount so it returns
+    // error.ConnectionClosed now instead of waiting out its full timeout.
+    self.signalPong();
 
-    // 3. Wait for io_task to exit (no concurrent writers after)
+    // 3. Wait for both driver units to exit (no concurrent writers after).
+    if (self.writer_task_future) |*future| {
+        _ = future.cancel(self.io);
+        self.writer_task_future = null;
+    }
     if (self.io_task_future) |*future| {
         _ = future.cancel(self.io);
         self.io_task_future = null;
@@ -3507,6 +3893,23 @@ pub fn deinit(self: *Client) void {
 
     // 6. Cleanup subscriptions (io_task is now gone)
     self.closeAllQueues();
+    // Reap callback subs whose deinit() was deferred: their queues are closed,
+    // so their fibers have exited (or will once cancelled). Join+free them
+    // before the slab goes away. Safe here -- deinit() is external, never a
+    // delivery fiber, so a straggler join cannot self-deadlock.
+    self.reapDoneSubs();
+    self.sub_mutex.lockUncancelable(self.io);
+    while (self.reap_head) |sub| {
+        self.reap_head = sub.reap_next;
+        self.sub_mutex.unlock(self.io);
+        if (sub.callback_future) |*f| {
+            _ = f.cancel(self.io);
+            sub.callback_future = null;
+        }
+        sub.freeStorage();
+        self.sub_mutex.lockUncancelable(self.io);
+    }
+    self.sub_mutex.unlock(self.io);
     for (self.sub_ptrs) |maybe_sub| {
         if (maybe_sub) |sub| {
             sub.state = .unsubscribed;
@@ -3525,6 +3928,13 @@ pub fn deinit(self: *Client) void {
     }
     alloc.free(self.return_queue_buf);
     self.tiered_slab.deinit();
+
+    // Free the subscription tables (allocated to options.max_subscriptions).
+    alloc.free(self.sub_ptrs);
+    alloc.free(self.free_slots);
+    alloc.free(self.sub_backups);
+    alloc.free(self.sidmap_keys);
+    alloc.free(self.sidmap_vals);
 
     // Free pending buffer
     self.deinitPendingBuffer();
@@ -3564,7 +3974,7 @@ pub fn backupSubscriptions(self: *Client) error{ SubjectTooLong, QueueGroupTooLo
     for (self.sub_ptrs) |maybe_sub| {
         if (maybe_sub) |sub| {
             if (sub.state != .active) continue;
-            if (self.sub_backup_count >= MAX_SUBSCRIPTIONS) break;
+            if (self.sub_backup_count >= self.sub_backups.len) break;
 
             // Validate lengths - reject truncation
             if (sub.subject.len >= defaults.Limits.max_subject_len) {
@@ -3691,6 +4101,27 @@ fn pubEncodedSize(
     return size;
 }
 
+/// Wake the writer unit. Called by any producer after pushing outbound work to
+/// publish_ring, and on shutdown. Idempotent and safe from any thread.
+inline fn wakeIoTask(self: *Client) void {
+    // Post-bisection this wakes the WRITER unit (which drains the ring / emits
+    // PONGs / exits on teardown). The reader is unblocked separately via socket
+    // data or shutdownRecvIfOpen. Kept named wakeIoTask to minimise churn.
+    self.signalWriter();
+}
+
+/// Commit an encoded entry to the outbound ring and wake the writer.
+///
+/// LOST-WAKEUP SAFETY: the ring commit (release) is published BEFORE the wake
+/// bumps `wake_seq` (seq_cst). If the wake races the writer's ring drain, the
+/// writer either still sees the committed entry on this pass or observes the
+/// advanced seq and re-checks work before parking (see `writerRun`) -- the entry
+/// is never stranded.
+inline fn commitRing(self: *Client, entry: []u8, len: usize) void {
+    self.publish_ring.commit(entry, len);
+    self.wakeIoTask();
+}
+
 /// Encode PUB into publish ring (lock-free).
 /// Spins briefly if ring is full, then returns error.
 fn encodePubToRing(
@@ -3749,7 +4180,7 @@ fn encodePubToRing(
     @memcpy(buf[pos..][0..2], "\r\n");
     pos += 2;
 
-    self.publish_ring.commit(entry, pos);
+    self.commitRing(entry, pos);
 }
 
 /// Encode HPUB with structured header entries into ring.
@@ -3814,7 +4245,7 @@ fn encodeHPubToRing(
     @memcpy(buf[pos..][0..2], "\r\n");
     pos += 2;
 
-    self.publish_ring.commit(entry, pos);
+    self.commitRing(entry, pos);
 }
 
 /// Encode HPUB with raw pre-encoded header bytes into ring.
@@ -3880,7 +4311,7 @@ fn encodeHPubRawToRing(
     @memcpy(buf[pos..][0..2], "\r\n");
     pos += 2;
 
-    self.publish_ring.commit(entry, pos);
+    self.commitRing(entry, pos);
 }
 
 /// Encode SUB into publish ring.
@@ -3931,7 +4362,7 @@ fn encodeSubToRing(
     @memcpy(buf[pos..][0..2], "\r\n");
     pos += 2;
 
-    self.publish_ring.commit(entry, pos);
+    self.commitRing(entry, pos);
 }
 
 /// Encode UNSUB into publish ring.
@@ -3968,7 +4399,7 @@ fn encodeUnsubToRing(
     @memcpy(buf[pos..][0..2], "\r\n");
     pos += 2;
 
-    self.publish_ring.commit(entry, pos);
+    self.commitRing(entry, pos);
 }
 
 /// Reserve a ring entry with brief spin on full.
@@ -4099,7 +4530,10 @@ pub fn tryConnect(
 
     // Connect, then atomically install the new stream so deinit/drain
     // see a consistent (handle, stream_open) pair.
-    const new_stream = try connectToHost(self.io, raw_host, port);
+    const new_stream = if (server.is_uds)
+        try connectToUds(self.io, raw_host)
+    else
+        try connectToHost(self.io, raw_host, port);
     {
         self.stream_mutex.lockUncancelable(self.io);
         defer self.stream_mutex.unlock(self.io);
@@ -4134,6 +4568,7 @@ pub fn tryConnect(
         .user = null,
         .pass = null,
         .use_tls = self.use_tls,
+        .is_uds = server.is_uds,
     };
 
     self.use_tls = self.use_tls or parsed.use_tls or
@@ -4355,6 +4790,18 @@ pub const Subscription = struct {
     mode: SubscriptionMode = .manual,
     /// Future for the callback drain task (set for callback subs).
     callback_future: ?Io.Future(void) = null,
+    /// Set true by the delivery fiber immediately before it returns. The reaper
+    /// joins+frees a callback sub only once this is set, so teardown never
+    /// block-joins a still-running fiber -- which, for a `deinit()` called from
+    /// inside that sub's own handler, would be the caller itself (self-join
+    /// deadlock). Manual subs have no fiber and are freed directly.
+    done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Intrusive link for the client's reap list (guarded by `sub_mutex`).
+    reap_next: ?*Subscription = null,
+    /// True once this sub has been placed on the reap list, so a second
+    /// deinit() (e.g. a handler that closes its own sub plus the usual
+    /// `defer sub.deinit()`) does not enqueue it twice. Guarded by `sub_mutex`.
+    reap_queued: bool = false,
 
     // Auto-unsubscribe support
     /// Maximum messages before auto-unsubscribe. Null = no limit.
@@ -4383,7 +4830,68 @@ pub const Subscription = struct {
     /// High watermark for pending bytes.
     max_pending_bytes: u64 = 0,
 
-    /// Spin-yield loop to pop next message from queue.
+    // Blocking-wait state (futex eventcount). Replaces the old spin loop so a
+    // consumer blocked in nextMsg()/nextMsgTimeout() uses ~no CPU while idle.
+    //   - notify_seq: bumped by io_task after routing a message, and on
+    //     teardown (unsubscribe/close). It is the futex word.
+    //   - waiters: number of consumers currently parked. Lets the io_task skip
+    //     the futexWake syscall entirely when nobody is waiting.
+    /// Futex word: incremented on every message routed or on teardown.
+    notify_seq: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// Count of consumers currently parked in a futex wait on `notify_seq`.
+    waiters: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+    /// Producer side (io_task, or teardown): publish a wakeup to any parked
+    /// consumer. The caller has already made the queue non-empty (or closed
+    /// it) BEFORE calling this.
+    ///
+    /// LOST-WAKEUP SAFETY (io_task -> consumer): seq_cst gives a single total
+    /// order over `notify_seq.fetchAdd` here and the consumer's
+    /// `waiters.fetchAdd` + `notify_seq.load`. If a consumer parks (its
+    /// futexWait sees the old seq), then its seq load preceded this fetchAdd in
+    /// that order, so its waiters++ also preceded our waiters.load -> we
+    /// observe waiters>0 and wake it. Otherwise the consumer's seq load already
+    /// saw the new value and its predicate re-check (pop) finds the message, so
+    /// it never parks. Either way: no lost wakeup.
+    fn signalWaiters(self: *Subscription, io: Io) void {
+        _ = self.notify_seq.fetchAdd(1, .seq_cst);
+        if (self.waiters.load(.seq_cst) != 0) {
+            io.futexWake(u32, &self.notify_seq.raw, std.math.maxInt(u32));
+        }
+    }
+
+    /// Park until `notify_seq` changes, the deadline passes, or canceled.
+    /// Caller MUST have re-checked its predicate (queue/state) immediately
+    /// before calling with the `observed` seq it read at that point.
+    fn parkUntilSignal(
+        self: *Subscription,
+        io: Io,
+        observed: u32,
+        deadline_ns: ?u64,
+    ) error{Canceled}!void {
+        _ = self.waiters.fetchAdd(1, .seq_cst);
+        defer _ = self.waiters.fetchSub(1, .monotonic);
+
+        if (deadline_ns) |deadline| {
+            const now = getNowNs(io);
+            if (now >= deadline) return;
+            const remaining_ns: i96 = @intCast(deadline - now);
+            io.futexWaitTimeout(
+                u32,
+                &self.notify_seq.raw,
+                observed,
+                .{ .duration = .{ .raw = .fromNanoseconds(remaining_ns), .clock = .awake } },
+            ) catch |err| {
+                if (err == error.Canceled) return error.Canceled;
+            };
+        } else {
+            io.futexWait(u32, &self.notify_seq.raw, observed) catch |err| {
+                if (err == error.Canceled) return error.Canceled;
+            };
+        }
+    }
+
+    /// Blocking loop to pop next message from queue.
     /// Internal: used by both nextMsg() and callback drain tasks.
     fn nextRaw(self: *Subscription, io: Io) !Message {
         assert(self.state == .active or self.state == .draining);
@@ -4393,18 +4901,11 @@ pub const Subscription = struct {
             .{self.queue.len()},
         );
 
-        var spin_count: u32 = 0;
-        var yield_count: u32 = 0;
-
         while (true) {
             if (self.queue.pop()) |msg| {
                 const msg_size =
                     if (msg.backing_buf) |buf| buf.len else msg.size();
                 self.pending_bytes -|= msg_size;
-                dbg.print(
-                    "Sub.nextRaw: GOT MESSAGE after {d} yields",
-                    .{yield_count},
-                );
                 return msg;
             }
             if (self.queue.isClosed()) {
@@ -4416,26 +4917,17 @@ pub const Subscription = struct {
                 return error.Closed;
             }
 
-            spin_count += 1;
-            if (spin_count < defaults.Spin.max_spins) {
-                std.atomic.spinLoopHint();
-            } else {
-                io.sleep(
-                    .fromNanoseconds(0),
-                    .awake,
-                ) catch |err| {
-                    if (err == error.Canceled)
-                        return error.Canceled;
-                };
-                spin_count = 0;
-                yield_count += 1;
-                if (yield_count % 10000 == 0) {
-                    dbg.print(
-                        "Sub.nextRaw: still waiting, yields={d}",
-                        .{yield_count},
-                    );
-                }
-            }
+            // Snapshot the futex word, then re-check the predicate before
+            // parking. If io_task routes a message (or teardown fires) after
+            // this load, notify_seq differs from `observed` and the park
+            // returns immediately (see parkUntilSignal / signalWaiters).
+            const observed = self.notify_seq.load(.seq_cst);
+            if (!self.queue.isEmpty()) continue;
+            if (self.queue.isClosed()) return error.Closed;
+            if (self.state != .active and self.state != .draining)
+                return error.Closed;
+
+            try self.parkUntilSignal(io, observed, null);
         }
     }
 
@@ -4479,8 +4971,6 @@ pub const Subscription = struct {
         assert(self.state == .active or self.state == .draining);
         assert(buf.len > 0);
 
-        var spin_count: u32 = 0;
-
         while (true) {
             const count = self.queue.popBatch(buf);
             if (count > 0) {
@@ -4503,19 +4993,14 @@ pub const Subscription = struct {
                 return error.Closed;
             }
 
-            spin_count += 1;
-            if (spin_count < defaults.Spin.max_spins) {
-                std.atomic.spinLoopHint();
-            } else {
-                io.sleep(
-                    .fromNanoseconds(0),
-                    .awake,
-                ) catch |err| {
-                    if (err == error.Canceled)
-                        return error.Canceled;
-                };
-                spin_count = 0;
-            }
+            // Block until a message is routed / teardown fires (no timeout).
+            const observed = self.notify_seq.load(.seq_cst);
+            if (!self.queue.isEmpty()) continue;
+            if (self.queue.isClosed()) return error.Closed;
+            if (self.state != .active and self.state != .draining)
+                return error.Closed;
+
+            try self.parkUntilSignal(io, observed, null);
         }
     }
 
@@ -4552,7 +5037,7 @@ pub const Subscription = struct {
         const start = getNowNs(io);
         const timeout_ns: u64 =
             @as(u64, timeout_ms) * std.time.ns_per_ms;
-        var spin_count: u32 = 0;
+        const deadline_ns: u64 = start +| timeout_ns;
 
         while (true) {
             if (self.queue.pop()) |msg| {
@@ -4572,28 +5057,17 @@ pub const Subscription = struct {
             {
                 return error.Closed;
             }
+            if (getNowNs(io) >= deadline_ns) return null;
 
-            spin_count += 1;
-            if (spin_count < defaults.Spin.max_spins) {
-                std.atomic.spinLoopHint();
-            } else {
-                // Yield to IO event loop. This:
-                // - stops burning CPU
-                // - enables future.cancel()
-                // - works in Debug mode
-                io.sleep(
-                    .fromNanoseconds(0),
-                    .awake,
-                ) catch |err| {
-                    if (err == error.Canceled)
-                        return error.Canceled;
-                };
-                spin_count = 0;
-                // Check timeout after yielding
-                const now = getNowNs(io);
-                if (now -| start >= timeout_ns)
-                    return null;
-            }
+            // Block (bounded by the deadline) until a message is routed,
+            // teardown fires, or the timeout expires. Cancellation-aware.
+            const observed = self.notify_seq.load(.seq_cst);
+            if (!self.queue.isEmpty()) continue;
+            if (self.queue.isClosed()) return error.Closed;
+            if (self.state != .active and self.state != .draining)
+                return error.Closed;
+
+            try self.parkUntilSignal(io, observed, deadline_ns);
         }
     }
 
@@ -4698,26 +5172,19 @@ pub const Subscription = struct {
         const start = getNowNs(io);
         const timeout_ns: u64 =
             @as(u64, timeout_ms) * std.time.ns_per_ms;
-        var spin_count: u32 = 0;
 
+        // Drain progress is driven by the CONSUMER popping (a different
+        // thread/task), which emits no producer signal, so we cannot futex
+        // on notify_seq here. Poll on a coarse 1ms sleep bounded by the
+        // timeout -- far below a busy spin, and only during an explicit drain.
         while (true) {
             if (self.queue.len() == 0) {
                 return;
             }
-
-            spin_count += 1;
-            if (spin_count < defaults.Spin.max_spins) {
-                std.atomic.spinLoopHint();
-            } else {
-                io.sleep(
-                    .fromNanoseconds(0),
-                    .awake,
-                ) catch {};
-                spin_count = 0;
-                const now = getNowNs(io);
-                if (now -| start >= timeout_ns)
-                    return error.Timeout;
-            }
+            const now = getNowNs(io);
+            if (now -| start >= timeout_ns)
+                return error.Timeout;
+            io.sleep(.fromMilliseconds(1), .awake) catch {};
         }
     }
 
@@ -4890,6 +5357,10 @@ pub const Subscription = struct {
                 self.max_pending_bytes = self.pending_bytes;
         }
 
+        // Message is now queued: wake any parked consumer (nextMsg/next-batch).
+        // Enqueue-then-signal under the seq_cst eventcount -> no lost wakeup.
+        self.signalWaiters(self.client.io);
+
         // Auto-unsubscribe (only when max_msgs set)
         if (self.max_msgs != null) {
             self.delivered_count += 1;
@@ -4971,24 +5442,26 @@ pub const Subscription = struct {
         // Mark as unsubscribed
         self.state = .unsubscribed;
 
+        // Wake any parked nextMsg()/nextMsgTimeout() so it observes the close
+        // and returns error.Closed promptly (cancellation).
+        self.signalWaiters(client.io);
+
         // Report errors after cleanup completes
         if (!can_send) return error.NotConnected;
         if (send_failed) return error.EncodingFailed;
     }
 
-    /// Frees all memory resources.
+    /// Releases the subscription.
     ///
-    /// If not yet unsubscribed, calls unsubscribe() and ignores errors.
+    /// Manual subs (no delivery fiber) are freed immediately. For a callback
+    /// sub the delivery fiber may still be winding down -- and for a deinit()
+    /// call made from inside that sub's own handler, the fiber IS the caller --
+    /// so we mark it inactive, unblock the fiber, and hand the sub to the client
+    /// reaper, which joins+frees it once the fiber sets `done`. We never
+    /// block-join the fiber here (that is the close-from-handler self-deadlock).
     /// Safe to use in defer blocks (like Rust's Drop trait).
     pub fn deinit(self: *Subscription) void {
-        const allocator = self.client.allocator;
-        // Cancel callback drain task before unsubscribe
-        if (self.callback_future) |*future| {
-            _ = future.cancel(self.client.io);
-            self.callback_future = null;
-        }
-
-        // Ensure unsubscribed (errors ignored - like Rust Drop)
+        // Mark inactive, close the queue, and wake the fiber (no join).
         if (self.state != .unsubscribed) {
             self.unsubscribe() catch |err| {
                 dbg.print(
@@ -4998,15 +5471,38 @@ pub const Subscription = struct {
             };
         }
 
-        // Drain remaining messages (return buffers to pool)
+        if (self.callback_future == null) {
+            // Manual sub: no delivery fiber can race the free.
+            self.freeStorage();
+            return;
+        }
+
+        // Callback sub: defer to the reaper. The fiber, unblocked by the
+        // unsubscribe above, exits and sets `done`, after which the reaper
+        // joins+frees it. Sweep opportunistically for already-finished subs
+        // (never this one -- its fiber is still running, so `done` is false).
+        const client = self.client;
+        client.sub_mutex.lockUncancelable(client.io);
+        if (!self.reap_queued) {
+            self.reap_queued = true;
+            self.reap_next = client.reap_head;
+            client.reap_head = self;
+        }
+        client.sub_mutex.unlock(client.io);
+        client.reapDoneSubs();
+    }
+
+    /// Drain any queued messages back to the pool and free this sub's storage.
+    /// Caller guarantees no delivery fiber is still consuming the queue (manual
+    /// subs have none; callback subs are freed only after their fiber's `done`).
+    fn freeStorage(self: *Subscription) void {
+        const allocator = self.client.allocator;
         var drain_buf: [1]Message = undefined;
         while (true) {
             const n = self.queue.popBatch(&drain_buf);
             if (n == 0) break;
             drain_buf[0].deinit();
         }
-
-        // Free subscription resources
         allocator.free(self.queue_buf);
         allocator.free(self.subject);
         if (self.queue_group) |qg| allocator.free(qg);
@@ -5097,6 +5593,43 @@ test "parse url default port" {
     const parsed = try parseUrl("nats://myserver");
     try std.testing.expectEqualSlices(u8, "myserver", parsed.host);
     try std.testing.expectEqual(@as(u16, 4222), parsed.port);
+}
+
+test "parse url nats+uds scheme" {
+    // Absolute socket path: host carries the path verbatim, no port.
+    {
+        const parsed = try parseUrl("nats+uds:///run/snats/snats.sock");
+        try std.testing.expect(parsed.is_uds);
+        try std.testing.expectEqualSlices(u8, "/run/snats/snats.sock", parsed.host);
+        try std.testing.expect(!parsed.use_tls);
+        try std.testing.expect(parsed.user == null);
+        try std.testing.expect(parsed.pass == null);
+    }
+
+    // user:pass before the path are still parsed; path is the remainder.
+    {
+        const parsed = try parseUrl("nats+uds://user:pass@/tmp/snats.sock");
+        try std.testing.expect(parsed.is_uds);
+        try std.testing.expectEqualSlices(u8, "/tmp/snats.sock", parsed.host);
+        try std.testing.expectEqualSlices(u8, "user", parsed.user.?);
+        try std.testing.expectEqualSlices(u8, "pass", parsed.pass.?);
+    }
+
+    // A path containing a colon is taken verbatim, not split into host:port.
+    {
+        const parsed = try parseUrl("nats+uds:///tmp/dir:weird/snats.sock");
+        try std.testing.expect(parsed.is_uds);
+        try std.testing.expectEqualSlices(u8, "/tmp/dir:weird/snats.sock", parsed.host);
+    }
+
+    // Non-uds schemes leave is_uds false.
+    {
+        const parsed = try parseUrl("nats://localhost:4222");
+        try std.testing.expect(!parsed.is_uds);
+    }
+
+    // Missing path is rejected.
+    try std.testing.expectError(error.InvalidUrl, parseUrl("nats+uds://"));
 }
 
 test "options defaults" {

@@ -92,6 +92,185 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     testRapidServerRestarts(allocator, manager);
     testMultipleReconnectionCycles(allocator, manager);
     testLongDisconnectionRecovery(allocator, manager);
+    testConcurrentPublishReconnectRace(allocator, manager);
+    testTerminalReconnectFailUnblocks(allocator, manager);
+}
+
+const UnblockState = struct {
+    sub: *nats.Client.Sub,
+    done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    closed_result: bool = false,
+    got_message: bool = false,
+};
+
+fn parkedNextMsg(state: *UnblockState) void {
+    if (state.sub.nextMsg()) |msg| {
+        msg.deinit();
+        state.got_message = true;
+    } else |err| {
+        state.closed_result = (err == error.Closed or err == error.ConnectionClosed);
+    }
+    state.done.store(true, .release);
+}
+
+/// When reconnection gives up (max attempts exhausted, no app drain), a
+/// consumer parked in nextMsg must be woken *promptly* with error.Closed -- it
+/// must not hang until deinit (or a ping interval). Terminal, not restarted.
+fn testTerminalReconnectFailUnblocks(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
+    // Dedicated server on its own port so we can stop *the client's* server for
+    // good. `stopServer(0)` is unreliable this late in the suite -- earlier
+    // reconnect tests churn the manager's server list, so index 0 no longer maps
+    // to the port the client is on.
+    const term_port: u16 = 14245;
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, term_port);
+
+    const io = utils.newIo(allocator);
+    defer io.deinit();
+
+    const server = manager.startServer(allocator, io.io(), .{ .port = term_port }) catch {
+        reportResult("terminal_fail_unblocks", false, "server start failed");
+        return;
+    };
+
+    const client = nats.Client.connect(allocator, io.io(), url, .{
+        .reconnect = true,
+        .max_reconnect_attempts = 2,
+        .reconnect_wait_ms = 50,
+        // Large ping interval: the unblock must come from the terminal-close
+        // path, not a coincidental keepalive timeout.
+        .ping_interval_ms = 30_000,
+    }) catch {
+        reportResult("terminal_fail_unblocks", false, "connect failed");
+        return;
+    };
+    defer client.deinit();
+
+    var sub = client.subscribeSync("terminal.fail.unblock") catch {
+        reportResult("terminal_fail_unblocks", false, "subscribe failed");
+        return;
+    };
+    defer sub.deinit();
+
+    var state: UnblockState = .{ .sub = sub };
+    var future = io.io().concurrent(parkedNextMsg, .{&state}) catch {
+        reportResult("terminal_fail_unblocks", false, "spawn failed");
+        return;
+    };
+
+    // Let the consumer park, then kill the client's server for good.
+    io.io().sleep(.fromMilliseconds(100), .awake) catch {};
+    server.stop(io.io());
+
+    // Poll (bounded) for the parked call to return. 3 s is far beyond the
+    // 2 x 50 ms reconnect budget but well under the 30 s ping interval, so a
+    // timeout here means the terminal close did NOT wake the consumer.
+    var waited_ms: u32 = 0;
+    while (!state.done.load(.acquire) and waited_ms < 3000) {
+        io.io().sleep(.fromMilliseconds(25), .awake) catch {};
+        waited_ms += 25;
+    }
+
+    if (!state.done.load(.acquire)) {
+        _ = future.cancel(io.io());
+        reportResult("terminal_fail_unblocks", false, "parked nextMsg not woken on terminal close");
+        return;
+    }
+    future.await(io.io());
+
+    if (state.got_message) {
+        reportResult("terminal_fail_unblocks", false, "returned a message");
+    } else if (state.closed_result) {
+        reportResult("terminal_fail_unblocks", true, "");
+    } else {
+        reportResult("terminal_fail_unblocks", false, "wrong error (not Closed)");
+    }
+}
+
+/// State shared with the hammering publisher fiber.
+const RaceState = struct {
+    client: *nats.Client,
+    io: std.Io,
+    published: usize = 0,
+    stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+};
+
+/// Publish as fast as possible until told to stop. Publishes that land while the
+/// connection is torn down / reconnecting may fail or buffer -- that is fine; the
+/// point is to keep an outbound writer active *across* the socket swap.
+fn racePublisher(state: *RaceState) void {
+    var n: usize = 0;
+    while (!state.stop.load(.acquire)) {
+        var buf: [32]u8 = undefined;
+        const m = std.fmt.bufPrint(&buf, "race-{d}", .{n}) catch continue;
+        if (state.client.publish("race.reconnect", m)) |_| {
+            state.published += 1;
+        } else |_| {}
+        n += 1;
+        state.io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+}
+
+/// Highest-risk race: drive concurrent publishes while the reader
+/// repeatedly tears down and rebuilds the connection, asserting the writer never
+/// touches a half-swapped socket -- no crash, no corruption, and the client
+/// recovers. The conn_generation guard + write_mutex + transport_failed handoff
+/// are what make this safe; this test is their adversary.
+fn testConcurrentPublishReconnectRace(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
+    _ = manager;
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const io = utils.newIo(allocator);
+    defer io.deinit();
+
+    const client = nats.Client.connect(allocator, io.io(), url, .{
+        .reconnect = true,
+        .max_reconnect_attempts = 30,
+        .reconnect_wait_ms = 20,
+    }) catch {
+        reportResult("concurrent_publish_reconnect", false, "connect failed");
+        return;
+    };
+    defer client.deinit();
+
+    var sub = client.subscribeSync("race.reconnect") catch {
+        reportResult("concurrent_publish_reconnect", false, "subscribe failed");
+        return;
+    };
+    defer sub.deinit();
+
+    var state: RaceState = .{ .client = client, .io = io.io() };
+    var pub_future = io.io().concurrent(racePublisher, .{&state}) catch {
+        reportResult("concurrent_publish_reconnect", false, "publisher spawn failed");
+        return;
+    };
+
+    // Force reconnect cycles (server stays up, so each cycle reconnects fast)
+    // while the publisher hammers across every socket swap.
+    var cycle: u8 = 0;
+    while (cycle < 8) : (cycle += 1) {
+        client.forceReconnect() catch {};
+        io.io().sleep(.fromMilliseconds(60), .awake) catch {};
+    }
+
+    // Let the last reconnect settle, then stop and join the publisher.
+    io.io().sleep(.fromMilliseconds(300), .awake) catch {};
+    state.stop.store(true, .release);
+    pub_future.await(io.io());
+
+    // Survival (no crash/corruption reaching here) + recovery is the contract.
+    if (client.isConnected()) {
+        reportResult("concurrent_publish_reconnect", true, "");
+    } else {
+        reportResult("concurrent_publish_reconnect", false, "not connected after race");
+    }
 }
 
 fn testAutoReconnectBasic(

@@ -16,8 +16,12 @@ concurrency:
 
 env:
   ZIG_VERSION: 0.16.0
-  NATS_SERVER_VERSION: v2.12.7
   NATS_CLI_VERSION: v0.3.1
+  # No nats-server releases exist for the UDS fork yet, so CI builds it
+  # from source. Point these at the fork repo/ref to test against it.
+  # The repo must be publicly cloneable (or add credentials to the step).
+  NATS_SERVER_FORK_REPO: https://github.com/mutech/nats-server.git
+  NATS_SERVER_FORK_REF: main
 
 jobs:
   build:
@@ -27,7 +31,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Zig
         uses: mlugg/setup-zig@v2
@@ -54,15 +58,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Both backends (threaded default + evented zio) across Debug/ReleaseFast.
+        # zio is a lazy dependency fetched only for the -Dio_backend=zio entries.
         include:
-          - mode: Debug
+          - mode: threaded-Debug
             args: ""
-          - mode: ReleaseFast
+          - mode: threaded-ReleaseFast
             args: -Doptimize=ReleaseFast
+          - mode: zio-Debug
+            args: -Dio_backend=zio
+          - mode: zio-ReleaseFast
+            args: -Doptimize=ReleaseFast -Dio_backend=zio
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Zig
         uses: mlugg/setup-zig@v2
@@ -70,22 +80,37 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
           cache-key: integration-${{ matrix.mode }}
 
-      - name: Install NATS tools
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          # Must satisfy the nats-server fork's go.mod (currently >= 1.26, and it
+          # tracks nats-io main which bumps periodically). "stable" matches
+          # nats-server's own CI and avoids re-pinning on every bump.
+          go-version: "stable"
+
+      - name: Build nats-server (UDS fork)
         shell: bash
         run: |
           set -euo pipefail
 
-          nats_server_archive="nats-server-${NATS_SERVER_VERSION}-linux-amd64.tar.gz"
-          nats_server_url="https://github.com/nats-io/nats-server/releases/download/${NATS_SERVER_VERSION}/${nats_server_archive}"
+          mkdir -p "$HOME/.local/bin"
+          git clone --depth 1 --branch "${NATS_SERVER_FORK_REF}" \
+            "${NATS_SERVER_FORK_REPO}" "$RUNNER_TEMP/nats-server-fork"
+          go -C "$RUNNER_TEMP/nats-server-fork" build \
+            -o "$HOME/.local/bin/nats-server" .
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install NATS CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+
           nats_cli_version="${NATS_CLI_VERSION#v}"
           nats_cli_archive="nats-${nats_cli_version}-linux-amd64.zip"
           nats_cli_url="https://github.com/nats-io/natscli/releases/download/${NATS_CLI_VERSION}/${nats_cli_archive}"
 
-          mkdir -p "$HOME/.local/bin" "$RUNNER_TEMP/nats-server" "$RUNNER_TEMP/nats-cli"
-
-          curl --fail --location --show-error --silent "$nats_server_url" --output "$RUNNER_TEMP/$nats_server_archive"
-          tar -xzf "$RUNNER_TEMP/$nats_server_archive" -C "$RUNNER_TEMP/nats-server" --strip-components=1
-          install -m 0755 "$RUNNER_TEMP/nats-server/nats-server" "$HOME/.local/bin/nats-server"
+          mkdir -p "$HOME/.local/bin" "$RUNNER_TEMP/nats-cli"
 
           curl --fail --location --show-error --silent "$nats_cli_url" --output "$RUNNER_TEMP/$nats_cli_archive"
           unzip -q "$RUNNER_TEMP/$nats_cli_archive" -d "$RUNNER_TEMP/nats-cli"
@@ -101,5 +126,21 @@ jobs:
           nats-server --version
           nats --version
 
-      - name: Run integration tests
+      # Each suite is its own step so all of them run and surface their own
+      # pass/fail. UDS runs first for fast feedback; `!cancelled()` lets later
+      # suites run even if an earlier one failed, instead of one failure hiding
+      # the rest.
+      - name: Run integration tests (UDS)
+        run: zig build test-integration-uds ${{ matrix.args }}
+
+      - name: Run integration tests (core)
+        if: ${{ !cancelled() }}
         run: zig build test-integration ${{ matrix.args }}
+
+      - name: Run integration tests (micro)
+        if: ${{ !cancelled() }}
+        run: zig build test-integration-micro ${{ matrix.args }}
+
+      - name: Run integration tests (TLS)
+        if: ${{ !cancelled() }}
+        run: zig build test-integration-tls ${{ matrix.args }}

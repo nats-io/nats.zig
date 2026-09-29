@@ -178,17 +178,39 @@ pub const TestServer = struct {
 
         // Start from a clean JetStream store so integration tests do not
         // inherit state from an interrupted previous run on the same host.
-        std.Io.Dir.deleteTree(std.Io.Dir.cwd(), io, dir) catch {};
+        deleteTreeViaLoop(io, dir);
         return dir;
     }
 
     fn cleanJetStreamStore(self: *TestServer, io: Io) void {
         if (self.store_dir_len == 0) return;
         const dir = self.store_dir_buf[0..self.store_dir_len];
-        std.Io.Dir.deleteTree(std.Io.Dir.cwd(), io, dir) catch {};
+        deleteTreeViaLoop(io, dir);
         self.store_dir_len = 0;
     }
 };
+
+/// Recursively delete a JetStream store directory, driving the operation on the
+/// event loop rather than inline on the caller's thread.
+///
+/// The harness drives `io` from the process's main (foreign) OS thread. zio's
+/// blocking-mode fallback -- taken for io issued off any non-executor thread --
+/// services single file/socket closes but @panics on the *grouped* directory
+/// close that `deleteTree` performs once the store actually exists (an empty or
+/// absent store never reaches that close, which is why store setup slips through
+/// while post-run cleanup crashes). Running the delete as a `concurrent` fiber
+/// puts it on a real executor, where the grouped close is serviced normally; the
+/// caller then simply awaits via futex. `std.Io.Threaded` also supports
+/// `concurrent`, so both backends share this one path.
+fn deleteTreeViaLoop(io: Io, path: []const u8) void {
+    var future = io.concurrent(std.Io.Dir.deleteTree, .{ std.Io.Dir.cwd(), io, path }) catch {
+        // Concurrency unavailable: best-effort inline delete. This is the same
+        // call the fiber would run; teardown is best-effort regardless.
+        std.Io.Dir.deleteTree(std.Io.Dir.cwd(), io, path) catch {};
+        return;
+    };
+    future.await(io) catch {};
+}
 
 // Legacy aliases for backward compatibility during migration
 pub const ServerInstance = TestServer;

@@ -313,7 +313,11 @@ pub const PullSubscription = struct {
             ._allocator = client.allocator,
         };
 
-        ctx._task = io.async(
+        // io.concurrent, not io.async: this drain must run in the background
+        // while consume() returns the ConsumeContext. io.async can fall back to
+        // running inline when the async pool is saturated on ≤2-core machines
+        // (async_limit = cpu_count-1), which would block the caller.
+        ctx._task = try io.concurrent(
             consumeDrainTask,
             .{
                 self.js,
