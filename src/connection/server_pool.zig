@@ -61,7 +61,7 @@ pub const ServerPool = struct {
         return pool;
     }
 
-    /// Add a server to the pool. Returns false if pool is full or URL invalid.
+    /// Add a server to the pool. Duplicates are ignored.
     pub fn addServer(self: *ServerPool, url: []const u8) !void {
         if (self.count >= MAX_SERVERS) return error.PoolFull;
         if (url.len == 0 or url.len >= MAX_URL_LEN) return error.InvalidUrl;
@@ -89,7 +89,8 @@ pub const ServerPool = struct {
             server.host_start = 7;
         }
 
-        if (std.mem.indexOf(u8, remaining, "@")) |at_pos| {
+        // Last '@' so passwords may contain '@' (matches Go's url.Parse).
+        if (std.mem.lastIndexOfScalar(u8, remaining, '@')) |at_pos| {
             remaining = remaining[at_pos + 1 ..];
             server.host_start += @intCast(at_pos + 1);
         }
@@ -111,7 +112,7 @@ pub const ServerPool = struct {
                         u16,
                         after[1..],
                         10,
-                    ) catch 4222;
+                    ) catch return error.InvalidUrl;
                 }
             } else {
                 // Malformed IPv6 — treat as host
@@ -130,13 +131,18 @@ pub const ServerPool = struct {
                 u16,
                 remaining[colon_pos + 1 ..],
                 10,
-            ) catch 4222;
+            ) catch return error.InvalidUrl;
         } else {
             if (remaining.len > 255)
                 return error.InvalidUrl;
             server.host_len = @intCast(remaining.len);
             server.port = 4222;
         }
+
+        // URLs come from user options and server INFO, so reject
+        // instead of asserting.
+        if (server.host_len == 0) return error.InvalidUrl;
+        if (server.port == 0) return error.InvalidUrl;
 
         assert(server.host_len > 0);
         assert(server.port > 0);

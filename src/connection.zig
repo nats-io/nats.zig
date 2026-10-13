@@ -28,4 +28,6 @@ pub const ServerPool = server_pool.ServerPool;
 
 test {
     std.testing.refAllDecls(@This());
+    _ = @import("connection/server_pool_test.zig");
+    _ = @import("connection/reconnect_test.zig");
 }

@@ -14,8 +14,6 @@ test "SubBackup default initialization" {
     try std.testing.expectEqual(@as(u64, 0), backup.sid);
     try std.testing.expectEqual(@as(u8, 0), backup.subject_len);
     try std.testing.expectEqual(@as(u8, 0), backup.queue_group_len);
-    try std.testing.expect(backup.max_msgs == null);
-    try std.testing.expectEqual(@as(u64, 0), backup.received_msgs);
 }
 
 test "SubBackup getSubject returns correct slice" {
@@ -67,18 +65,6 @@ test "SubBackup preserves SID" {
     var backup: SubBackup = .{};
     backup.sid = 12345;
     try std.testing.expectEqual(@as(u64, 12345), backup.sid);
-}
-
-test "SubBackup preserves max_msgs" {
-    var backup: SubBackup = .{};
-    backup.max_msgs = 100;
-    try std.testing.expectEqual(@as(u64, 100), backup.max_msgs.?);
-}
-
-test "SubBackup preserves received_msgs" {
-    var backup: SubBackup = .{};
-    backup.received_msgs = 42;
-    try std.testing.expectEqual(@as(u64, 42), backup.received_msgs);
 }
 
 test "SubBackup max SID value" {
@@ -243,7 +229,7 @@ test "aggressive health check" {
 
 test "stats default reconnects zero" {
     const stats: Client.Statistics = .{};
-    try std.testing.expectEqual(@as(u32, 0), stats.reconnects);
+    try std.testing.expectEqual(@as(u32, 0), stats.reconnects.load(.monotonic));
 }
 
 // Subscription Remaining Messages Calculation Tests
@@ -287,7 +273,7 @@ test "pending buffer size estimation minimal" {
     const payload = "";
     // "PUB x 0\r\n\r\n" = 4 + 1 + 1 + 10 + 2 + 0 + 2 = 20 (estimate)
     const estimate = 4 + subject.len + 1 + 10 + 2 + payload.len + 2;
-    try std.testing.expectEqual(@as(usize, 19), estimate);
+    try std.testing.expectEqual(@as(usize, 20), estimate);
 }
 
 test "pending buffer size estimation typical" {
@@ -364,12 +350,7 @@ test "backup with all fields populated" {
     @memcpy(backup.queue_group_buf[0..qg.len], qg);
     backup.queue_group_len = qg.len;
 
-    backup.max_msgs = 1000;
-    backup.received_msgs = 500;
-
     try std.testing.expectEqual(@as(u64, 42), backup.sid);
     try std.testing.expectEqualStrings(subject, backup.getSubject());
     try std.testing.expectEqualStrings(qg, backup.queueGroup().?);
-    try std.testing.expectEqual(@as(u64, 1000), backup.max_msgs.?);
-    try std.testing.expectEqual(@as(u64, 500), backup.received_msgs);
 }

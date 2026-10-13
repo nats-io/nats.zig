@@ -32,14 +32,28 @@ test "parse URL with port 1" {
     try std.testing.expectEqual(@as(u16, 1), pool.servers[0].port);
 }
 
-test "parse URL with invalid port uses default" {
-    const pool = try ServerPool.init("nats://localhost:invalid");
-    try std.testing.expectEqual(@as(u16, 4222), pool.servers[0].port);
+test "parse URL with invalid port rejected" {
+    const result = ServerPool.init("nats://localhost:invalid");
+    try std.testing.expectError(error.InvalidUrl, result);
 }
 
-test "parse URL with port overflow uses default" {
-    const pool = try ServerPool.init("nats://localhost:99999");
-    try std.testing.expectEqual(@as(u16, 4222), pool.servers[0].port);
+test "parse URL with port overflow rejected" {
+    const result = ServerPool.init("nats://localhost:99999");
+    try std.testing.expectError(error.InvalidUrl, result);
+}
+
+test "parse URL with empty host or zero port rejected" {
+    const invalid_urls = [_][]const u8{
+        "nats://:4222",
+        "nats://localhost:0",
+        "nats://localhost:",
+        "[]:4222",
+        "[::1]:x",
+    };
+    for (invalid_urls) |url| {
+        const result = ServerPool.init(url);
+        try std.testing.expectError(error.InvalidUrl, result);
+    }
 }
 
 test "parse URL with user only" {
@@ -107,9 +121,9 @@ test "URL too long returns error" {
 }
 
 test "URL exactly max length succeeds" {
-    var url: [MAX_URL_LEN]u8 = undefined;
+    var url: [MAX_URL_LEN - 1]u8 = undefined;
     @memset(&url, 'a');
-    @memcpy(url[0..7], "server:");
+    @memcpy(url[url.len - 5 ..], ":4222");
     const pool = try ServerPool.init(&url);
     try std.testing.expectEqual(@as(u8, 1), pool.serverCount());
 }
@@ -278,9 +292,14 @@ test "healthy server chosen over failed" {
 
     const now: u64 = 1_000_000_000_000;
 
+    // Rotation starts after current_idx, so the primary comes second.
     _ = pool.nextServer(now);
+    const failed = pool.nextServer(now).?;
+    try std.testing.expectEqualStrings("nats://failed:4222", failed.getUrl());
     pool.markCurrentFailed();
 
+    // Next pass skips the failed server while it is on cooldown.
+    _ = pool.nextServer(now);
     const server = pool.nextServer(now).?;
     try std.testing.expectEqualStrings("nats://healthy:4222", server.getUrl());
 }
@@ -300,7 +319,10 @@ test "add from connect_urls" {
     @memcpy(urls[1][0..url2.len], url2);
     lens[1] = url2.len;
 
-    pool.addFromConnectUrls(&urls, &lens, 2);
+    try std.testing.expectEqual(
+        @as(u8, 2),
+        pool.addFromConnectUrls(&urls, &lens, 2),
+    );
 
     try std.testing.expectEqual(@as(u8, 3), pool.serverCount());
 }
@@ -316,7 +338,10 @@ test "add from connect_urls skips empty" {
     lens[0] = url1.len;
     lens[2] = 0;
 
-    pool.addFromConnectUrls(&urls, &lens, 3);
+    try std.testing.expectEqual(
+        @as(u8, 1),
+        pool.addFromConnectUrls(&urls, &lens, 3),
+    );
 
     try std.testing.expectEqual(@as(u8, 2), pool.serverCount());
 }
@@ -331,7 +356,10 @@ test "add from connect_urls deduplicates" {
     @memcpy(urls[0][0..url1.len], url1);
     lens[0] = url1.len;
 
-    pool.addFromConnectUrls(&urls, &lens, 1);
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        pool.addFromConnectUrls(&urls, &lens, 1),
+    );
 
     try std.testing.expectEqual(@as(u8, 1), pool.serverCount());
 }
