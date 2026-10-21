@@ -1,6 +1,6 @@
 [![CI](https://github.com/nats-io/nats.zig/actions/workflows/ci.yml/badge.svg)](https://github.com/nats-io/nats.zig/actions/workflows/ci.yml)
 [![License Apache 2.0](https://img.shields.io/badge/License-Apache2-blue.svg)](LICENSE)
-![Zig](https://img.shields.io/badge/Zig-0.16.0-orange)
+![Zig](https://img.shields.io/badge/Zig-0.17.0-orange)
 
 <p align="center">
   <img src="logo/logo.png">
@@ -66,7 +66,7 @@ Zig ports in [doc/nats-by-example](doc/nats-by-example/README.md).
 
 ## Requirements
 
-- Zig 0.16.0 or later
+- Zig 0.17.0 or later
 - NATS server (for running examples and tests)
 
 ## Installation

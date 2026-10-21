@@ -16,7 +16,7 @@ const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
 /// Decoding lookup table (256 entries, 0xFF = invalid).
 const decode_table: [256]u8 = blk: {
-    var t: [256]u8 = .{0xFF} ** 256;
+    var t: [256]u8 = @splat(0xFF);
     for (alphabet, 0..) |c, i| {
         t[c] = @intCast(i);
         // Also accept lowercase

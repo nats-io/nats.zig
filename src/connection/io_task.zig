@@ -17,7 +17,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
-const native_os = builtin.os.tag;
+const native_os = builtin.target.os.tag;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 

@@ -506,7 +506,7 @@ pub fn testCallbackDataIntegrity(
     };
     defer client.deinit();
 
-    var seen: [100]bool = .{false} ** 100;
+    var seen: [100]bool = @splat(false);
     var count: u32 = 0;
     var handler = IntegrityHandler{
         .seen = &seen,

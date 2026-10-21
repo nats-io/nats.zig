@@ -702,7 +702,7 @@ free_slots: [MAX_SUBSCRIPTIONS]u16,
 parser: Parser = .{},
 server_info: ?ServerInfo = null,
 state: State = .connecting,
-sub_ptrs: [MAX_SUBSCRIPTIONS]?*Sub = [_]?*Sub{null} ** MAX_SUBSCRIPTIONS,
+sub_ptrs: [MAX_SUBSCRIPTIONS]?*Sub = @splat(null),
 free_count: u16 = MAX_SUBSCRIPTIONS,
 next_sid: u64 = 1,
 /// Serializes reader-task routing with unsubscribe/deinit so a
@@ -747,7 +747,7 @@ return_queue_buf: [][]u8 = undefined,
 server_pool: connection.ServerPool = undefined,
 server_pool_initialized: bool = false,
 sub_backups: [MAX_SUBSCRIPTIONS]SubBackup =
-    [_]SubBackup{.{}} ** MAX_SUBSCRIPTIONS,
+    @splat(.{}),
 sub_backup_count: u16 = 0,
 reconnect_attempt: u32 = 0,
 original_url: [256]u8 = undefined,
@@ -863,7 +863,7 @@ pub fn connect(
     client.server_info = null;
     client.parser = .{};
     client.state = .connecting;
-    client.sub_ptrs = [_]?*Sub{null} ** MAX_SUBSCRIPTIONS;
+    client.sub_ptrs = @splat(null);
     client.free_count = MAX_SUBSCRIPTIONS;
     client.next_sid = 1;
     client.read_mutex = .init;
@@ -881,7 +881,7 @@ pub fn connect(
     // Initialize reconnection state
     client.server_pool = undefined;
     client.server_pool_initialized = false;
-    client.sub_backups = [_]SubBackup{.{}} ** MAX_SUBSCRIPTIONS;
+    client.sub_backups = @splat(.{});
     client.sub_backup_count = 0;
     client.reconnect_attempt = 0;
     client.original_url = undefined;
@@ -2454,8 +2454,7 @@ fn ensureRespMux(self: *Client) !void {
     defer allocator.free(base);
     assert(base.len > 0);
 
-    const prefix = try std.fmt.allocPrint(
-        allocator,
+    const prefix = try allocator.print(
         "{s}.",
         .{base},
     );
@@ -5046,7 +5045,7 @@ test "parse url" {
     }
 
     {
-        const long_url = "a" ** defaults.Server.max_url_len;
+        const long_url: *const [defaults.Server.max_url_len]u8 = &@splat('a');
         try std.testing.expectError(error.InvalidUrl, parseUrl(long_url));
     }
 

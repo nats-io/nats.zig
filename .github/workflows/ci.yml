@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ZIG_VERSION: 0.16.0
+  ZIG_VERSION: 0.17.0
   NATS_SERVER_VERSION: v2.12.7
   NATS_CLI_VERSION: v0.3.1
 
@@ -58,7 +58,7 @@ jobs:
           - mode: Debug
             args: ""
           - mode: ReleaseFast
-            args: -Doptimize=ReleaseFast
+            args: -Doptimize=fast
 
     steps:
       - name: Checkout

@@ -308,7 +308,7 @@ test "add from connect_urls" {
     var pool = try ServerPool.init("nats://primary:4222");
 
     var urls: [16][256]u8 = undefined;
-    var lens: [16]u8 = [_]u8{0} ** 16;
+    var lens: [16]u8 = @splat(0);
 
     const url1 = "nats://cluster1:4222";
     const url2 = "nats://cluster2:4222";
@@ -331,7 +331,7 @@ test "add from connect_urls skips empty" {
     var pool = try ServerPool.init("nats://primary:4222");
 
     var urls: [16][256]u8 = undefined;
-    var lens: [16]u8 = [_]u8{0} ** 16;
+    var lens: [16]u8 = @splat(0);
 
     const url1 = "nats://cluster1:4222";
     @memcpy(urls[0][0..url1.len], url1);
@@ -350,7 +350,7 @@ test "add from connect_urls deduplicates" {
     var pool = try ServerPool.init("nats://primary:4222");
 
     var urls: [16][256]u8 = undefined;
-    var lens: [16]u8 = [_]u8{0} ** 16;
+    var lens: [16]u8 = @splat(0);
 
     const url1 = "nats://primary:4222";
     @memcpy(urls[0][0..url1.len], url1);

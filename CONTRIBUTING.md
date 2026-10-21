@@ -6,7 +6,7 @@ Thanks for helping improve `nats.zig`.
 
 Required tools:
 
-- Zig 0.16.0 or later
+- Zig 0.17.0 or later
 - `nats-server` on `PATH` for integration tests
 - `nats` CLI on `PATH` for JetStream/KV cross-verification tests
 

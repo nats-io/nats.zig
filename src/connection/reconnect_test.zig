@@ -293,7 +293,7 @@ test "pending buffer size estimation large payload" {
 // Multiple Backup Array Tests
 
 test "backup array initialization" {
-    const backups = [_]SubBackup{.{}} ** Client.MAX_SUBSCRIPTIONS;
+    const backups: [Client.MAX_SUBSCRIPTIONS]SubBackup = @splat(.{});
     try std.testing.expectEqual(Client.MAX_SUBSCRIPTIONS, backups.len);
 
     // All should be zeroed
@@ -304,7 +304,7 @@ test "backup array initialization" {
 }
 
 test "backup array modification" {
-    var backups = [_]SubBackup{.{}} ** 4;
+    var backups: [4]SubBackup = @splat(.{});
 
     backups[0].sid = 1;
     backups[1].sid = 2;

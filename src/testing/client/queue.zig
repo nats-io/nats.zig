@@ -546,7 +546,7 @@ pub fn testLargeQueueGroup(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     const NUM_SUBS = 20;
-    var subs: [NUM_SUBS]?*nats.Subscription = [_]?*nats.Subscription{null} ** NUM_SUBS;
+    var subs: [NUM_SUBS]?*nats.Subscription = @splat(null);
     var created: usize = 0;
 
     defer for (&subs) |*s| {
@@ -650,7 +650,7 @@ pub fn testQueueGroupFairness(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     const NUM_SUBS = 5;
-    var subs: [NUM_SUBS]?*nats.Subscription = [_]?*nats.Subscription{null} ** NUM_SUBS;
+    var subs: [NUM_SUBS]?*nats.Subscription = @splat(null);
 
     defer for (&subs) |*s| {
         if (s.*) |sub| sub.deinit();
@@ -670,7 +670,7 @@ pub fn testQueueGroupFairness(allocator: std.mem.Allocator) void {
         client.publish("qfair.test", "msg") catch {};
     }
 
-    var counts: [NUM_SUBS]u32 = [_]u32{0} ** NUM_SUBS;
+    var counts: [NUM_SUBS]u32 = @splat(0);
     for (0..NUM_SUBS) |i| {
         if (subs[i]) |sub| {
             for (0..NUM_MSGS) |_| {
