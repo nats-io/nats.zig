@@ -578,7 +578,10 @@ comptime {
 
 /// Parses a NATS URL like nats://user:pass@host:port or tls://host:port
 pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
+    // colon_count below is u8; the length cap keeps it from overflowing.
+    comptime assert(defaults.Server.max_url_len <= 256);
     if (url.len == 0) return error.InvalidUrl;
+    if (url.len >= defaults.Server.max_url_len) return error.InvalidUrl;
     var remaining = url;
     var use_tls = false;
 
@@ -592,7 +595,8 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     var user: ?[]const u8 = null;
     var pass: ?[]const u8 = null;
 
-    if (std.mem.indexOf(u8, remaining, "@")) |at_pos| {
+    // Last '@' so passwords may contain '@' (matches Go's url.Parse).
+    if (std.mem.lastIndexOfScalar(u8, remaining, '@')) |at_pos| {
         const auth = remaining[0..at_pos];
         remaining = remaining[at_pos + 1 ..];
 
@@ -643,9 +647,10 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     }
 
     if (host.len == 0) return error.InvalidUrl;
-
-    assert(host.len > 0);
     if (port == 0) return error.InvalidUrl;
+
+    // Userinfo ends at the last '@', so none can remain in host.
+    assert(std.mem.indexOfScalar(u8, host, '@') == null);
     return .{
         .host = host,
         .port = port,
@@ -5030,6 +5035,19 @@ test "parse url" {
         try std.testing.expectEqualSlices(u8, "user", parsed.user.?);
         try std.testing.expectEqualSlices(u8, "pass", parsed.pass.?);
         try std.testing.expect(!parsed.use_tls);
+    }
+
+    {
+        const parsed = try parseUrl("nats://user:p@ss:word@localhost:4222");
+        try std.testing.expectEqualSlices(u8, "localhost", parsed.host);
+        try std.testing.expectEqual(@as(u16, 4222), parsed.port);
+        try std.testing.expectEqualSlices(u8, "user", parsed.user.?);
+        try std.testing.expectEqualSlices(u8, "p@ss:word", parsed.pass.?);
+    }
+
+    {
+        const long_url = "a" ** defaults.Server.max_url_len;
+        try std.testing.expectError(error.InvalidUrl, parseUrl(long_url));
     }
 
     {
