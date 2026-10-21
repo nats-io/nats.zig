@@ -455,7 +455,7 @@ pub fn testManyClientSubscriptions(allocator: std.mem.Allocator) void {
 
     const NUM_SUBS = 100;
     var subs: [NUM_SUBS]?*nats.Subscription =
-        [_]?*nats.Subscription{null} ** NUM_SUBS;
+        @splat(null);
     var created: usize = 0;
 
     defer for (&subs) |*s| {

@@ -167,7 +167,7 @@ test "validatePublish unicode characters" {
 
 test "validatePublish very long subject" {
     // Very long subject - should there be a limit?
-    const long_subject = "a" ** 10000;
+    const long_subject: *const [10000]u8 = &@splat('a');
     try validatePublish(long_subject);
 }
 
@@ -283,7 +283,7 @@ test "validateReplyTo control char 0x01 rejected" {
 
 test "validateReplyTo very long string" {
     // 10000 character reply-to should be valid (no length limit)
-    const long_reply = "a" ** 10000;
+    const long_reply: *const [10000]u8 = &@splat('a');
     try validateReplyTo(long_reply);
 }
 
@@ -336,7 +336,7 @@ test "validateQueueGroup control char 0x01 rejected" {
 
 test "validateQueueGroup very long string" {
     // 10000 character queue group should be valid (no length limit)
-    const long_qg = "w" ** 10000;
+    const long_qg: *const [10000]u8 = &@splat('w');
     try validateQueueGroup(long_qg);
 }
 

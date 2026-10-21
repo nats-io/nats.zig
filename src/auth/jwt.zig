@@ -443,7 +443,7 @@ fn writeOperatorJson(
 }
 
 test "encode account JWT structure" {
-    const test_seed = [_]u8{10} ** 32;
+    const test_seed: [32]u8 = @splat(10);
     const op_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             test_seed,
@@ -453,7 +453,7 @@ test "encode account JWT structure" {
         .key_type = .operator,
     };
 
-    const acct_seed = [_]u8{20} ** 32;
+    const acct_seed: [32]u8 = @splat(20);
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -549,7 +549,7 @@ test "encode account JWT structure" {
 }
 
 test "encode user JWT with permissions" {
-    const acct_seed = [_]u8{30} ** 32;
+    const acct_seed: [32]u8 = @splat(30);
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -559,7 +559,7 @@ test "encode user JWT with permissions" {
         .key_type = .account,
     };
 
-    const user_seed = [_]u8{40} ** 32;
+    const user_seed: [32]u8 = @splat(40);
     const user_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             user_seed,
@@ -639,7 +639,7 @@ test "encode user JWT with permissions" {
 }
 
 test "encode operator JWT self-signed" {
-    const op_seed = [_]u8{10} ** 32;
+    const op_seed: [32]u8 = @splat(10);
     const op_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             op_seed,
@@ -716,7 +716,7 @@ test "encode operator JWT self-signed" {
 }
 
 test "JTI determinism - same input same output" {
-    const op_seed = [_]u8{10} ** 32;
+    const op_seed: [32]u8 = @splat(10);
     const op_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             op_seed,
@@ -726,7 +726,7 @@ test "JTI determinism - same input same output" {
         .key_type = .operator,
     };
 
-    const acct_seed = [_]u8{20} ** 32;
+    const acct_seed: [32]u8 = @splat(20);
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -763,7 +763,7 @@ test "JTI determinism - same input same output" {
 }
 
 test "JTI uniqueness - different names different JTI" {
-    const op_seed = [_]u8{10} ** 32;
+    const op_seed: [32]u8 = @splat(10);
     const op_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             op_seed,
@@ -773,7 +773,7 @@ test "JTI uniqueness - different names different JTI" {
         .key_type = .operator,
     };
 
-    const acct_seed = [_]u8{20} ** 32;
+    const acct_seed: [32]u8 = @splat(20);
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -813,7 +813,7 @@ test "JTI uniqueness - different names different JTI" {
 }
 
 test "custom account limits in payload" {
-    const op_seed = [_]u8{10} ** 32;
+    const op_seed: [32]u8 = @splat(10);
     const op_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             op_seed,
@@ -823,7 +823,7 @@ test "custom account limits in payload" {
         .key_type = .operator,
     };
 
-    const acct_seed = [_]u8{20} ** 32;
+    const acct_seed: [32]u8 = @splat(20);
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -888,7 +888,7 @@ test "custom account limits in payload" {
 }
 
 test "user JWT with empty permissions" {
-    const acct_seed = [_]u8{30} ** 32;
+    const acct_seed: [32]u8 = @splat(30);
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -898,7 +898,7 @@ test "user JWT with empty permissions" {
         .key_type = .account,
     };
 
-    const user_seed = [_]u8{40} ** 32;
+    const user_seed: [32]u8 = @splat(40);
     const user_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             user_seed,
@@ -956,7 +956,7 @@ test "user JWT with empty permissions" {
 }
 
 test "user JWT with single permission" {
-    const acct_seed = [_]u8{30} ** 32;
+    const acct_seed: [32]u8 = @splat(30);
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -966,7 +966,7 @@ test "user JWT with single permission" {
         .key_type = .account,
     };
 
-    const user_seed = [_]u8{40} ** 32;
+    const user_seed: [32]u8 = @splat(40);
     const user_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             user_seed,
@@ -1021,7 +1021,7 @@ test "user JWT with single permission" {
 }
 
 test "custom user limits in payload" {
-    const acct_seed = [_]u8{30} ** 32;
+    const acct_seed: [32]u8 = @splat(30);
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -1031,7 +1031,7 @@ test "custom user limits in payload" {
         .key_type = .account,
     };
 
-    const user_seed = [_]u8{40} ** 32;
+    const user_seed: [32]u8 = @splat(40);
     const user_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             user_seed,

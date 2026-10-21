@@ -39,7 +39,7 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
 
     const NUM_SUBS = 10;
     var subs: [NUM_SUBS]?*nats.Subscription =
-        [_]?*nats.Subscription{null} ** NUM_SUBS;
+        @splat(null);
     var created: u32 = 0;
 
     defer for (&subs) |*s| {

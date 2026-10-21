@@ -97,7 +97,7 @@ pub const Slab = struct {
         const idx = self.ptrToIndex(ptr);
         assert(idx < self.slice_count);
 
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             assert(!self.isInFreeList(idx));
         }
 
@@ -252,8 +252,8 @@ pub const TieredSlab = struct {
     }
 
     pub const Stats = struct {
-        tier_alloc_counts: [Config.TIER_COUNT]u32 = .{0} ** Config.TIER_COUNT,
-        tier_capacities: [Config.TIER_COUNT]u32 = .{0} ** Config.TIER_COUNT,
+        tier_alloc_counts: [Config.TIER_COUNT]u32 = @splat(0),
+        tier_capacities: [Config.TIER_COUNT]u32 = @splat(0),
         fallback_count: u32 = 0,
 
         /// Total allocated across all tiers.

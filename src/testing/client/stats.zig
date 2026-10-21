@@ -99,7 +99,7 @@ pub fn testStatsBytesAccuracy(allocator: std.mem.Allocator) void {
 
     const before = client.stats();
 
-    const payload = "0123456789" ** 10;
+    const payload: *const [100]u8 = &@splat('x');
     client.publish("async.stats.bytes", payload) catch {};
 
     const after = client.stats();

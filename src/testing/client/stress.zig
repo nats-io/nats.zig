@@ -343,7 +343,7 @@ pub fn testFiveConcurrentClients(allocator: std.mem.Allocator) void {
     const url = formatUrl(&url_buf, test_port);
 
     var ios: [5]*utils.TestIo = undefined;
-    var clients: [5]?*nats.Client = [_]?*nats.Client{null} ** 5;
+    var clients: [5]?*nats.Client = @splat(null);
     var count: usize = 0;
 
     defer {

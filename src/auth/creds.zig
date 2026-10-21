@@ -289,7 +289,7 @@ test "realistic generated content roundtrip" {
     const Ed25519 = std.crypto.sign.Ed25519;
 
     // Deterministic account keypair
-    const acct_seed = [_]u8{30} ** 32;
+    const acct_seed: [32]u8 = @splat(30);
     const acct_ed = Ed25519.KeyPair.generateDeterministic(
         acct_seed,
     ) catch unreachable;
@@ -299,7 +299,7 @@ test "realistic generated content roundtrip" {
     };
 
     // Deterministic user keypair
-    const user_seed = [_]u8{40} ** 32;
+    const user_seed: [32]u8 = @splat(40);
     const user_ed = Ed25519.KeyPair.generateDeterministic(
         user_seed,
     ) catch unreachable;

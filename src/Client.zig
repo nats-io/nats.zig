@@ -578,7 +578,10 @@ comptime {
 
 /// Parses a NATS URL like nats://user:pass@host:port or tls://host:port
 pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
+    // colon_count below is u8; the length cap keeps it from overflowing.
+    comptime assert(defaults.Server.max_url_len <= 256);
     if (url.len == 0) return error.InvalidUrl;
+    if (url.len >= defaults.Server.max_url_len) return error.InvalidUrl;
     var remaining = url;
     var use_tls = false;
 
@@ -592,7 +595,8 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     var user: ?[]const u8 = null;
     var pass: ?[]const u8 = null;
 
-    if (std.mem.indexOf(u8, remaining, "@")) |at_pos| {
+    // Last '@' so passwords may contain '@' (matches Go's url.Parse).
+    if (std.mem.lastIndexOfScalar(u8, remaining, '@')) |at_pos| {
         const auth = remaining[0..at_pos];
         remaining = remaining[at_pos + 1 ..];
 
@@ -643,9 +647,10 @@ pub fn parseUrl(url: []const u8) error{InvalidUrl}!ParsedUrl {
     }
 
     if (host.len == 0) return error.InvalidUrl;
-
-    assert(host.len > 0);
     if (port == 0) return error.InvalidUrl;
+
+    // Userinfo ends at the last '@', so none can remain in host.
+    assert(std.mem.indexOfScalar(u8, host, '@') == null);
     return .{
         .host = host,
         .port = port,
@@ -697,7 +702,7 @@ free_slots: [MAX_SUBSCRIPTIONS]u16,
 parser: Parser = .{},
 server_info: ?ServerInfo = null,
 state: State = .connecting,
-sub_ptrs: [MAX_SUBSCRIPTIONS]?*Sub = [_]?*Sub{null} ** MAX_SUBSCRIPTIONS,
+sub_ptrs: [MAX_SUBSCRIPTIONS]?*Sub = @splat(null),
 free_count: u16 = MAX_SUBSCRIPTIONS,
 next_sid: u64 = 1,
 /// Serializes reader-task routing with unsubscribe/deinit so a
@@ -742,7 +747,7 @@ return_queue_buf: [][]u8 = undefined,
 server_pool: connection.ServerPool = undefined,
 server_pool_initialized: bool = false,
 sub_backups: [MAX_SUBSCRIPTIONS]SubBackup =
-    [_]SubBackup{.{}} ** MAX_SUBSCRIPTIONS,
+    @splat(.{}),
 sub_backup_count: u16 = 0,
 reconnect_attempt: u32 = 0,
 original_url: [256]u8 = undefined,
@@ -858,7 +863,7 @@ pub fn connect(
     client.server_info = null;
     client.parser = .{};
     client.state = .connecting;
-    client.sub_ptrs = [_]?*Sub{null} ** MAX_SUBSCRIPTIONS;
+    client.sub_ptrs = @splat(null);
     client.free_count = MAX_SUBSCRIPTIONS;
     client.next_sid = 1;
     client.read_mutex = .init;
@@ -876,7 +881,7 @@ pub fn connect(
     // Initialize reconnection state
     client.server_pool = undefined;
     client.server_pool_initialized = false;
-    client.sub_backups = [_]SubBackup{.{}} ** MAX_SUBSCRIPTIONS;
+    client.sub_backups = @splat(.{});
     client.sub_backup_count = 0;
     client.reconnect_attempt = 0;
     client.original_url = undefined;
@@ -2449,8 +2454,7 @@ fn ensureRespMux(self: *Client) !void {
     defer allocator.free(base);
     assert(base.len > 0);
 
-    const prefix = try std.fmt.allocPrint(
-        allocator,
+    const prefix = try allocator.print(
         "{s}.",
         .{base},
     );
@@ -5030,6 +5034,19 @@ test "parse url" {
         try std.testing.expectEqualSlices(u8, "user", parsed.user.?);
         try std.testing.expectEqualSlices(u8, "pass", parsed.pass.?);
         try std.testing.expect(!parsed.use_tls);
+    }
+
+    {
+        const parsed = try parseUrl("nats://user:p@ss:word@localhost:4222");
+        try std.testing.expectEqualSlices(u8, "localhost", parsed.host);
+        try std.testing.expectEqual(@as(u16, 4222), parsed.port);
+        try std.testing.expectEqualSlices(u8, "user", parsed.user.?);
+        try std.testing.expectEqualSlices(u8, "p@ss:word", parsed.pass.?);
+    }
+
+    {
+        const long_url: *const [defaults.Server.max_url_len]u8 = &@splat('a');
+        try std.testing.expectError(error.InvalidUrl, parseUrl(long_url));
     }
 
     {

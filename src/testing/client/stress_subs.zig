@@ -476,7 +476,7 @@ pub fn testTenClientsManySubs(
 
     var ios: [NUM_CLIENTS]*utils.TestIo = undefined;
     var clients: [NUM_CLIENTS]?*nats.Client =
-        [_]?*nats.Client{null} ** NUM_CLIENTS;
+        @splat(null);
     var io_count: usize = 0;
 
     defer {
@@ -647,7 +647,7 @@ pub fn testMultiPubMultiSub(
 
     var sub_ios: [NUM_SUB]*utils.TestIo = undefined;
     var sub_clients: [NUM_SUB]?*nats.Client =
-        [_]?*nats.Client{null} ** NUM_SUB;
+        @splat(null);
     var sub_io_count: usize = 0;
 
     defer {
@@ -716,7 +716,7 @@ pub fn testMultiPubMultiSub(
 
     var pub_ios: [NUM_PUB]*utils.TestIo = undefined;
     var pub_clients: [NUM_PUB]?*nats.Client =
-        [_]?*nats.Client{null} ** NUM_PUB;
+        @splat(null);
     var pub_io_count: usize = 0;
 
     defer {
@@ -1551,7 +1551,7 @@ pub fn testSidMapTombstoneStress(
 
     for (0..ROUNDS) |round| {
         var round_subs: [PER_ROUND]?*nats.Subscription =
-            [_]?*nats.Subscription{null} ** PER_ROUND;
+            @splat(null);
 
         for (0..PER_ROUND) |i| {
             var sbuf: [48]u8 = undefined;
@@ -1589,7 +1589,7 @@ pub fn testSidMapTombstoneStress(
 
     // Final: subscribe 100 fresh, verify pub/sub
     var final_subs: [100]?*nats.Subscription =
-        [_]?*nats.Subscription{null} ** 100;
+        @splat(null);
 
     defer for (&final_subs) |*s| {
         if (s.*) |sub| sub.deinit();

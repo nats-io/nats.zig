@@ -446,7 +446,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    var subs: [5]?*nats.Subscription = [_]?*nats.Subscription{null} ** 5;
+    var subs: [5]?*nats.Subscription = @splat(null);
     defer for (&subs) |*s| {
         if (s.*) |sub| sub.deinit();
     };
