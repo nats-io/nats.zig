@@ -1144,17 +1144,17 @@ pub fn testBurstPublish100K(
         };
     }
 
-    sub_io.io().sleep(
-        .fromMilliseconds(3000),
-        .awake,
-    ) catch {};
-
+    // Drain until every message arrives. The burst overflows the
+    // slab, so most messages use the fallback allocator. In Debug
+    // builds that is the debug allocator, which captures a stack
+    // trace per allocation. Delivery then takes over 2s and varies
+    // with load, so a fixed wait reports in-flight messages as
+    // lost. Stop only after 2s with no message.
     var received: usize = 0;
-    for (0..NUM_MSGS) |_| {
-        if (sub.nextMsgTimeout(10) catch null) |m| {
-            m.deinit();
-            received += 1;
-        } else break;
+    while (received < NUM_MSGS) {
+        const m = (sub.nextMsgTimeout(2000) catch null) orelse break;
+        m.deinit();
+        received += 1;
     }
 
     const threshold = NUM_MSGS * 100 / 100;

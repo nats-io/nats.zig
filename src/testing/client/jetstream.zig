@@ -10358,16 +10358,19 @@ fn runNatsCli(
     const url = formatUrl(&url_buf, js_port);
 
     var full_args: [16][]const u8 = undefined;
+    // --no-context keeps the selected CLI context, and its auth,
+    // away from the local test server.
     full_args[0] = nats_cli;
-    full_args[1] = "--server";
-    full_args[2] = url;
+    full_args[1] = "--no-context";
+    full_args[2] = "--server";
+    full_args[3] = url;
     const n = @min(args.len, 12);
     for (args[0..n], 0..) |a, i| {
-        full_args[3 + i] = a;
+        full_args[4 + i] = a;
     }
 
     var child = std.process.spawn(io, .{
-        .argv = full_args[0 .. 3 + n],
+        .argv = full_args[0 .. 4 + n],
         .stdout = .pipe,
         .stderr = .ignore,
     }) catch return null;
