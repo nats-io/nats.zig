@@ -119,13 +119,13 @@ pub fn main(init: std.process.Init) !void {
     // Publish more messages
     for (0..3) |i| {
         var buf: [64]u8 = undefined;
-        const high_msg = std.fmt.bufPrint(&buf, "High {d}", .{i + 1}) catch "High";
+        const high_msg = std.mem.print(&buf, "High {d}", .{i + 1}) catch "High";
         try client.publish("priority.high", high_msg);
 
-        const norm_msg = std.fmt.bufPrint(&buf, "Normal {d}", .{i + 1}) catch "Normal";
+        const norm_msg = std.mem.print(&buf, "Normal {d}", .{i + 1}) catch "Normal";
         try client.publish("priority.normal", norm_msg);
 
-        const low_msg = std.fmt.bufPrint(&buf, "Low {d}", .{i + 1}) catch "Low";
+        const low_msg = std.mem.print(&buf, "Low {d}", .{i + 1}) catch "Low";
         try client.publish("priority.low", low_msg);
     }
     try client.flush(1_000_000_000);

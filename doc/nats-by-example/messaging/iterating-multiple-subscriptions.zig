@@ -58,37 +58,37 @@ pub fn main(init: std.process.Init) !void {
     for (0..NUM_MSGS_PER_CATEGORY) |i| {
         var buf: [64]u8 = undefined;
 
-        const cars_subj = std.fmt.bufPrint(
+        const cars_subj = std.mem.print(
             &buf,
             "cars.{d}",
             .{i},
         ) catch continue;
         var payload_buf: [64]u8 = undefined;
-        const cars_payload = std.fmt.bufPrint(
+        const cars_payload = std.mem.print(
             &payload_buf,
             "car number {d}",
             .{i},
         ) catch continue;
         try client.publish(cars_subj, cars_payload);
 
-        const planes_subj = std.fmt.bufPrint(
+        const planes_subj = std.mem.print(
             &buf,
             "planes.{d}",
             .{i},
         ) catch continue;
-        const planes_payload = std.fmt.bufPrint(
+        const planes_payload = std.mem.print(
             &payload_buf,
             "plane number {d}",
             .{i},
         ) catch continue;
         try client.publish(planes_subj, planes_payload);
 
-        const ships_subj = std.fmt.bufPrint(
+        const ships_subj = std.mem.print(
             &buf,
             "ships.{d}",
             .{i},
         ) catch continue;
-        const ships_payload = std.fmt.bufPrint(
+        const ships_payload = std.mem.print(
             &payload_buf,
             "ship number {d}",
             .{i},

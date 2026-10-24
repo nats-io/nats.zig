@@ -88,7 +88,7 @@ pub const JsMsg = struct {
             return;
         std.debug.assert(reply.len > 0);
         var buf: [64]u8 = undefined;
-        const payload = std.fmt.bufPrint(
+        const payload = std.mem.print(
             &buf,
             "-NAK {{\"delay\":{d}}}",
             .{delay_ns},
@@ -129,7 +129,7 @@ pub const JsMsg = struct {
             return;
         std.debug.assert(reply.len > 0);
         var buf: [512]u8 = undefined;
-        const payload = std.fmt.bufPrint(
+        const payload = std.mem.print(
             &buf,
             "+TERM {s}",
             .{reason},

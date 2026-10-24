@@ -333,7 +333,7 @@ pub fn testPublishBatching(allocator: std.mem.Allocator) void {
     } else {
         var buf: [32]u8 = undefined;
         const detail =
-            std.fmt.bufPrint(&buf, "got {d}/3", .{received}) catch "e";
+            std.mem.print(&buf, "got {d}/3", .{received}) catch "e";
         reportResult("publish_batching", false, detail);
     }
 }
@@ -384,7 +384,7 @@ pub fn testFlushAfterEachPublish(allocator: std.mem.Allocator) void {
         reportResult("flush_after_each", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/50",
             .{received},

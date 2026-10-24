@@ -37,7 +37,7 @@ pub fn testSubjectTooLong(allocator: std.mem.Allocator) void {
             reportResult("subject_too_long", true, "");
         } else {
             var buf: [64]u8 = undefined;
-            const detail = std.fmt.bufPrint(
+            const detail = std.mem.print(
                 &buf,
                 "wrong error: {s}",
                 .{@errorName(err)},
@@ -75,7 +75,7 @@ pub fn testQueueGroupTooLong(allocator: std.mem.Allocator) void {
             reportResult("queue_group_too_long", true, "");
         } else {
             var buf: [64]u8 = undefined;
-            const detail = std.fmt.bufPrint(
+            const detail = std.mem.print(
                 &buf,
                 "wrong error: {s}",
                 .{@errorName(err)},
@@ -106,7 +106,7 @@ pub fn testUrlTooLong(allocator: std.mem.Allocator) void {
             reportResult("url_too_long", true, "");
         } else {
             var buf: [64]u8 = undefined;
-            const detail = std.fmt.bufPrint(
+            const detail = std.mem.print(
                 &buf,
                 "wrong error: {s}",
                 .{@errorName(err)},
@@ -146,7 +146,7 @@ pub fn testDrainResultIsClean(allocator: std.mem.Allocator) void {
         reportResult("drain_result_clean", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "unsub_fail={d} flush={any}",
             .{ result.unsub_failures, result.flush_failed },

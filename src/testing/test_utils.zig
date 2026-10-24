@@ -51,7 +51,7 @@ pub fn reportResult(name: []const u8, passed: bool, details: []const u8) void {
 /// Reports a failed test step with the Zig error name included.
 pub fn reportError(name: []const u8, step: []const u8, err: anyerror) void {
     var buf: [128]u8 = undefined;
-    const details = std.fmt.bufPrint(
+    const details = std.mem.print(
         &buf,
         "{s}: {s}",
         .{ step, @errorName(err) },
@@ -62,12 +62,12 @@ pub fn reportError(name: []const u8, step: []const u8, err: anyerror) void {
 /// Formats a NATS URL for the given port.
 pub fn formatUrl(buf: []u8, port: u16) []const u8 {
     const fmt = "nats://127.0.0.1:{d}";
-    return std.fmt.bufPrint(buf, fmt, .{port}) catch "invalid";
+    return std.mem.print(buf, fmt, .{port}) catch "invalid";
 }
 
 /// Formats a NATS URL with auth token.
 pub fn formatAuthUrl(buf: []u8, port: u16, token: []const u8) []const u8 {
-    return std.fmt.bufPrint(
+    return std.mem.print(
         buf,
         "nats://{s}@127.0.0.1:{d}",
         .{ token, port },
@@ -78,7 +78,7 @@ pub fn formatAuthUrl(buf: []u8, port: u16, token: []const u8) []const u8 {
 /// Uses localhost since test certificates are issued for localhost.
 pub fn formatTlsUrl(buf: []u8, port: u16) []const u8 {
     const fmt = "tls://localhost:{d}";
-    return std.fmt.bufPrint(buf, fmt, .{port}) catch "invalid";
+    return std.mem.print(buf, fmt, .{port}) catch "invalid";
 }
 
 pub fn resetCounters() void {

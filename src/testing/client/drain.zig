@@ -157,7 +157,7 @@ pub fn testDrainWithManySubscriptions(allocator: std.mem.Allocator) void {
     var created: usize = 0;
     for (0..20) |i| {
         var sub_buf: [32]u8 = undefined;
-        const subject = std.fmt.bufPrint(
+        const subject = std.mem.print(
             &sub_buf,
             "drain.many.{d}",
             .{i},
@@ -230,7 +230,7 @@ pub fn testSubWaitDrained(allocator: std.mem.Allocator) void {
     // Now wait for drain to complete (should succeed immediately)
     sub.waitDrained(1000) catch |err| {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "waitDrained: {s}", .{
+        const detail = std.mem.print(&buf, "waitDrained: {s}", .{
             @errorName(err),
         }) catch "e";
         reportResult("sub_wait_drained", false, detail);

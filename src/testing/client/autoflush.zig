@@ -53,7 +53,7 @@ fn testAutoflushBasicDelivery(
         .{ .reconnect = false },
     ) catch |err| {
         var err_buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &err_buf,
             "connect failed: {}",
             .{err},
@@ -162,7 +162,7 @@ fn testAutoflushMultipleMessages(
     var i: u8 = 0;
     while (i < msg_count) : (i += 1) {
         var buf: [32]u8 = undefined;
-        const payload = std.fmt.bufPrint(
+        const payload = std.mem.print(
             &buf,
             "msg-{d}",
             .{i},
@@ -200,7 +200,7 @@ fn testAutoflushMultipleMessages(
         );
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "{d}/{d} received",
             .{ received, msg_count },
@@ -289,7 +289,7 @@ fn testAutoflushHighThroughput(
         );
     } else {
         var buf: [48]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "{d}/{d} received",
             .{ received, msg_count },
@@ -461,7 +461,7 @@ fn testAutoflushTLS(
         },
     ) catch |err| {
         var err_buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &err_buf,
             "connect failed: {}",
             .{err},
@@ -882,7 +882,7 @@ fn testAutoflushMultiClient(
         );
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "{d}/3 received",
             .{received},
@@ -1576,7 +1576,7 @@ fn testAutoflushAutoUnsubscribe(
         );
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "{d}/3 received",
             .{received},

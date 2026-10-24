@@ -161,7 +161,7 @@ pub const PullSubscription = struct {
 
         var subj_buf: [512]u8 = undefined;
         const prefix = self.js.apiPrefix();
-        const pull_subj = std.fmt.bufPrint(
+        const pull_subj = std.mem.print(
             &subj_buf,
             "{s}CONSUMER.MSG.NEXT.{s}.{s}",
             .{ prefix, self.stream, self.consumerName() },
@@ -496,7 +496,7 @@ fn issuePull(
 
     var subj_buf: [512]u8 = undefined;
     const prefix = js.apiPrefix();
-    const pull_subj = std.fmt.bufPrint(
+    const pull_subj = std.mem.print(
         &subj_buf,
         "{s}CONSUMER.MSG.NEXT.{s}.{s}",
         .{ prefix, stream, consumer_name },

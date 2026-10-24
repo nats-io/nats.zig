@@ -59,7 +59,7 @@ pub fn main(init: std.process.Init) !void {
     // Publish 10 messages
     for (0..NUM_MSGS) |i| {
         var buf: [32]u8 = undefined;
-        const payload = std.fmt.bufPrint(
+        const payload = std.mem.print(
             &buf,
             "hello {d}",
             .{i},
@@ -141,7 +141,7 @@ fn processWorker(io: Io, items: []WorkItem) void {
         // Write directly to stdout (single write syscall
         // per line avoids interleaved output)
         var buf: [80]u8 = undefined;
-        const line = std.fmt.bufPrint(
+        const line = std.mem.print(
             &buf,
             "received message: \"{s}\"\n",
             .{item.data[0..item.len]},

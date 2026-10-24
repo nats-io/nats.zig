@@ -30,12 +30,12 @@ pub fn parse(content: []const u8) Error!Credentials {
     assert(content.len > 0);
 
     // Find JWT section
-    const jwt_start_idx = std.mem.indexOf(u8, content, JWT_BEGIN) orelse {
+    const jwt_start_idx = std.mem.find(u8, content, JWT_BEGIN) orelse {
         return error.MissingJwt;
     };
     const jwt_content_start = jwt_start_idx + JWT_BEGIN.len;
 
-    const jwt_end_idx = std.mem.indexOfPos(
+    const jwt_end_idx = std.mem.findPos(
         u8,
         content,
         jwt_content_start,
@@ -45,12 +45,12 @@ pub fn parse(content: []const u8) Error!Credentials {
     };
 
     // Find seed section
-    const seed_start_idx = std.mem.indexOf(u8, content, SEED_BEGIN) orelse {
+    const seed_start_idx = std.mem.find(u8, content, SEED_BEGIN) orelse {
         return error.MissingSeed;
     };
     const seed_content_start = seed_start_idx + SEED_BEGIN.len;
 
-    const seed_end_idx = std.mem.indexOfPos(
+    const seed_end_idx = std.mem.findPos(
         u8,
         content,
         seed_content_start,
@@ -289,7 +289,7 @@ test "realistic generated content roundtrip" {
     const Ed25519 = std.crypto.sign.Ed25519;
 
     // Deterministic account keypair
-    const acct_seed = [_]u8{30} ** 32;
+    const acct_seed = @as([32]u8, @splat(30));
     const acct_ed = Ed25519.KeyPair.generateDeterministic(
         acct_seed,
     ) catch unreachable;
@@ -299,7 +299,7 @@ test "realistic generated content roundtrip" {
     };
 
     // Deterministic user keypair
-    const user_seed = [_]u8{40} ** 32;
+    const user_seed = @as([32]u8, @splat(40));
     const user_ed = Ed25519.KeyPair.generateDeterministic(
         user_seed,
     ) catch unreachable;

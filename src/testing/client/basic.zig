@@ -24,7 +24,7 @@ pub fn testClientBasic(allocator: std.mem.Allocator) void {
         .reconnect = false,
     }) catch |err| {
         var err_buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &err_buf,
             "connect failed: {}",
             .{err},
@@ -127,7 +127,7 @@ pub fn testClientRapidSubUnsub(allocator: std.mem.Allocator) void {
 
     for (0..20) |i| {
         var buf: [32]u8 = undefined;
-        const subj = std.fmt.bufPrint(&buf, "rapid.{d}", .{i}) catch "e";
+        const subj = std.mem.print(&buf, "rapid.{d}", .{i}) catch "e";
         const sub = client.subscribeSync(subj) catch {
             reportResult("client_rapid_sub", false, "sub failed");
             return;

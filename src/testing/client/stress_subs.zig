@@ -68,7 +68,7 @@ pub fn testFiveThousandSubs(
     var last_err: ?[]const u8 = null;
     for (0..NUM_SUBS) |i| {
         var sbuf: [32]u8 = undefined;
-        const subj = std.fmt.bufPrint(
+        const subj = std.mem.print(
             &sbuf,
             "five.{d}",
             .{i},
@@ -86,7 +86,7 @@ pub fn testFiveThousandSubs(
 
     if (created != NUM_SUBS) {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "{d}/{d} err={s}",
             .{
@@ -107,7 +107,7 @@ pub fn testFiveThousandSubs(
     // Publish one msg to each subject
     for (0..NUM_SUBS) |i| {
         var sbuf: [32]u8 = undefined;
-        const subj = std.fmt.bufPrint(
+        const subj = std.mem.print(
             &sbuf,
             "five.{d}",
             .{i},
@@ -140,7 +140,7 @@ pub fn testFiveThousandSubs(
         reportResult("5k_subs", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "got {d}/{d}",
             .{ received, NUM_SUBS },
@@ -173,7 +173,7 @@ pub fn testSubUnsubChurn(
 
     for (0..ITERATIONS) |i| {
         var sbuf: [32]u8 = undefined;
-        const subj = std.fmt.bufPrint(
+        const subj = std.mem.print(
             &sbuf,
             "churn.{d}",
             .{i},
@@ -181,7 +181,7 @@ pub fn testSubUnsubChurn(
 
         const sub = client.subscribeSync(subj) catch |e| {
             var buf: [64]u8 = undefined;
-            const msg = std.fmt.bufPrint(
+            const msg = std.mem.print(
                 &buf,
                 "fail at {d} {s}",
                 .{ i, @errorName(e) },
@@ -252,7 +252,7 @@ pub fn testSubsThenResubscribe(
     var created: usize = 0;
     for (0..COUNT) |i| {
         var sbuf: [32]u8 = undefined;
-        const subj = std.fmt.bufPrint(
+        const subj = std.mem.print(
             &sbuf,
             "rs.a.{d}",
             .{i},
@@ -264,7 +264,7 @@ pub fn testSubsThenResubscribe(
     if (created != COUNT) {
         for (subs) |s| if (s) |sub| sub.deinit();
         var buf: [48]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "phase1 {d}/{d}",
             .{ created, COUNT },
@@ -292,7 +292,7 @@ pub fn testSubsThenResubscribe(
     var last_err: ?[]const u8 = null;
     for (0..COUNT) |i| {
         var sbuf: [32]u8 = undefined;
-        const subj = std.fmt.bufPrint(
+        const subj = std.mem.print(
             &sbuf,
             "rs.b.{d}",
             .{i},
@@ -308,7 +308,7 @@ pub fn testSubsThenResubscribe(
 
     if (created2 != COUNT) {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "phase2 {d}/{d} {s}",
             .{
@@ -391,7 +391,7 @@ pub fn testWildcardFanOut(
     var created: usize = 0;
     for (0..NUM_SUBS) |i| {
         var sbuf: [32]u8 = undefined;
-        const subj = std.fmt.bufPrint(
+        const subj = std.mem.print(
             &sbuf,
             "fan.{d}",
             .{i},
@@ -402,7 +402,7 @@ pub fn testWildcardFanOut(
 
     if (created != NUM_SUBS) {
         var buf: [48]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "created {d}/{d}",
             .{ created, NUM_SUBS },
@@ -426,7 +426,7 @@ pub fn testWildcardFanOut(
     // Publish to fan.0 through fan.99
     for (0..NUM_MSGS) |i| {
         var sbuf: [32]u8 = undefined;
-        const subj = std.fmt.bufPrint(
+        const subj = std.mem.print(
             &sbuf,
             "fan.{d}",
             .{i},
@@ -454,7 +454,7 @@ pub fn testWildcardFanOut(
         reportResult("wildcard_fanout", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "wc got {d}/{d}",
             .{ wc_received, NUM_MSGS },
@@ -476,7 +476,7 @@ pub fn testTenClientsManySubs(
 
     var ios: [NUM_CLIENTS]*utils.TestIo = undefined;
     var clients: [NUM_CLIENTS]?*nats.Client =
-        [_]?*nats.Client{null} ** NUM_CLIENTS;
+        @splat(null);
     var io_count: usize = 0;
 
     defer {
@@ -525,7 +525,7 @@ pub fn testTenClientsManySubs(
         const c = clients[ci] orelse continue;
         for (0..SUBS_PER) |si| {
             var sbuf: [32]u8 = undefined;
-            const subj = std.fmt.bufPrint(
+            const subj = std.mem.print(
                 &sbuf,
                 "mc.{d}",
                 .{si},
@@ -539,7 +539,7 @@ pub fn testTenClientsManySubs(
 
     if (sub_count != total_subs) {
         var buf: [48]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "subs {d}/{d}",
             .{ sub_count, total_subs },
@@ -570,7 +570,7 @@ pub fn testTenClientsManySubs(
 
     for (0..SUBS_PER) |si| {
         var sbuf: [32]u8 = undefined;
-        const subj = std.fmt.bufPrint(
+        const subj = std.mem.print(
             &sbuf,
             "mc.{d}",
             .{si},
@@ -601,7 +601,7 @@ pub fn testTenClientsManySubs(
         reportResult("10_clients_subs", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "got {d}/{d}",
             .{ total_recv, total_subs },
@@ -647,7 +647,7 @@ pub fn testMultiPubMultiSub(
 
     var sub_ios: [NUM_SUB]*utils.TestIo = undefined;
     var sub_clients: [NUM_SUB]?*nats.Client =
-        [_]?*nats.Client{null} ** NUM_SUB;
+        @splat(null);
     var sub_io_count: usize = 0;
 
     defer {
@@ -690,7 +690,7 @@ pub fn testMultiPubMultiSub(
         const c = sub_clients[si] orelse continue;
         for (0..NUM_SUBJECTS) |subj_i| {
             var sbuf: [32]u8 = undefined;
-            const subj = std.fmt.bufPrint(
+            const subj = std.mem.print(
                 &sbuf,
                 "mp.{d}",
                 .{subj_i},
@@ -716,7 +716,7 @@ pub fn testMultiPubMultiSub(
 
     var pub_ios: [NUM_PUB]*utils.TestIo = undefined;
     var pub_clients: [NUM_PUB]?*nats.Client =
-        [_]?*nats.Client{null} ** NUM_PUB;
+        @splat(null);
     var pub_io_count: usize = 0;
 
     defer {
@@ -746,7 +746,7 @@ pub fn testMultiPubMultiSub(
 
     for (0..NUM_SUBJECTS) |subj_i| {
         var sbuf: [32]u8 = undefined;
-        const subj = std.fmt.bufPrint(
+        const subj = std.mem.print(
             &sbuf,
             "mp.{d}",
             .{subj_i},
@@ -809,7 +809,7 @@ pub fn testMultiPubMultiSub(
         reportResult("multi_pub_sub", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "got {d}/{d} (min {d})",
             .{ total_recv, total_expected, threshold },
@@ -881,7 +881,7 @@ pub fn testPayloadSizes(
 
         client.publish("sz.test", payload) catch {
             var buf: [48]u8 = undefined;
-            const msg = std.fmt.bufPrint(
+            const msg = std.mem.print(
                 &buf,
                 "pub failed sz={d}",
                 .{size},
@@ -892,7 +892,7 @@ pub fn testPayloadSizes(
 
         const recv = sub.nextMsgTimeout(2000) catch {
             var buf: [48]u8 = undefined;
-            const msg = std.fmt.bufPrint(
+            const msg = std.mem.print(
                 &buf,
                 "timeout sz={d}",
                 .{size},
@@ -905,7 +905,7 @@ pub fn testPayloadSizes(
             defer m.deinit();
             if (m.data.len != size) {
                 var buf: [48]u8 = undefined;
-                const msg = std.fmt.bufPrint(
+                const msg = std.mem.print(
                     &buf,
                     "sz {d}!={d}",
                     .{ m.data.len, size },
@@ -932,7 +932,7 @@ pub fn testPayloadSizes(
             }
         } else {
             var buf: [48]u8 = undefined;
-            const msg = std.fmt.bufPrint(
+            const msg = std.mem.print(
                 &buf,
                 "null sz={d}",
                 .{size},
@@ -985,7 +985,7 @@ pub fn testMaxPayload1MB(
 
     client.publish("big.1mb", payload) catch |err| {
         var buf: [128]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "publish: {s}",
             .{@errorName(err)},
@@ -1162,7 +1162,7 @@ pub fn testBurstPublish100K(
         reportResult("burst_100k", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "got {d}/{d}",
             .{ received, NUM_MSGS },
@@ -1259,7 +1259,7 @@ pub fn testLargePayloadBurst(
         reportResult("large_burst", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "got {d}/{d}",
             .{ received, NUM_MSGS },
@@ -1320,7 +1320,7 @@ pub fn testManySubjectsPublish(
 
     for (0..NUM) |i| {
         var sbuf: [32]u8 = undefined;
-        const subj = std.fmt.bufPrint(
+        const subj = std.mem.print(
             &sbuf,
             "many.{d}",
             .{i},
@@ -1349,7 +1349,7 @@ pub fn testManySubjectsPublish(
         reportResult("many_subj_pub", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "got {d}/{d}",
             .{ received, NUM },
@@ -1515,7 +1515,7 @@ pub fn testQueueFillAndRecover(
         reportResult("queue_recover", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "b1={d} b2={d}",
             .{ batch1, batch2 },
@@ -1551,11 +1551,11 @@ pub fn testSidMapTombstoneStress(
 
     for (0..ROUNDS) |round| {
         var round_subs: [PER_ROUND]?*nats.Subscription =
-            [_]?*nats.Subscription{null} ** PER_ROUND;
+            @splat(null);
 
         for (0..PER_ROUND) |i| {
             var sbuf: [48]u8 = undefined;
-            const subj = std.fmt.bufPrint(
+            const subj = std.mem.print(
                 &sbuf,
                 "tomb.{d}.{d}",
                 .{ round, i },
@@ -1566,7 +1566,7 @@ pub fn testSidMapTombstoneStress(
                         if (s.*) |sub| sub.deinit();
                     }
                     var buf: [64]u8 = undefined;
-                    const msg = std.fmt.bufPrint(
+                    const msg = std.mem.print(
                         &buf,
                         "r={d} i={d} {s}",
                         .{ round, i, @errorName(e) },
@@ -1589,7 +1589,7 @@ pub fn testSidMapTombstoneStress(
 
     // Final: subscribe 100 fresh, verify pub/sub
     var final_subs: [100]?*nats.Subscription =
-        [_]?*nats.Subscription{null} ** 100;
+        @splat(null);
 
     defer for (&final_subs) |*s| {
         if (s.*) |sub| sub.deinit();
@@ -1597,7 +1597,7 @@ pub fn testSidMapTombstoneStress(
 
     for (0..100) |i| {
         var sbuf: [32]u8 = undefined;
-        const subj = std.fmt.bufPrint(
+        const subj = std.mem.print(
             &sbuf,
             "tomb.final.{d}",
             .{i},

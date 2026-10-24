@@ -543,11 +543,11 @@ test "null optional fields omitted in JSON" {
 
     // Should not contain "retention" since it's null
     try std.testing.expect(
-        std.mem.indexOf(u8, json, "retention") == null,
+        std.mem.find(u8, json, "retention") == null,
     );
     // Should contain "name"
     try std.testing.expect(
-        std.mem.indexOf(u8, json, "name") != null,
+        std.mem.find(u8, json, "name") != null,
     );
 }
 
@@ -615,11 +615,11 @@ test "ConsumerConfig with push fields serializes" {
     defer alloc.free(json);
 
     try std.testing.expect(
-        std.mem.indexOf(u8, json, "deliver_subject") !=
+        std.mem.find(u8, json, "deliver_subject") !=
             null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, json, "deliver_group") !=
+        std.mem.find(u8, json, "deliver_group") !=
             null,
     );
 
@@ -644,10 +644,10 @@ test "MsgDeleteRequest serialization" {
     });
     defer alloc.free(json1);
     try std.testing.expect(
-        std.mem.indexOf(u8, json1, "\"seq\":42") != null,
+        std.mem.find(u8, json1, "\"seq\":42") != null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, json1, "no_erase") != null,
+        std.mem.find(u8, json1, "no_erase") != null,
     );
 
     // Without no_erase (null omitted)
@@ -657,10 +657,10 @@ test "MsgDeleteRequest serialization" {
     );
     defer alloc.free(json2);
     try std.testing.expect(
-        std.mem.indexOf(u8, json2, "no_erase") == null,
+        std.mem.find(u8, json2, "no_erase") == null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, json2, "\"seq\":7") != null,
+        std.mem.find(u8, json2, "\"seq\":7") != null,
     );
 }
 
@@ -674,7 +674,7 @@ test "ConsumerPauseRequest serialization" {
     );
     defer alloc.free(json1);
     try std.testing.expect(
-        std.mem.indexOf(u8, json1, "pause_until") !=
+        std.mem.find(u8, json1, "pause_until") !=
             null,
     );
 
@@ -684,7 +684,7 @@ test "ConsumerPauseRequest serialization" {
     );
     defer alloc.free(json2);
     try std.testing.expect(
-        std.mem.indexOf(u8, json2, "pause_until") ==
+        std.mem.find(u8, json2, "pause_until") ==
             null,
     );
 }
@@ -720,7 +720,7 @@ test "PublishOpts TTL field" {
     );
     defer alloc.free(json);
     try std.testing.expect(
-        std.mem.indexOf(u8, json, "\"ttl\":\"5s\"") !=
+        std.mem.find(u8, json, "\"ttl\":\"5s\"") !=
             null,
     );
 }
@@ -733,7 +733,7 @@ test "StreamConfig allow_msg_ttl" {
     });
     defer alloc.free(json);
     try std.testing.expect(
-        std.mem.indexOf(u8, json, "allow_msg_ttl") !=
+        std.mem.find(u8, json, "allow_msg_ttl") !=
             null,
     );
 }
@@ -751,7 +751,7 @@ test "CreateConsumerRequest action field" {
     );
     defer alloc.free(json1);
     try std.testing.expect(
-        std.mem.indexOf(
+        std.mem.find(
             u8,
             json1,
             "\"action\":\"create\"",
@@ -768,6 +768,6 @@ test "CreateConsumerRequest action field" {
     );
     defer alloc.free(json2);
     try std.testing.expect(
-        std.mem.indexOf(u8, json2, "action") == null,
+        std.mem.find(u8, json2, "action") == null,
     );
 }

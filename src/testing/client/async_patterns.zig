@@ -420,7 +420,7 @@ fn testAsyncConcurrentWorkers(allocator: Allocator) void {
         reportResult("async_concurrent_workers", true, "");
     } else {
         var result_buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &result_buf,
             "{d}/{d} received",
             .{ total_received, message_count },
@@ -534,7 +534,7 @@ fn testAsyncParallelSubscriptions(
         reportResult("async_parallel_subs", true, "");
     } else {
         var result_buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &result_buf,
             "{d}/3 received",
             .{received},
@@ -739,7 +739,7 @@ fn testBatchReceive(allocator: Allocator) void {
         reportResult("batch_receive", true, "");
     } else {
         var result_buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &result_buf,
             "{d}/20 received",
             .{total},
@@ -825,7 +825,7 @@ fn testTryNextBatch(allocator: Allocator) void {
         reportResult("try_next_batch", true, "");
     } else {
         var result_buf: [48]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &result_buf,
             "first={d} third={d}",
             .{ first_count, third_count },

@@ -118,7 +118,7 @@ pub fn testQueueGroupDistribution(allocator: std.mem.Allocator) void {
         reportResult("queue_group_distribution", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "total={d} (expected 30)",
             .{total},
@@ -202,7 +202,7 @@ pub fn testQueueGroupMultipleClients(allocator: std.mem.Allocator) void {
         reportResult("queue_multi_client", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}+{d}={d}",
             .{ count_a, count_b, count_a + count_b },
@@ -247,7 +247,7 @@ pub fn testQueueGroupSingleReceiver(allocator: std.mem.Allocator) void {
         reportResult("queue_single_recv", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}/10", .{count}) catch "e";
+        const detail = std.mem.print(&buf, "got {d}/10", .{count}) catch "e";
         reportResult("queue_single_recv", false, detail);
     }
 }
@@ -288,7 +288,7 @@ pub fn testQueueWithWildcard(allocator: std.mem.Allocator) void {
         reportResult("queue_wildcard", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}/3", .{count}) catch "e";
+        const detail = std.mem.print(&buf, "got {d}/3", .{count}) catch "e";
         reportResult("queue_wildcard", false, detail);
     }
 }
@@ -337,7 +337,7 @@ pub fn testMultipleQueueGroups(allocator: std.mem.Allocator) void {
         reportResult("multi_queue_groups", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}/2", .{count}) catch "err";
+        const detail = std.mem.print(&buf, "got {d}/2", .{count}) catch "err";
         reportResult("multi_queue_groups", false, detail);
     }
 }
@@ -403,7 +403,7 @@ pub fn testFourClientQueueGroup(allocator: std.mem.Allocator) void {
         reportResult("four_client_queue", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}+{d}+{d}+{d}={d}",
             .{ counts[0], counts[1], counts[2], counts[3], total },
@@ -469,7 +469,7 @@ pub fn testQueueMemberJoinsMidStream(allocator: std.mem.Allocator) void {
         }
     } else {
         var buf: [48]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "total={d} (expect 20)",
             .{count1 + count2},
@@ -527,7 +527,7 @@ pub fn testQueueMemberLeaves(allocator: std.mem.Allocator) void {
         reportResult("queue_member_leaves", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}", .{count2}) catch "e";
+        const detail = std.mem.print(&buf, "got {d}", .{count2}) catch "e";
         reportResult("queue_member_leaves", false, detail);
     }
 }
@@ -546,7 +546,7 @@ pub fn testLargeQueueGroup(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     const NUM_SUBS = 20;
-    var subs: [NUM_SUBS]?*nats.Subscription = [_]?*nats.Subscription{null} ** NUM_SUBS;
+    var subs: [NUM_SUBS]?*nats.Subscription = @splat(null);
     var created: usize = 0;
 
     defer for (&subs) |*s| {
@@ -565,7 +565,7 @@ pub fn testLargeQueueGroup(allocator: std.mem.Allocator) void {
 
     if (created != NUM_SUBS) {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "created {d}/20", .{created}) catch "e";
+        const detail = std.mem.print(&buf, "created {d}/20", .{created}) catch "e";
         reportResult("large_queue_group", false, detail);
         return;
     }
@@ -593,7 +593,7 @@ pub fn testLargeQueueGroup(allocator: std.mem.Allocator) void {
         reportResult("large_queue_group", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}/100", .{total}) catch "e";
+        const detail = std.mem.print(&buf, "got {d}/100", .{total}) catch "e";
         reportResult("large_queue_group", false, detail);
     }
 }
@@ -650,7 +650,7 @@ pub fn testQueueGroupFairness(allocator: std.mem.Allocator) void {
     defer client.deinit();
 
     const NUM_SUBS = 5;
-    var subs: [NUM_SUBS]?*nats.Subscription = [_]?*nats.Subscription{null} ** NUM_SUBS;
+    var subs: [NUM_SUBS]?*nats.Subscription = @splat(null);
 
     defer for (&subs) |*s| {
         if (s.*) |sub| sub.deinit();
@@ -670,7 +670,7 @@ pub fn testQueueGroupFairness(allocator: std.mem.Allocator) void {
         client.publish("qfair.test", "msg") catch {};
     }
 
-    var counts: [NUM_SUBS]u32 = [_]u32{0} ** NUM_SUBS;
+    var counts: [NUM_SUBS]u32 = @splat(0);
     for (0..NUM_SUBS) |i| {
         if (subs[i]) |sub| {
             for (0..NUM_MSGS) |_| {
@@ -687,7 +687,7 @@ pub fn testQueueGroupFairness(allocator: std.mem.Allocator) void {
 
     if (total != NUM_MSGS) {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "total={d}/100", .{total}) catch "e";
+        const detail = std.mem.print(&buf, "total={d}/100", .{total}) catch "e";
         reportResult("queue_fairness", false, detail);
         return;
     }
@@ -701,7 +701,7 @@ pub fn testQueueGroupFairness(allocator: std.mem.Allocator) void {
         reportResult("queue_fairness", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "min={d} (expect >= 5)",
             .{min_count},

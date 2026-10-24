@@ -99,7 +99,7 @@ pub fn main(init: std.process.Init) !void {
 
     for (0..message_count) |i| {
         var buf: [32]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Task {d}", .{i + 1}) catch "Task";
+        const msg = std.mem.print(&buf, "Task {d}", .{i + 1}) catch "Task";
         try client.publish("tasks", msg);
     }
 

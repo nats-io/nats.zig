@@ -43,7 +43,7 @@ pub fn main(init: std.process.Init) !void {
 
     for (0..message_count) |i| {
         var buf: [64]u8 = undefined;
-        const payload = std.fmt.bufPrint(&buf, "Message {d}", .{i + 1}) catch "Msg";
+        const payload = std.mem.print(&buf, "Message {d}", .{i + 1}) catch "Msg";
         try client.publish("bench.test", payload);
     }
 
@@ -97,7 +97,7 @@ pub fn main(init: std.process.Init) !void {
     // Publish a few more messages
     for (0..5) |i| {
         var buf: [64]u8 = undefined;
-        const payload = std.fmt.bufPrint(&buf, "Extra {d}", .{i + 1}) catch "Msg";
+        const payload = std.mem.print(&buf, "Extra {d}", .{i + 1}) catch "Msg";
         try client.publish("bench.extra", payload);
     }
 

@@ -403,7 +403,7 @@ pub fn testHeadersRequestTimeout(allocator: std.mem.Allocator) void {
         reportResult("headers_request_timeout", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "took {d}ms",
             .{elapsed_ms},
@@ -558,7 +558,7 @@ pub fn testHeadersManyEntries(allocator: std.mem.Allocator) void {
         }
         if (parsed.count != 40) {
             var buf: [32]u8 = undefined;
-            const detail = std.fmt.bufPrint(
+            const detail = std.mem.print(
                 &buf,
                 "got {d}/40",
                 .{parsed.count},

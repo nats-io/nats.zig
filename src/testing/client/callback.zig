@@ -79,7 +79,7 @@ pub fn testCallbackMsgHandler(
         reportResult("callback_msg_handler", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "expected 5, got {d}",
             .{count},
@@ -155,7 +155,7 @@ pub fn testCallbackPlainFn(
         reportResult("callback_plain_fn", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "expected 3, got {d}",
             .{plain_fn_count},
@@ -252,7 +252,7 @@ pub fn testCallbackQueueGroup(
         reportResult("callback_queue_group", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "expected >=9, got {d}",
             .{total},
@@ -446,7 +446,7 @@ pub fn testCallbackHighVolume(
         reportResult("callback_high_volume", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "expected 100, got {d}",
             .{count},
@@ -506,7 +506,7 @@ pub fn testCallbackDataIntegrity(
     };
     defer client.deinit();
 
-    var seen: [100]bool = .{false} ** 100;
+    var seen: [100]bool = @splat(false);
     var count: u32 = 0;
     var handler = IntegrityHandler{
         .seen = &seen,
@@ -531,7 +531,7 @@ pub fn testCallbackDataIntegrity(
 
     var pbuf: [8]u8 = undefined;
     for (0..100) |i| {
-        const payload = std.fmt.bufPrint(
+        const payload = std.mem.print(
             &pbuf,
             "{d}",
             .{i},
@@ -556,7 +556,7 @@ pub fn testCallbackDataIntegrity(
 
     if (count != 100) {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "expected 100, got {d}",
             .{count},
@@ -572,7 +572,7 @@ pub fn testCallbackDataIntegrity(
     for (0..100) |i| {
         if (!seen[i]) {
             var buf: [64]u8 = undefined;
-            const msg = std.fmt.bufPrint(
+            const msg = std.mem.print(
                 &buf,
                 "missing payload {d}",
                 .{i},
@@ -678,7 +678,7 @@ pub fn testCallbackMixedModes(
 
     if (cb_count != 5 or manual_count != 5) {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "cb={d} man={d}, expected 5/5",
             .{ cb_count, manual_count },
@@ -799,7 +799,7 @@ pub fn testCallbackRequestReply(
 
     if (handled != 3 or replies != 3) {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "handled={d} replies={d}",
             .{ handled, replies },

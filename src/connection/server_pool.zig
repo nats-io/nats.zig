@@ -89,14 +89,14 @@ pub const ServerPool = struct {
             server.host_start = 7;
         }
 
-        if (std.mem.indexOf(u8, remaining, "@")) |at_pos| {
+        if (std.mem.find(u8, remaining, "@")) |at_pos| {
             remaining = remaining[at_pos + 1 ..];
             server.host_start += @intCast(at_pos + 1);
         }
 
         if (remaining.len > 0 and remaining[0] == '[') {
             // IPv6 literal: [::1]:port
-            if (std.mem.indexOf(
+            if (std.mem.find(
                 u8,
                 remaining,
                 "]",
@@ -119,7 +119,7 @@ pub const ServerPool = struct {
                     remaining.len,
                 );
             }
-        } else if (std.mem.indexOf(
+        } else if (std.mem.find(
             u8,
             remaining,
             ":",

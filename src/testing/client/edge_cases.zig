@@ -73,7 +73,7 @@ pub fn testMessageOrdering(allocator: std.mem.Allocator) void {
 
     var pub_buf: [5][8]u8 = undefined;
     for (0..5) |i| {
-        const payload = std.fmt.bufPrint(
+        const payload = std.mem.print(
             &pub_buf[i],
             "msg-{d}",
             .{i},
@@ -91,7 +91,7 @@ pub fn testMessageOrdering(allocator: std.mem.Allocator) void {
 
         if (future.await(io.io())) |msg| {
             var exp_buf: [8]u8 = undefined;
-            const exp = std.fmt.bufPrint(
+            const exp = std.mem.print(
                 &exp_buf,
                 "msg-{d}",
                 .{expected},
@@ -452,7 +452,7 @@ pub fn testInterleavedPubSub(allocator: std.mem.Allocator) void {
     var received: u32 = 0;
     for (0..10) |i| {
         var buf: [16]u8 = undefined;
-        const payload = std.fmt.bufPrint(&buf, "msg{d}", .{i}) catch continue;
+        const payload = std.mem.print(&buf, "msg{d}", .{i}) catch continue;
 
         client.publish("interleave.test", payload) catch {
             reportResult("interleaved_pubsub", false, "publish failed");
@@ -472,7 +472,7 @@ pub fn testInterleavedPubSub(allocator: std.mem.Allocator) void {
         reportResult("interleaved_pubsub", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/10",
             .{received},
@@ -709,7 +709,7 @@ pub fn testQueueExactCapacity(allocator: std.mem.Allocator) void {
         reportResult("queue_exact_cap", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/64",
             .{received},
@@ -779,7 +779,7 @@ pub fn testQueueOverflow(allocator: std.mem.Allocator) void {
         reportResult("queue_overflow", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d} (expect <= {d})",
             .{ received, QUEUE_SIZE },
@@ -817,7 +817,7 @@ pub fn testMaxSubscriptions(allocator: std.mem.Allocator) void {
     var created: usize = 0;
     for (0..MAX_SUBS) |i| {
         var subject_buf: [32]u8 = undefined;
-        const subject = std.fmt.bufPrint(
+        const subject = std.mem.print(
             &subject_buf,
             "maxsub.{d}",
             .{i},
@@ -832,7 +832,7 @@ pub fn testMaxSubscriptions(allocator: std.mem.Allocator) void {
         reportResult("max_subscriptions", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/256",
             .{created},
@@ -884,7 +884,7 @@ pub fn testLargePayloadHandling(allocator: std.mem.Allocator) void {
             reportResult("large_payload_handling", true, "");
         } else {
             var buf: [48]u8 = undefined;
-            const detail = std.fmt.bufPrint(
+            const detail = std.mem.print(
                 &buf,
                 "got {d} bytes",
                 .{m.data.len},
@@ -1045,7 +1045,7 @@ pub fn testSidBoundaries(allocator: std.mem.Allocator) void {
     var last_sid: u64 = 0;
     for (0..100) |i| {
         var subject_buf: [32]u8 = undefined;
-        const subject = std.fmt.bufPrint(
+        const subject = std.mem.print(
             &subject_buf,
             "sid.test.{d}",
             .{i},
@@ -1108,7 +1108,7 @@ pub fn testMaxSubscriptionsExceeded(allocator: std.mem.Allocator) void {
     var created: usize = 0;
     for (0..MAX_SUBS) |i| {
         var subject_buf: [32]u8 = undefined;
-        const subject = std.fmt.bufPrint(
+        const subject = std.mem.print(
             &subject_buf,
             "exceedsub.{d}",
             .{i},
@@ -1121,7 +1121,7 @@ pub fn testMaxSubscriptionsExceeded(allocator: std.mem.Allocator) void {
 
     if (created != MAX_SUBS) {
         var buf: [48]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "only created {d}/{d}",
             .{ created, MAX_SUBS },

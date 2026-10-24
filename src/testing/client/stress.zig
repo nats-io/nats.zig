@@ -78,7 +78,7 @@ pub fn testStress500Messages(allocator: std.mem.Allocator) void {
     } else {
         var buf: [32]u8 = undefined;
         const msg =
-            std.fmt.bufPrint(&buf, "got {d}/500", .{received}) catch "e";
+            std.mem.print(&buf, "got {d}/500", .{received}) catch "e";
         reportResult("stress_500", false, msg);
     }
 }
@@ -126,7 +126,7 @@ pub fn testStress1000Messages(allocator: std.mem.Allocator) void {
     } else {
         var buf: [32]u8 = undefined;
         const msg =
-            std.fmt.bufPrint(&buf, "got {d}/1000", .{received}) catch "e";
+            std.mem.print(&buf, "got {d}/1000", .{received}) catch "e";
         reportResult("stress_1000", false, msg);
     }
 }
@@ -176,7 +176,7 @@ pub fn testStress2000Messages(allocator: std.mem.Allocator) void {
     } else {
         var buf: [32]u8 = undefined;
         const msg =
-            std.fmt.bufPrint(&buf, "got {d}/2000", .{received}) catch "e";
+            std.mem.print(&buf, "got {d}/2000", .{received}) catch "e";
         reportResult("stress_2000", false, msg);
     }
 }
@@ -258,7 +258,7 @@ pub fn testManySubscriptions(allocator: std.mem.Allocator) void {
     for (0..50) |i| {
         var subject_buf: [32]u8 = undefined;
         const subject =
-            std.fmt.bufPrint(&subject_buf, "manysub.{d}", .{i}) catch {
+            std.mem.print(&subject_buf, "manysub.{d}", .{i}) catch {
                 continue;
             };
         subs[i] = client.subscribeSync(subject) catch {
@@ -272,7 +272,7 @@ pub fn testManySubscriptions(allocator: std.mem.Allocator) void {
     } else {
         var buf: [32]u8 = undefined;
         const msg =
-            std.fmt.bufPrint(&buf, "created {d}/50", .{created}) catch "e";
+            std.mem.print(&buf, "created {d}/50", .{created}) catch "e";
         reportResult("many_subscriptions", false, msg);
     }
 }
@@ -343,7 +343,7 @@ pub fn testFiveConcurrentClients(allocator: std.mem.Allocator) void {
     const url = formatUrl(&url_buf, test_port);
 
     var ios: [5]*utils.TestIo = undefined;
-    var clients: [5]?*nats.Client = [_]?*nats.Client{null} ** 5;
+    var clients: [5]?*nats.Client = @splat(null);
     var count: usize = 0;
 
     defer {

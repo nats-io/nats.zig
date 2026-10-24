@@ -73,7 +73,7 @@ pub fn main(init: std.process.Init) !void {
 
         // Try to publish
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Ping {d}", .{iteration + 1}) catch "Ping";
+        const msg = std.mem.print(&buf, "Ping {d}", .{iteration + 1}) catch "Ping";
 
         if (client.publish("demo.reconnect", msg)) {
             std.debug.print(

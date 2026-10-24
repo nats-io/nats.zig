@@ -43,7 +43,7 @@ pub fn testTlsConnection(allocator: std.mem.Allocator) void {
         .tls_ca_file = ca_path,
     }) catch |err| {
         var err_buf: [64]u8 = undefined;
-        const err_msg = std.fmt.bufPrint(
+        const err_msg = std.mem.print(
             &err_buf,
             "connect failed: {}",
             .{err},
@@ -78,7 +78,7 @@ pub fn testTlsInsecureSkipVerify(allocator: std.mem.Allocator) void {
         .tls_insecure_skip_verify = true,
     }) catch |err| {
         var err_buf: [64]u8 = undefined;
-        const err_msg = std.fmt.bufPrint(
+        const err_msg = std.mem.print(
             &err_buf,
             "connect failed: {}",
             .{err},
@@ -274,7 +274,7 @@ pub fn testTlsMultipleMessages(allocator: std.mem.Allocator) void {
     const msg_count: usize = 100;
     for (0..msg_count) |i| {
         var subject_buf: [32]u8 = undefined;
-        const subject = std.fmt.bufPrint(
+        const subject = std.mem.print(
             &subject_buf,
             "tls.multi.{d}",
             .{i},
@@ -301,7 +301,7 @@ pub fn testTlsMultipleMessages(allocator: std.mem.Allocator) void {
         reportResult("tls_multiple_msgs", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "{d}/{d} received",
             .{ received, msg_count },

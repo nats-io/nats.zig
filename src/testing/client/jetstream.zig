@@ -153,7 +153,7 @@ pub fn testStreamCreateAndInfo(
         .storage = .memory,
     }) catch |err| {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "create failed: {}",
             .{err},
@@ -281,7 +281,7 @@ pub fn testPublishAndAck(
         "hello world",
     ) catch |err| {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "publish failed: {}",
             .{err},
@@ -406,7 +406,7 @@ pub fn testConsumerCRUD(
         },
     ) catch |err| {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "create consumer: {}",
             .{err},
@@ -1396,7 +1396,7 @@ pub fn testMessages(
 
     if (received != 5) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d}, expected 5",
             .{received},
@@ -1536,7 +1536,7 @@ pub fn testConsume(
 
     if (counter.count < 10) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d}, expected 10",
             .{counter.count},
@@ -1650,7 +1650,7 @@ pub fn testOrderedConsumer(
 
     if (received != 5) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d}, expected 5",
             .{received},
@@ -2099,7 +2099,7 @@ pub fn testBatchFetch(
 
     if (r1.count() != 5) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "batch1: got {d}",
             .{r1.count()},
@@ -2126,7 +2126,7 @@ pub fn testBatchFetch(
 
     if (r2.count() != 5) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "batch2: got {d}",
             .{r2.count()},
@@ -3229,7 +3229,7 @@ pub fn testKvKeys(
 
     if (key_list.len != 3) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d} keys, expected 3",
             .{key_list.len},
@@ -3308,7 +3308,7 @@ pub fn testKvHistory(
 
     if (hist.len != 3) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d}, expected 3",
             .{hist.len},
@@ -3382,7 +3382,7 @@ pub fn testKvWatch(
     // Should get the initial key
     var entry = (watcher.next(5000) catch |err| {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "watch next: {}",
             .{err},
@@ -3599,7 +3599,7 @@ pub fn testFilteredConsumer(
         .filter_subject = "test.filter.a",
     }) catch |err| {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "create cons: {}",
             .{err},
@@ -3760,7 +3760,7 @@ pub fn testPurgeSubject(
 
     if (p.value.purged != 2) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "purged {d}, expected 2",
             .{p.value.purged},
@@ -3783,7 +3783,7 @@ pub fn testPurgeSubject(
     if (info.value.state) |st| {
         if (st.messages != 3) {
             var buf: [64]u8 = undefined;
-            const m = std.fmt.bufPrint(
+            const m = std.mem.print(
                 &buf,
                 "{d} msgs, expected 3",
                 .{st.messages},
@@ -3835,13 +3835,13 @@ pub fn testPaginatedStreamNames(
     var i: u32 = 0;
     while (i < 3) : (i += 1) {
         var name_buf: [32]u8 = undefined;
-        const sname = std.fmt.bufPrint(
+        const sname = std.mem.print(
             &name_buf,
             "PAG_{d}",
             .{i},
         ) catch unreachable;
         var subj_b: [32]u8 = undefined;
-        const ssubj = std.fmt.bufPrint(
+        const ssubj = std.mem.print(
             &subj_b,
             "pag.{d}.>",
             .{i},
@@ -3878,7 +3878,7 @@ pub fn testPaginatedStreamNames(
 
     if (all.len < 3) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d}, expected >= 3",
             .{all.len},
@@ -3891,7 +3891,7 @@ pub fn testPaginatedStreamNames(
     i = 0;
     while (i < 3) : (i += 1) {
         var name_buf: [32]u8 = undefined;
-        const sname = std.fmt.bufPrint(
+        const sname = std.mem.print(
             &name_buf,
             "PAG_{d}",
             .{i},
@@ -4127,7 +4127,7 @@ pub fn testGetLastMsgForSubject(
     if (ra.value.message) |m| {
         if (m.seq != 3) {
             var buf: [64]u8 = undefined;
-            const msg = std.fmt.bufPrint(
+            const msg = std.mem.print(
                 &buf,
                 "a: got {d}, want 3",
                 .{m.seq},
@@ -4165,7 +4165,7 @@ pub fn testGetLastMsgForSubject(
     if (rb.value.message) |m| {
         if (m.seq != 5) {
             var buf: [64]u8 = undefined;
-            const msg = std.fmt.bufPrint(
+            const msg = std.mem.print(
                 &buf,
                 "b: got {d}, want 5",
                 .{m.seq},
@@ -4515,7 +4515,7 @@ pub fn testCreateOrUpdateStream(
         if (cfg.max_msgs) |mm| {
             if (mm != 200) {
                 var buf: [64]u8 = undefined;
-                const m = std.fmt.bufPrint(
+                const m = std.mem.print(
                     &buf,
                     "max_msgs {d}, want 200",
                     .{mm},
@@ -4651,7 +4651,7 @@ pub fn testCreateOrUpdateConsumer(
         if (cfg.max_ack_pending) |mp| {
             if (mp != 500) {
                 var buf: [64]u8 = undefined;
-                const m = std.fmt.bufPrint(
+                const m = std.mem.print(
                     &buf,
                     "max_ack {d}, want 500",
                     .{mp},
@@ -4987,7 +4987,7 @@ pub fn testPushConsumerBasic(
 
     if (counter.count < 5) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d}, expected 5",
             .{counter.count},
@@ -5856,7 +5856,7 @@ pub fn testKvUpdateBucket(
         if (cfg.max_msgs_per_subject) |mps| {
             if (mps != 5) {
                 var buf: [64]u8 = undefined;
-                const m = std.fmt.bufPrint(
+                const m = std.mem.print(
                     &buf,
                     "mps {d}, want 5",
                     .{mps},
@@ -5969,7 +5969,7 @@ pub fn testKvCreateOrUpdateBucket(
         if (cfg.max_msgs_per_subject) |mps| {
             if (mps != 10) {
                 var buf: [64]u8 = undefined;
-                const m = std.fmt.bufPrint(
+                const m = std.mem.print(
                     &buf,
                     "mps {d}, want 10",
                     .{mps},
@@ -6139,7 +6139,7 @@ pub fn testKvPurgeDeletes(
 
     if (key_list.len != 2) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "keys: {d}, want 2",
             .{key_list.len},
@@ -6495,7 +6495,7 @@ pub fn testKvWatchIgnoreDeletes(
     // Should get 2 (put a, put b) not delete
     if (count != 2) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d}, expected 2",
             .{count},
@@ -6769,7 +6769,7 @@ pub fn testKvListKeys(
 
     if (count != 4) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d} keys, expected 4",
             .{count},
@@ -7438,7 +7438,7 @@ pub fn testKvListKeysFiltered(
 
     if (count != 2) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d}, expected 2",
             .{count},
@@ -7525,7 +7525,7 @@ pub fn testKvHistoryWithOpts(
 
     if (hist.len != 3) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d}, expected 3",
             .{hist.len},
@@ -7854,7 +7854,7 @@ pub fn testPublishAsync(
 
     if (!all_ok or msg_count != 20) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "ok={}, msgs={d}",
             .{ all_ok, msg_count },
@@ -8644,7 +8644,7 @@ pub fn testStreamMaxMsgs(
     if (info.value.state) |st| {
         if (st.messages != 5) {
             var buf: [64]u8 = undefined;
-            const m = std.fmt.bufPrint(
+            const m = std.mem.print(
                 &buf,
                 "msgs={d}, want 5",
                 .{st.messages},
@@ -9005,7 +9005,7 @@ pub fn testAsyncPublishDedup(
 
     if (msgs != 1) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "msgs={d}, want 1",
             .{msgs},
@@ -9117,14 +9117,14 @@ pub fn testKvManyKeys(
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
         var key_buf: [8]u8 = undefined;
-        const key = std.fmt.bufPrint(
+        const key = std.mem.print(
             &key_buf,
             "k{d:0>3}",
             .{i},
         ) catch unreachable;
         _ = kv.put(key, "val") catch {
             var buf: [64]u8 = undefined;
-            const m = std.fmt.bufPrint(
+            const m = std.mem.print(
                 &buf,
                 "put k{d:0>3}",
                 .{i},
@@ -9145,7 +9145,7 @@ pub fn testKvManyKeys(
 
     if (len1 != 100) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d}, want 100",
             .{len1},
@@ -9158,7 +9158,7 @@ pub fn testKvManyKeys(
     i = 1;
     while (i < 100) : (i += 2) {
         var key_buf: [8]u8 = undefined;
-        const key = std.fmt.bufPrint(
+        const key = std.mem.print(
             &key_buf,
             "k{d:0>3}",
             .{i},
@@ -9177,7 +9177,7 @@ pub fn testKvManyKeys(
 
     if (len2 != 50) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "got {d}, want 50",
             .{len2},
@@ -9292,7 +9292,7 @@ pub fn testAsyncPublishBurst(
 
     if (msgs != 100) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "msgs={d}, want 100",
             .{msgs},
@@ -10186,7 +10186,7 @@ fn testPushAfterReconnect(
 
     if (counter2.count < 3) {
         var buf: [64]u8 = undefined;
-        const m = std.fmt.bufPrint(
+        const m = std.mem.print(
             &buf,
             "phase2 got {d}",
             .{counter2.count},
@@ -10450,7 +10450,7 @@ pub fn testCrossVerifyKvPut(
     };
     defer allocator.free(output);
 
-    if (std.mem.indexOf(u8, output, "from-zig") ==
+    if (std.mem.find(u8, output, "from-zig") ==
         null)
     {
         reportResult(

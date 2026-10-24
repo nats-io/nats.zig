@@ -413,16 +413,14 @@ fn initMonitorSubs(self: *Service) !void {
     };
     for (prefixes) |verb| {
         try self.subscribeMonitor(verb);
-        const name_subject = try std.fmt.allocPrint(
-            self.allocator,
+        const name_subject = try self.allocator.print(
             "{s}.{s}",
             .{ verb, self.name },
         );
         defer self.allocator.free(name_subject);
         try self.subscribeMonitor(name_subject);
 
-        const id_subject = try std.fmt.allocPrint(
-            self.allocator,
+        const id_subject = try self.allocator.print(
             "{s}.{s}.{s}",
             .{ verb, self.name, self.id },
         );
@@ -432,8 +430,7 @@ fn initMonitorSubs(self: *Service) !void {
 }
 
 fn subscribeMonitor(self: *Service, suffix: []const u8) !void {
-    const subject = try std.fmt.allocPrint(
-        self.allocator,
+    const subject = try self.allocator.print(
         "{s}.{s}",
         .{ self.service_prefix, suffix },
     );
@@ -452,7 +449,7 @@ fn joinSubject(
     leaf: []const u8,
 ) ![]u8 {
     if (prefix.len == 0) return allocator.dupe(u8, leaf);
-    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, leaf });
+    return allocator.print("{s}.{s}", .{ prefix, leaf });
 }
 
 fn generateId(allocator: std.mem.Allocator, io: std.Io) ![]u8 {

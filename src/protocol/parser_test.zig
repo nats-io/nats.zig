@@ -687,7 +687,7 @@ test "MSG long subject" {
     var consumed: usize = 0;
 
     // 256 character subject
-    const long_subject = "a" ** 256;
+    const long_subject = &@as([256]u8, @splat('a'));
     const data = "MSG " ++ long_subject ++ " 1 5\r\nhello\r\n";
 
     const result = try p.parse(std.testing.allocator, data, &consumed);
@@ -764,7 +764,7 @@ test "HMSG header length exceeds total rejected" {
     // hdr_len > total_len is invalid
     const result = p.parse(
         std.testing.allocator,
-        "HMSG subject 1 100 50\r\n" ++ "x" ** 50 ++ "\r\n",
+        "HMSG subject 1 100 50\r\n" ++ &@as([50]u8, @splat('x')) ++ "\r\n",
         &consumed,
     );
     try std.testing.expectError(Parser.Error.InvalidArguments, result);
@@ -1259,7 +1259,7 @@ test "parse -ERR long message" {
     var p: Parser = .{};
     var consumed: usize = 0;
 
-    const long_msg = "x" ** 1000;
+    const long_msg = &@as([1000]u8, @splat('x'));
     const data = "-ERR " ++ long_msg ++ "\r\n";
 
     const result = try p.parse(std.testing.allocator, data, &consumed);

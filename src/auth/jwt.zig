@@ -443,7 +443,7 @@ fn writeOperatorJson(
 }
 
 test "encode account JWT structure" {
-    const test_seed = [_]u8{10} ** 32;
+    const test_seed = @as([32]u8, @splat(10));
     const op_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             test_seed,
@@ -453,7 +453,7 @@ test "encode account JWT structure" {
         .key_type = .operator,
     };
 
-    const acct_seed = [_]u8{20} ** 32;
+    const acct_seed = @as([32]u8, @splat(20));
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -478,9 +478,9 @@ test "encode account JWT structure" {
 
     // Split on dots
     assert(jwt.len > 0);
-    const dot1 = std.mem.indexOf(u8, jwt, ".") orelse
+    const dot1 = std.mem.find(u8, jwt, ".") orelse
         unreachable;
-    const dot2 = std.mem.indexOfPos(
+    const dot2 = std.mem.findPos(
         u8,
         jwt,
         dot1 + 1,
@@ -517,18 +517,18 @@ test "encode account JWT structure" {
 
     // Check key fields exist
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"jti\":\"") != null,
+        std.mem.find(u8, pay, "\"jti\":\"") != null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"iat\":1700000000") !=
+        std.mem.find(u8, pay, "\"iat\":1700000000") !=
             null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"name\":\"test-account\"") !=
+        std.mem.find(u8, pay, "\"name\":\"test-account\"") !=
             null,
     );
     try std.testing.expect(
-        std.mem.indexOf(
+        std.mem.find(
             u8,
             pay,
             "\"type\":\"account\"",
@@ -549,7 +549,7 @@ test "encode account JWT structure" {
 }
 
 test "encode user JWT with permissions" {
-    const acct_seed = [_]u8{30} ** 32;
+    const acct_seed = @as([32]u8, @splat(30));
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -559,7 +559,7 @@ test "encode user JWT with permissions" {
         .key_type = .account,
     };
 
-    const user_seed = [_]u8{40} ** 32;
+    const user_seed = @as([32]u8, @splat(40));
     const user_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             user_seed,
@@ -586,9 +586,9 @@ test "encode user JWT with permissions" {
     );
 
     assert(jwt.len > 0);
-    const dot1 = std.mem.indexOf(u8, jwt, ".") orelse
+    const dot1 = std.mem.find(u8, jwt, ".") orelse
         unreachable;
-    const dot2 = std.mem.indexOfPos(
+    const dot2 = std.mem.findPos(
         u8,
         jwt,
         dot1 + 1,
@@ -608,17 +608,17 @@ test "encode user JWT with permissions" {
 
     // Verify permissions in payload
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"pub\":{\"allow\":[") !=
+        std.mem.find(u8, pay, "\"pub\":{\"allow\":[") !=
             null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"foo.>\"") != null,
+        std.mem.find(u8, pay, "\"foo.>\"") != null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"_INBOX.>\"") != null,
+        std.mem.find(u8, pay, "\"_INBOX.>\"") != null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"type\":\"user\"") !=
+        std.mem.find(u8, pay, "\"type\":\"user\"") !=
             null,
     );
 
@@ -639,7 +639,7 @@ test "encode user JWT with permissions" {
 }
 
 test "encode operator JWT self-signed" {
-    const op_seed = [_]u8{10} ** 32;
+    const op_seed = @as([32]u8, @splat(10));
     const op_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             op_seed,
@@ -663,9 +663,9 @@ test "encode operator JWT self-signed" {
     );
 
     assert(jwt.len > 0);
-    const dot1 = std.mem.indexOf(u8, jwt, ".") orelse
+    const dot1 = std.mem.find(u8, jwt, ".") orelse
         unreachable;
-    const dot2 = std.mem.indexOfPos(
+    const dot2 = std.mem.findPos(
         u8,
         jwt,
         dot1 + 1,
@@ -685,14 +685,14 @@ test "encode operator JWT self-signed" {
     const pay = pay_buf[0..pay_len];
 
     try std.testing.expect(
-        std.mem.indexOf(
+        std.mem.find(
             u8,
             pay,
             "\"type\":\"operator\"",
         ) != null,
     );
     try std.testing.expect(
-        std.mem.indexOf(
+        std.mem.find(
             u8,
             pay,
             "\"name\":\"test-operator\"",
@@ -716,7 +716,7 @@ test "encode operator JWT self-signed" {
 }
 
 test "JTI determinism - same input same output" {
-    const op_seed = [_]u8{10} ** 32;
+    const op_seed = @as([32]u8, @splat(10));
     const op_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             op_seed,
@@ -726,7 +726,7 @@ test "JTI determinism - same input same output" {
         .key_type = .operator,
     };
 
-    const acct_seed = [_]u8{20} ** 32;
+    const acct_seed = @as([32]u8, @splat(20));
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -763,7 +763,7 @@ test "JTI determinism - same input same output" {
 }
 
 test "JTI uniqueness - different names different JTI" {
-    const op_seed = [_]u8{10} ** 32;
+    const op_seed = @as([32]u8, @splat(10));
     const op_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             op_seed,
@@ -773,7 +773,7 @@ test "JTI uniqueness - different names different JTI" {
         .key_type = .operator,
     };
 
-    const acct_seed = [_]u8{20} ** 32;
+    const acct_seed = @as([32]u8, @splat(20));
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -813,7 +813,7 @@ test "JTI uniqueness - different names different JTI" {
 }
 
 test "custom account limits in payload" {
-    const op_seed = [_]u8{10} ** 32;
+    const op_seed = @as([32]u8, @splat(10));
     const op_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             op_seed,
@@ -823,7 +823,7 @@ test "custom account limits in payload" {
         .key_type = .operator,
     };
 
-    const acct_seed = [_]u8{20} ** 32;
+    const acct_seed = @as([32]u8, @splat(20));
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -851,9 +851,9 @@ test "custom account limits in payload" {
     );
 
     // Decode payload
-    const dot1 = std.mem.indexOf(u8, jwt, ".") orelse
+    const dot1 = std.mem.find(u8, jwt, ".") orelse
         unreachable;
-    const dot2 = std.mem.indexOfPos(
+    const dot2 = std.mem.findPos(
         u8,
         jwt,
         dot1 + 1,
@@ -871,15 +871,15 @@ test "custom account limits in payload" {
     const pay = pay_buf[0..plen];
 
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"subs\":100") !=
+        std.mem.find(u8, pay, "\"subs\":100") !=
             null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"conn\":50") !=
+        std.mem.find(u8, pay, "\"conn\":50") !=
             null,
     );
     try std.testing.expect(
-        std.mem.indexOf(
+        std.mem.find(
             u8,
             pay,
             "\"wildcards\":false",
@@ -888,7 +888,7 @@ test "custom account limits in payload" {
 }
 
 test "user JWT with empty permissions" {
-    const acct_seed = [_]u8{30} ** 32;
+    const acct_seed = @as([32]u8, @splat(30));
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -898,7 +898,7 @@ test "user JWT with empty permissions" {
         .key_type = .account,
     };
 
-    const user_seed = [_]u8{40} ** 32;
+    const user_seed = @as([32]u8, @splat(40));
     const user_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             user_seed,
@@ -922,9 +922,9 @@ test "user JWT with empty permissions" {
     );
 
     // Decode payload
-    const dot1 = std.mem.indexOf(u8, jwt, ".") orelse
+    const dot1 = std.mem.find(u8, jwt, ".") orelse
         unreachable;
-    const dot2 = std.mem.indexOfPos(
+    const dot2 = std.mem.findPos(
         u8,
         jwt,
         dot1 + 1,
@@ -944,19 +944,19 @@ test "user JWT with empty permissions" {
     // No "pub": or "sub":{ permission blocks
     // (only "subs":, "sub":" for subject)
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"pub\":{") == null,
+        std.mem.find(u8, pay, "\"pub\":{") == null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"sub\":{") == null,
+        std.mem.find(u8, pay, "\"sub\":{") == null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"type\":\"user\"") !=
+        std.mem.find(u8, pay, "\"type\":\"user\"") !=
             null,
     );
 }
 
 test "user JWT with single permission" {
-    const acct_seed = [_]u8{30} ** 32;
+    const acct_seed = @as([32]u8, @splat(30));
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -966,7 +966,7 @@ test "user JWT with single permission" {
         .key_type = .account,
     };
 
-    const user_seed = [_]u8{40} ** 32;
+    const user_seed = @as([32]u8, @splat(40));
     const user_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             user_seed,
@@ -992,9 +992,9 @@ test "user JWT with single permission" {
     );
 
     // Decode payload
-    const dot1 = std.mem.indexOf(u8, jwt, ".") orelse
+    const dot1 = std.mem.find(u8, jwt, ".") orelse
         unreachable;
-    const dot2 = std.mem.indexOfPos(
+    const dot2 = std.mem.findPos(
         u8,
         jwt,
         dot1 + 1,
@@ -1012,7 +1012,7 @@ test "user JWT with single permission" {
     const pay = pay_buf[0..plen];
 
     try std.testing.expect(
-        std.mem.indexOf(
+        std.mem.find(
             u8,
             pay,
             "\"pub\":{\"allow\":[\"single.subject\"]}",
@@ -1021,7 +1021,7 @@ test "user JWT with single permission" {
 }
 
 test "custom user limits in payload" {
-    const acct_seed = [_]u8{30} ** 32;
+    const acct_seed = @as([32]u8, @splat(30));
     const acct_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             acct_seed,
@@ -1031,7 +1031,7 @@ test "custom user limits in payload" {
         .key_type = .account,
     };
 
-    const user_seed = [_]u8{40} ** 32;
+    const user_seed = @as([32]u8, @splat(40));
     const user_kp_inner =
         Ed25519.KeyPair.generateDeterministic(
             user_seed,
@@ -1059,9 +1059,9 @@ test "custom user limits in payload" {
     );
 
     // Decode payload
-    const dot1 = std.mem.indexOf(u8, jwt, ".") orelse
+    const dot1 = std.mem.find(u8, jwt, ".") orelse
         unreachable;
-    const dot2 = std.mem.indexOfPos(
+    const dot2 = std.mem.findPos(
         u8,
         jwt,
         dot1 + 1,
@@ -1079,15 +1079,15 @@ test "custom user limits in payload" {
     const pay = pay_buf[0..plen];
 
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"subs\":10") !=
+        std.mem.find(u8, pay, "\"subs\":10") !=
             null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"data\":1024") !=
+        std.mem.find(u8, pay, "\"data\":1024") !=
             null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, pay, "\"payload\":512") !=
+        std.mem.find(u8, pay, "\"payload\":512") !=
             null,
     );
 }

@@ -24,7 +24,7 @@ pub fn testJwtCredsFile(allocator: std.mem.Allocator) void {
         .creds_file = test_creds_file,
     }) catch |err| {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "connect: {}", .{err}) catch "fmt";
+        const detail = std.mem.print(&buf, "connect: {}", .{err}) catch "fmt";
         reportResult("jwt_creds_file", false, detail);
         return;
     };
@@ -52,7 +52,7 @@ pub fn testJwtCredsContent(allocator: std.mem.Allocator) void {
         .creds = creds_content,
     }) catch |err| {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "connect: {}", .{err}) catch "fmt";
+        const detail = std.mem.print(&buf, "connect: {}", .{err}) catch "fmt";
         reportResult("jwt_creds_content", false, detail);
         return;
     };
@@ -78,7 +78,7 @@ pub fn testJwtPubSub(allocator: std.mem.Allocator) void {
         .creds_file = test_creds_file,
     }) catch |err| {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "connect: {}", .{err}) catch "fmt";
+        const detail = std.mem.print(&buf, "connect: {}", .{err}) catch "fmt";
         reportResult("jwt_pub_sub", false, detail);
         return;
     };

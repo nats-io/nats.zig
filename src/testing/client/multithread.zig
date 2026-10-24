@@ -100,7 +100,7 @@ pub fn testMultiThreadPublish(
     }
     if (total_published != TOTAL) {
         var buf2: [64]u8 = undefined;
-        const d = std.fmt.bufPrint(
+        const d = std.mem.print(
             &buf2,
             "published {d}/{d}",
             .{ total_published, TOTAL },
@@ -132,7 +132,7 @@ pub fn testMultiThreadPublish(
         reportResult("mt_publish", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/{d}",
             .{ received, TOTAL },
@@ -148,7 +148,7 @@ fn publishThread(
     ok_count: *std.atomic.Value(u32),
 ) void {
     var subject_buf: [32]u8 = undefined;
-    const subject = std.fmt.bufPrint(
+    const subject = std.mem.print(
         &subject_buf,
         "mt.pub.{d}",
         .{thread_id},
@@ -156,7 +156,7 @@ fn publishThread(
 
     var payload_buf: [64]u8 = undefined;
     for (0..count) |seq| {
-        const payload = std.fmt.bufPrint(
+        const payload = std.mem.print(
             &payload_buf,
             "{d}:{d}",
             .{ thread_id, seq },
@@ -227,7 +227,7 @@ pub fn testMultiThreadSubscribe(
         reportResult("mt_subscribe", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "errs={d} leaked_subs={d}",
             .{ total_errors, num_subs },
@@ -244,7 +244,7 @@ fn subUnsubThread(
 ) void {
     for (0..iters) |i| {
         var subject_buf: [48]u8 = undefined;
-        const subject = std.fmt.bufPrint(
+        const subject = std.mem.print(
             &subject_buf,
             "mt.sub.{d}.{d}",
             .{ thread_id, i },
@@ -317,7 +317,7 @@ pub fn testMultiThreadStats(
         reportResult("mt_stats", true, "");
     } else {
         var buf: [96]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "msgs={d}/{d} bytes={d}/{d}",
             .{
@@ -439,7 +439,7 @@ pub fn testMultiThreadMixed(
         reportResult("mt_mixed", true, "");
     } else {
         var buf: [80]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "recv={d}/{d} churn_err={d}",
             .{ received, total, churn_errors },
@@ -464,7 +464,7 @@ fn subChurnThread(
 ) void {
     for (0..iters) |i| {
         var buf: [48]u8 = undefined;
-        const subject = std.fmt.bufPrint(
+        const subject = std.mem.print(
             &buf,
             "mt.churn.{d}",
             .{i},
@@ -596,7 +596,7 @@ pub fn testMultiThreadRequest(
         reportResult("mt_request", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "replies={d}/{d}",
             .{ total_success, expected },
@@ -704,7 +704,7 @@ pub fn testSubSlotIntegrity(
         reportResult("mt_slot_integrity", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "errs={d} subs={d}",
             .{ total_errors, final_subs },

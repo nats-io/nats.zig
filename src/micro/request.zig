@@ -48,7 +48,7 @@ pub const Request = struct {
     ) !void {
         const reply_to = self.msg.reply_to orelse return error.NoReplyTo;
         var code_buf: [16]u8 = undefined;
-        const code_str = try std.fmt.bufPrint(&code_buf, "{d}", .{code});
+        const code_str = try std.mem.print(&code_buf, "{d}", .{code});
         const hdrs = [_]headers_mod.Entry{
             .{ .key = "Nats-Service-Error", .value = description },
             .{ .key = "Nats-Service-Error-Code", .value = code_str },

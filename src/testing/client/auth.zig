@@ -179,7 +179,7 @@ pub fn testMultipleAuthAttempts(allocator: std.mem.Allocator) void {
         reportResult("multiple_auth_attempts", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "{d}/5 failed", .{failures}) catch "e";
+        const detail = std.mem.print(&buf, "{d}/5 failed", .{failures}) catch "e";
         reportResult("multiple_auth_attempts", false, detail);
     }
 }

@@ -99,7 +99,8 @@ pub fn testStatsBytesAccuracy(allocator: std.mem.Allocator) void {
 
     const before = client.stats();
 
-    const payload = "0123456789" ** 10;
+    const payload = "0123456789" ++ "0123456789" ++ "0123456789" ++ "0123456789" ++ "0123456789" ++
+        "0123456789" ++ "0123456789" ++ "0123456789" ++ "0123456789" ++ "0123456789";
     client.publish("async.stats.bytes", payload) catch {};
 
     const after = client.stats();
@@ -157,7 +158,7 @@ pub fn testStatsMsgsIn(allocator: std.mem.Allocator) void {
         reportResult("stats_msgs_in", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "in={d} recv={d}",
             .{ msgs_in, received },
@@ -211,7 +212,7 @@ pub fn testStatsBytesIn(allocator: std.mem.Allocator) void {
         reportResult("stats_bytes_in", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/500",
             .{bytes_in},
@@ -345,7 +346,7 @@ pub fn testPendingBytes(allocator: std.mem.Allocator) void {
         reportResult("pending_bytes", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "before={d} after={d}",
             .{ before_recv, after_recv },

@@ -46,7 +46,7 @@ pub fn testConsecutiveConnections(allocator: std.mem.Allocator) void {
             .{ .reconnect = false },
         ) catch {
             var buf: [32]u8 = undefined;
-            const msg = std.fmt.bufPrint(
+            const msg = std.mem.print(
                 &buf,
                 "connect {d} failed",
                 .{i},
@@ -269,7 +269,7 @@ pub fn testRapidConnectDisconnect(allocator: std.mem.Allocator) void {
         reportResult("rapid_connect_disconnect", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "{d}/50 cycles",
             .{success},
@@ -455,7 +455,7 @@ pub fn testManyClientSubscriptions(allocator: std.mem.Allocator) void {
 
     const NUM_SUBS = 100;
     var subs: [NUM_SUBS]?*nats.Subscription =
-        [_]?*nats.Subscription{null} ** NUM_SUBS;
+        @splat(null);
     var created: usize = 0;
 
     defer for (&subs) |*s| {
@@ -464,7 +464,7 @@ pub fn testManyClientSubscriptions(allocator: std.mem.Allocator) void {
 
     for (0..NUM_SUBS) |i| {
         var subject_buf: [32]u8 = undefined;
-        const subject = std.fmt.bufPrint(
+        const subject = std.mem.print(
             &subject_buf,
             "many.subs.{d}",
             .{i},
@@ -478,7 +478,7 @@ pub fn testManyClientSubscriptions(allocator: std.mem.Allocator) void {
 
     if (created != NUM_SUBS) {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/100",
             .{created},

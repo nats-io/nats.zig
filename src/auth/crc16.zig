@@ -1,11 +1,11 @@
 //! CRC16-CCITT checksum for NKey validation.
 //!
-//! Thin wrapper around std.hash.crc.Crc16Xmodem.
+//! Thin wrapper around std.hash.crc.@"CRC-16/XMODEM".
 
 const std = @import("std");
 const assert = std.debug.assert;
 
-const Crc16Xmodem = std.hash.crc.Crc16Xmodem;
+const Crc16Xmodem = std.hash.crc.@"CRC-16/XMODEM";
 
 /// Computes CRC16-CCITT (XMODEM) checksum over data.
 pub fn compute(data: []const u8) u16 {

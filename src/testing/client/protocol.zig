@@ -113,7 +113,7 @@ pub fn testPingPongKeepAlive(allocator: std.mem.Allocator) void {
         reportResult("ping_pong_keep_alive", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/5",
             .{received},
@@ -446,7 +446,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
     };
     defer client.deinit();
 
-    var subs: [5]?*nats.Subscription = [_]?*nats.Subscription{null} ** 5;
+    var subs: [5]?*nats.Subscription = @splat(null);
     defer for (&subs) |*s| {
         if (s.*) |sub| sub.deinit();
     };
@@ -454,7 +454,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
     for (0..5) |i| {
         var buf: [32]u8 = undefined;
         const subject =
-            std.fmt.bufPrint(&buf, "stability.{d}", .{i}) catch continue;
+            std.mem.print(&buf, "stability.{d}", .{i}) catch continue;
         subs[i] = client.subscribeSync(subject) catch {
             reportResult("protocol_stability", false, "subscribe failed");
             return;
@@ -464,7 +464,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
     for (0..5) |i| {
         var buf: [32]u8 = undefined;
         const subject =
-            std.fmt.bufPrint(&buf, "stability.{d}", .{i}) catch continue;
+            std.mem.print(&buf, "stability.{d}", .{i}) catch continue;
         client.publish(subject, "test") catch {
             reportResult("protocol_stability", false, "publish failed");
             return;
@@ -497,7 +497,7 @@ pub fn testProtocolStability(allocator: std.mem.Allocator) void {
     } else {
         var buf: [32]u8 = undefined;
         const detail =
-            std.fmt.bufPrint(&buf, "got {d}/5", .{received}) catch "e";
+            std.mem.print(&buf, "got {d}/5", .{received}) catch "e";
         reportResult("protocol_stability", false, detail);
     }
 }

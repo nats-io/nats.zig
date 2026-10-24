@@ -204,7 +204,7 @@ pub fn testSubscriptionCompleteEvent(allocator: std.mem.Allocator) void {
         reportResult("sub_complete_event", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "recv={} sid={}", .{
+        const detail = std.mem.print(&buf, "recv={} sid={}", .{
             tracker.complete_received,
             tracker.complete_sid,
         }) catch "e";
@@ -270,7 +270,7 @@ pub fn testEventQueueMultiProducerOverlap(
     for (0..iterations) |i| {
         {
             var subject_buf: [48]u8 = undefined;
-            const subject = std.fmt.bufPrint(
+            const subject = std.mem.print(
                 &subject_buf,
                 "event.mp.{d}",
                 .{i},
@@ -337,7 +337,7 @@ pub fn testEventQueueMultiProducerOverlap(
                 tracker.complete_count.load(.monotonic) < complete_target)
             {
                 var detail_buf: [96]u8 = undefined;
-                const detail = std.fmt.bufPrint(
+                const detail = std.mem.print(
                     &detail_buf,
                     "drain={d} complete={d} at iter {d}",
                     .{

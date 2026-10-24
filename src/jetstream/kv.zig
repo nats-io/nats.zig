@@ -99,7 +99,7 @@ pub const KeyValue = struct {
         buf: []u8,
     ) ![]const u8 {
         try validateKey(key);
-        return std.fmt.bufPrint(
+        return std.mem.print(
             buf,
             "$KV.{s}.{s}",
             .{ self.bucket(), key },
@@ -143,7 +143,7 @@ pub const KeyValue = struct {
         );
 
         var api_buf: [512]u8 = undefined;
-        const api_subj = std.fmt.bufPrint(
+        const api_subj = std.mem.print(
             &api_buf,
             "STREAM.MSG.GET.{s}",
             .{self.streamName()},
@@ -161,7 +161,7 @@ pub const KeyValue = struct {
         seq: u64,
     ) !?types.KeyValueEntry {
         var api_buf: [512]u8 = undefined;
-        const api_subj = std.fmt.bufPrint(
+        const api_subj = std.mem.print(
             &api_buf,
             "STREAM.MSG.GET.{s}",
             .{self.streamName()},
@@ -199,7 +199,7 @@ pub const KeyValue = struct {
         // Validate subject matches expected key
         if (msg.subject) |subj| {
             var exp_buf: [256]u8 = undefined;
-            const expected = std.fmt.bufPrint(
+            const expected = std.mem.print(
                 &exp_buf,
                 "$KV.{s}.{s}",
                 .{ self.bucket(), key },
@@ -468,7 +468,7 @@ pub const KeyValue = struct {
         var hdr_count: usize = 1;
         var rev_buf: [20]u8 = undefined;
         if (opts.last_revision) |rev| {
-            const s = std.fmt.bufPrint(
+            const s = std.mem.print(
                 &rev_buf,
                 "{d}",
                 .{rev},
@@ -514,7 +514,7 @@ pub const KeyValue = struct {
         var hdr_count: usize = 2;
         var rev_buf: [20]u8 = undefined;
         if (opts.last_revision) |rev| {
-            const s = std.fmt.bufPrint(
+            const s = std.mem.print(
                 &rev_buf,
                 "{d}",
                 .{rev},
@@ -548,7 +548,7 @@ pub const KeyValue = struct {
         std.debug.assert(self.bucket_len > 0);
 
         var subj_buf: [256]u8 = undefined;
-        const filter = std.fmt.bufPrint(
+        const filter = std.mem.print(
             &subj_buf,
             "$KV.{s}.>",
             .{self.bucket()},
@@ -769,7 +769,7 @@ pub const KeyValue = struct {
 
         for (patterns, 0..) |p, i| {
             try validateKeyPattern(p);
-            const f = std.fmt.bufPrint(
+            const f = std.mem.print(
                 &filter_bufs[i],
                 "$KV.{s}.{s}",
                 .{ self.bucket(), p },
@@ -781,7 +781,7 @@ pub const KeyValue = struct {
             1,
             .monotonic,
         );
-        const name = std.fmt.bufPrint(
+        const name = std.mem.print(
             &self._eph_name_buf,
             "kv{d}x{d}",
             .{ seq, @intFromPtr(self) % 99999 },
@@ -831,7 +831,7 @@ pub const KeyValue = struct {
     ) !KvWatcher {
         try validateKeyPattern(key_pattern);
         var subj_buf: [256]u8 = undefined;
-        const filter = std.fmt.bufPrint(
+        const filter = std.mem.print(
             &subj_buf,
             "$KV.{s}.{s}",
             .{ self.bucket(), key_pattern },
@@ -867,7 +867,7 @@ pub const KeyValue = struct {
         opts: types.WatchOpts,
     ) !KvWatcher {
         var subj_buf: [256]u8 = undefined;
-        const filter = std.fmt.bufPrint(
+        const filter = std.mem.print(
             &subj_buf,
             "$KV.{s}.>",
             .{self.bucket()},
@@ -908,7 +908,7 @@ pub const KeyValue = struct {
 
         for (patterns, 0..) |p, i| {
             try validateKeyPattern(p);
-            const f = std.fmt.bufPrint(
+            const f = std.mem.print(
                 &filter_bufs[i],
                 "$KV.{s}.{s}",
                 .{ self.bucket(), p },
@@ -924,7 +924,7 @@ pub const KeyValue = struct {
             1,
             .monotonic,
         );
-        const name = std.fmt.bufPrint(
+        const name = std.mem.print(
             &self._eph_name_buf,
             "kv{d}x{d}",
             .{ seq, @intFromPtr(self) % 99999 },
@@ -1029,7 +1029,7 @@ pub const KeyValue = struct {
         std.debug.assert(self.bucket_len > 0);
 
         var subj_buf: [256]u8 = undefined;
-        const filter = std.fmt.bufPrint(
+        const filter = std.mem.print(
             &subj_buf,
             "$KV.{s}.>",
             .{self.bucket()},
@@ -1081,7 +1081,7 @@ pub const KeyValue = struct {
                 0;
         } else 0;
         var subj_buf: [256]u8 = undefined;
-        const filter = std.fmt.bufPrint(
+        const filter = std.mem.print(
             &subj_buf,
             "$KV.{s}.>",
             .{self.bucket()},
@@ -1135,7 +1135,7 @@ pub const KeyValue = struct {
             1,
             .monotonic,
         );
-        const name = std.fmt.bufPrint(
+        const name = std.mem.print(
             &self._eph_name_buf,
             "kv{d}x{d}",
             .{ seq, @intFromPtr(self) % 99999 },
@@ -1199,12 +1199,12 @@ pub const KeyValue = struct {
     /// Matches exact KV-Operation header values to
     /// avoid substring false positives.
     fn parseKvOp(raw_headers: []const u8) types.KeyValueOp {
-        if (std.mem.indexOf(
+        if (std.mem.find(
             u8,
             raw_headers,
             "KV-Operation: PURGE\r\n",
         ) != null) return .purge;
-        if (std.mem.indexOf(
+        if (std.mem.find(
             u8,
             raw_headers,
             "KV-Operation: DEL\r\n",

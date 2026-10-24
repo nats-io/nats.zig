@@ -42,10 +42,10 @@ pub fn main(init: std.process.Init) !void {
 
     for (0..5) |i| {
         var buf: [64]u8 = undefined;
-        const order = std.fmt.bufPrint(&buf, "Order #{d}", .{i + 1000}) catch "Order";
+        const order = std.mem.print(&buf, "Order #{d}", .{i + 1000}) catch "Order";
         try client.publish("orders.new", order);
 
-        const event = std.fmt.bufPrint(&buf, "Event {d}", .{i + 1}) catch "Event";
+        const event = std.mem.print(&buf, "Event {d}", .{i + 1}) catch "Event";
         try client.publish("events.user.login", event);
     }
 

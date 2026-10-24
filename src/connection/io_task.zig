@@ -17,7 +17,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
-const native_os = builtin.os.tag;
+const native_os = builtin.target.os.tag;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
@@ -467,7 +467,7 @@ inline fn tryRouteBufferedMessages(
         ) catch {
             // Scan to next CRLF for recovery (skip corrupted data)
             // Uses SIMD on supported platforms
-            if (std.mem.indexOf(u8, data[offset..], "\r\n")) |crlf_pos| {
+            if (std.mem.find(u8, data[offset..], "\r\n")) |crlf_pos| {
                 const bytes_skipped = crlf_pos + 2;
                 offset += bytes_skipped;
 

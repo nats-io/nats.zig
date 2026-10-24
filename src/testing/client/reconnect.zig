@@ -269,7 +269,7 @@ fn testMultipleSubscriptionsRestored(
         reportResult("reconnect_multi_sub", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const details = std.fmt.bufPrint(
+        const details = std.mem.print(
             &buf,
             "only {d}/3 received",
             .{received},
@@ -449,7 +449,7 @@ fn testPublishDuringReconnect(
     var i: u8 = 0;
     while (i < 5) : (i += 1) {
         var buf: [32]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "msg-{d}", .{i}) catch continue;
+        const msg = std.mem.print(&buf, "msg-{d}", .{i}) catch continue;
         if (client.publish("during.reconnect", msg)) |_| {
             published += 1;
         } else |_| {}
@@ -834,7 +834,7 @@ fn testCustomReconnectDelay(
         reportResult("custom_reconnect_delay", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "calls={d}", .{
+        const detail = std.mem.print(&buf, "calls={d}", .{
             calls,
         }) catch "e";
         reportResult("custom_reconnect_delay", false, detail);
@@ -1248,7 +1248,7 @@ fn testMultipleSubsActivelyReceiving(
 
     if (pre_received != 5) {
         var buf: [32]u8 = undefined;
-        const details = std.fmt.bufPrint(
+        const details = std.mem.print(
             &buf,
             "pre: {d}/5",
             .{pre_received},
@@ -1299,7 +1299,7 @@ fn testMultipleSubsActivelyReceiving(
         reportResult("multi_subs_receiving", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const details = std.fmt.bufPrint(
+        const details = std.mem.print(
             &buf,
             "post: {d}/5",
             .{post_received},
@@ -1391,7 +1391,7 @@ fn testHighVolumePendingBuffer(
         reportResult("high_volume_buffer", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const details = std.fmt.bufPrint(
+        const details = std.mem.print(
             &buf,
             "pub_before={d} recv_before={d}",
             .{ published_before, received_before },
@@ -1523,7 +1523,7 @@ fn testQueueGroupMultiClientReconnect(
         reportResult("queue_group_multi_client", true, "");
     } else {
         var buf: [48]u8 = undefined;
-        const details = std.fmt.bufPrint(
+        const details = std.mem.print(
             &buf,
             "before={d} after={d}",
             .{ total_before, total_after },
@@ -1586,7 +1586,7 @@ fn testRapidServerRestarts(
             3000,
         ) or !waitForConnected(io.io(), client, 1000)) {
             var buf: [32]u8 = undefined;
-            const details = std.fmt.bufPrint(
+            const details = std.mem.print(
                 &buf,
                 "reconnect {d} timeout",
                 .{cycle},
@@ -1608,7 +1608,7 @@ fn testRapidServerRestarts(
             reportResult("rapid_restarts", true, "");
         } else {
             var buf: [32]u8 = undefined;
-            const details = std.fmt.bufPrint(
+            const details = std.mem.print(
                 &buf,
                 "reconnects={d}",
                 .{stats.reconnects},
@@ -1661,7 +1661,7 @@ fn testMultipleReconnectionCycles(
             .port = test_port,
         }) catch {
             var buf: [32]u8 = undefined;
-            const details = std.fmt.bufPrint(
+            const details = std.mem.print(
                 &buf,
                 "restart {d} failed",
                 .{cycle},
@@ -1678,7 +1678,7 @@ fn testMultipleReconnectionCycles(
             3000,
         ) or !waitForConnected(io.io(), client, 1000)) {
             var buf: [32]u8 = undefined;
-            const details = std.fmt.bufPrint(
+            const details = std.mem.print(
                 &buf,
                 "reconnect {d} timeout",
                 .{cycle},
@@ -1688,7 +1688,7 @@ fn testMultipleReconnectionCycles(
         }
 
         var msg_buf: [32]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &msg_buf,
             "cycle-{d}",
             .{cycle},
@@ -1696,7 +1696,7 @@ fn testMultipleReconnectionCycles(
 
         client.publish("cycles.test", msg) catch {
             var buf: [32]u8 = undefined;
-            const details = std.fmt.bufPrint(
+            const details = std.mem.print(
                 &buf,
                 "publish {d} failed",
                 .{cycle},
@@ -1709,7 +1709,7 @@ fn testMultipleReconnectionCycles(
             m.deinit();
         } else {
             var buf: [32]u8 = undefined;
-            const details = std.fmt.bufPrint(
+            const details = std.mem.print(
                 &buf,
                 "no msg cycle {d}",
                 .{cycle},
@@ -1724,7 +1724,7 @@ fn testMultipleReconnectionCycles(
         reportResult("multiple_cycles", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const details = std.fmt.bufPrint(
+        const details = std.mem.print(
             &buf,
             "reconnects={d} want 3",
             .{stats.reconnects},

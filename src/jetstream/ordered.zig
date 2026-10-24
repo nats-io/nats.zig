@@ -153,7 +153,7 @@ pub const OrderedConsumer = struct {
 
         // Generate unique name (avoid _ prefix which
         // NATS reserves for internal use)
-        const name = std.fmt.bufPrint(
+        const name = std.mem.print(
             &self.consumer_name_buf,
             "oc{d}x{d}",
             .{ self.serial, @intFromPtr(self) % 99999 },

@@ -94,7 +94,7 @@ pub fn testRequestReturns(allocator: std.mem.Allocator) void {
         reportResult("request_returns", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "took too long: {d}ms",
             .{elapsed_ms},
@@ -350,7 +350,7 @@ pub fn testRequestTimeout(allocator: std.mem.Allocator) void {
         reportResult("request_timeout", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "took {d}ms",
             .{elapsed_ms},
@@ -520,7 +520,7 @@ pub fn testMultipleRequestsSequential(allocator: std.mem.Allocator) void {
         reportResult("multi_requests_seq", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/5",
             .{success_count},
@@ -592,7 +592,7 @@ pub fn testMuxerLatencyFloor(allocator: std.mem.Allocator) void {
     const before_subs = requester.numSubscriptions();
     if (before_subs != 0) {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "subs before request: {d}",
             .{before_subs},
@@ -625,7 +625,7 @@ pub fn testMuxerLatencyFloor(allocator: std.mem.Allocator) void {
         const subs = requester.numSubscriptions();
         if (subs != 1) {
             var buf: [64]u8 = undefined;
-            const detail = std.fmt.bufPrint(
+            const detail = std.mem.print(
                 &buf,
                 "request {d}: subs={d}, want 1",
                 .{ i + 1, subs },
@@ -702,7 +702,7 @@ pub fn testMuxerRapidSequential(allocator: std.mem.Allocator) void {
 
     if (success != N) {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/{d} replies",
             .{ success, N },
@@ -725,7 +725,7 @@ pub fn testMuxerRapidSequential(allocator: std.mem.Allocator) void {
         reportResult("muxer_rapid_sequential", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "100 requests took {d}ms (expected < 400ms)",
             .{total_ms},

@@ -394,7 +394,7 @@ test "FixedSubscription activate subject at max length" {
     var sub = TestSub.initEmpty();
 
     // max_subject_len is exclusive (>= rejects it)
-    const max_subject = "a" ** 63;
+    const max_subject = &@as([63]u8, @splat('a'));
     try sub.activate(&client, 1, max_subject, null);
 
     try testing.expectEqual(@as(usize, 63), sub.subject().len);
@@ -406,7 +406,7 @@ test "FixedSubscription activate queue_group at max length" {
     var sub = TestSub.initEmpty();
 
     // Config has max_queue_group_len = 32
-    const max_qg = "q" ** 32;
+    const max_qg = &@as([32]u8, @splat('q'));
     try sub.activate(&client, 1, "test", max_qg);
 
     try testing.expectEqual(@as(usize, 32), sub.queueGroup().?.len);
@@ -420,7 +420,7 @@ test "FixedSubscription activate subject too long" {
     var sub = TestSub.initEmpty();
 
     // Config has max_subject_len = 64
-    const long_subject = "a" ** 65;
+    const long_subject = &@as([65]u8, @splat('a'));
     try testing.expectError(
         error.SubjectTooLong,
         sub.activate(&client, 1, long_subject, null),
@@ -435,7 +435,7 @@ test "FixedSubscription activate queue_group too long" {
     var sub = TestSub.initEmpty();
 
     // Config has max_queue_group_len = 32
-    const long_qg = "q" ** 33;
+    const long_qg = &@as([33]u8, @splat('q'));
     try testing.expectError(
         error.QueueGroupTooLong,
         sub.activate(&client, 1, "test", long_qg),
@@ -697,7 +697,7 @@ test "FixedSubscription large config" {
     var client = TestClient{};
     var sub = LargeSub.initEmpty();
 
-    const long_subject = "a" ** 1023;
+    const long_subject = &@as([1023]u8, @splat('a'));
     try sub.activate(&client, 1, long_subject, null);
     try testing.expectEqual(@as(usize, 1023), sub.subject().len);
 }
@@ -713,7 +713,7 @@ test "FixedSubscription large queue group" {
     var client = TestClient{};
     var sub = LargeSub.initEmpty();
 
-    const long_qg = "q" ** 512;
+    const long_qg = &@as([512]u8, @splat('q'));
     try sub.activate(&client, 1, "test", long_qg);
     try testing.expectEqual(@as(usize, 512), sub.queueGroup().?.len);
 }

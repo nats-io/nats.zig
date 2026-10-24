@@ -45,7 +45,7 @@ pub fn main(init: std.process.Init) !void {
     // stream until acknowledged.
     for (0..10) |i| {
         var buf: [32]u8 = undefined;
-        const payload = std.fmt.bufPrint(
+        const payload = std.mem.print(
             &buf,
             "task {d}",
             .{i + 1},

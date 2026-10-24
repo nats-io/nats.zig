@@ -44,7 +44,7 @@ pub const TestServer = struct {
 
         var server: TestServer = .{ .config = config };
 
-        const port_str = std.fmt.bufPrint(
+        const port_str = std.mem.print(
             &server.port_buf,
             "{d}",
             .{config.port},
@@ -167,7 +167,7 @@ pub const TestServer = struct {
             self.store_dir_len = @intCast(configured.len);
             break :blk self.store_dir_buf[0..configured.len];
         } else blk: {
-            const formatted = std.fmt.bufPrint(
+            const formatted = std.mem.print(
                 &self.store_dir_buf,
                 "/tmp/nats-zig-js-{d}",
                 .{self.config.port},

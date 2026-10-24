@@ -58,7 +58,7 @@ pub fn main(init: std.process.Init) !void {
     var futures: [100]*js_mod.PubAckFuture = undefined;
     for (0..msg_count) |i| {
         var buf: [64]u8 = undefined;
-        const payload = std.fmt.bufPrint(
+        const payload = std.mem.print(
             &buf,
             "measurement #{d}",
             .{i + 1},
