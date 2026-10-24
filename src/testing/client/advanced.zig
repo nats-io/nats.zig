@@ -121,7 +121,7 @@ pub fn testNoRespondersStatus(allocator: std.mem.Allocator) void {
             reportResult("no_responders_status", true, "");
         } else {
             var buf: [32]u8 = undefined;
-            const detail = std.fmt.bufPrint(&buf, "status={?}", .{status}) catch "e";
+            const detail = std.mem.print(&buf, "status={?}", .{status}) catch "e";
             reportResult("no_responders_status", false, detail);
         }
     } else {

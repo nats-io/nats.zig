@@ -76,7 +76,7 @@ test "pool can hold MAX_SERVERS" {
     var i: u8 = 1;
     while (i < MAX_SERVERS) : (i += 1) {
         var buf: [32]u8 = undefined;
-        const url = std.fmt.bufPrint(&buf, "nats://server{d}:4222", .{i}) catch
+        const url = std.mem.print(&buf, "nats://server{d}:4222", .{i}) catch
             unreachable;
         try pool.addServer(url);
     }
@@ -90,7 +90,7 @@ test "pool full returns error" {
     var i: u8 = 1;
     while (i < MAX_SERVERS) : (i += 1) {
         var buf: [32]u8 = undefined;
-        const url = std.fmt.bufPrint(&buf, "nats://server{d}:4222", .{i}) catch
+        const url = std.mem.print(&buf, "nats://server{d}:4222", .{i}) catch
             unreachable;
         try pool.addServer(url);
     }
@@ -289,7 +289,7 @@ test "add from connect_urls" {
     var pool = try ServerPool.init("nats://primary:4222");
 
     var urls: [16][256]u8 = undefined;
-    var lens: [16]u8 = [_]u8{0} ** 16;
+    var lens: [16]u8 = @splat(0);
 
     const url1 = "nats://cluster1:4222";
     const url2 = "nats://cluster2:4222";
@@ -309,7 +309,7 @@ test "add from connect_urls skips empty" {
     var pool = try ServerPool.init("nats://primary:4222");
 
     var urls: [16][256]u8 = undefined;
-    var lens: [16]u8 = [_]u8{0} ** 16;
+    var lens: [16]u8 = @splat(0);
 
     const url1 = "nats://cluster1:4222";
     @memcpy(urls[0][0..url1.len], url1);
@@ -325,7 +325,7 @@ test "add from connect_urls deduplicates" {
     var pool = try ServerPool.init("nats://primary:4222");
 
     var urls: [16][256]u8 = undefined;
-    var lens: [16]u8 = [_]u8{0} ** 16;
+    var lens: [16]u8 = @splat(0);
 
     const url1 = "nats://primary:4222";
     @memcpy(urls[0][0..url1.len], url1);

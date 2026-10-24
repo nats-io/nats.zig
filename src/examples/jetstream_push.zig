@@ -119,7 +119,7 @@ pub fn main(init: std.process.Init) !void {
     // deliver subject automatically.
     for (0..msg_count) |i| {
         var buf: [32]u8 = undefined;
-        const payload = std.fmt.bufPrint(
+        const payload = std.mem.print(
             &buf,
             "event {d}",
             .{i + 1},

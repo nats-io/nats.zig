@@ -81,7 +81,7 @@ fn handleService(
 
         const num = std.fmt.parseInt(i32, r.data, 10) catch 0;
         var buf: [32]u8 = undefined;
-        const result = std.fmt.bufPrint(&buf, "{d}", .{num * 2}) catch "error";
+        const result = std.mem.print(&buf, "{d}", .{num * 2}) catch "error";
 
         std.debug.print("Service: {d} * 2 = {s}\n", .{ num, result });
 

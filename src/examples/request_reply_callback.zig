@@ -30,7 +30,7 @@ const DoublerService = struct {
             10,
         ) catch 0;
         var buf: [32]u8 = undefined;
-        const result = std.fmt.bufPrint(
+        const result = std.mem.print(
             &buf,
             "{d}",
             .{num * 2},

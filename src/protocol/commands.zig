@@ -58,7 +58,7 @@ pub const ServerInfo = struct {
 
     /// Discovered server URLs from cluster (inline storage, no allocation).
     connect_urls: [16][256]u8 = undefined,
-    connect_urls_lens: [16]u8 = [_]u8{0} ** 16,
+    connect_urls_lens: [16]u8 = @splat(0),
     connect_urls_count: u8 = 0,
 
     /// Creates an owned copy from parsed JSON RawServerInfo.

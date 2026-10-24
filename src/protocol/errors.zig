@@ -20,10 +20,10 @@ pub const Error = error{
 /// Parses a NATS server error message into a protocol Error.
 /// Server errors come in the form: -ERR 'message'
 pub fn parseServerError(msg: []const u8) Error {
-    if (std.mem.indexOf(u8, msg, "Authorization Violation")) |_| {
+    if (std.mem.find(u8, msg, "Authorization Violation")) |_| {
         return error.AuthorizationViolation;
     }
-    if (std.mem.indexOf(u8, msg, "Maximum Payload")) |_| {
+    if (std.mem.find(u8, msg, "Maximum Payload")) |_| {
         return error.MaxPayloadExceeded;
     }
     return error.ServerError;

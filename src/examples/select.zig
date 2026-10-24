@@ -128,7 +128,7 @@ fn publishMessages(
 
     for (1..4) |i| {
         var buf: [32]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "Message {d}",
             .{i},

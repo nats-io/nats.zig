@@ -163,7 +163,7 @@ pub const AsyncPublisher = struct {
     ) !void {
         if (self.sub != null) return;
         var sub_buf: [130]u8 = undefined;
-        const sub_subj = std.fmt.bufPrint(
+        const sub_subj = std.mem.print(
             &sub_buf,
             "{s}*",
             .{self.replyPrefix()},

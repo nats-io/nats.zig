@@ -121,7 +121,7 @@ pub fn testWildcardMatching(allocator: std.mem.Allocator) void {
         reportResult("wildcard_matching", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "star={d} gt={d}",
             .{ star_count, gt_count },
@@ -181,7 +181,7 @@ pub fn testWildcardPositions(allocator: std.mem.Allocator) void {
     } else {
         var buf: [32]u8 = undefined;
         const detail =
-            std.fmt.bufPrint(&buf, "got {d}/2", .{count}) catch "err";
+            std.mem.print(&buf, "got {d}/2", .{count}) catch "err";
         reportResult("wildcard_positions", false, detail);
     }
 }
@@ -229,7 +229,7 @@ pub fn testMultipleWildcards(allocator: std.mem.Allocator) void {
         reportResult("multi_wildcards", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}/2", .{count}) catch "e";
+        const detail = std.mem.print(&buf, "got {d}/2", .{count}) catch "e";
         reportResult("multi_wildcards", false, detail);
     }
 }

@@ -50,7 +50,7 @@ pub const KeyPair = struct {
 
     /// Generates a random Ed25519 keypair for the given type.
     pub fn generate(io: std.Io, key_type: KeyType) KeyPair {
-        assert(KeyType.fromByte(@intFromEnum(key_type)) != null);
+        assert(KeyType.fromByte(@backingInt(key_type)) != null);
         const kp = Ed25519.KeyPair.generate(io);
         return .{ .kp = kp, .key_type = key_type };
     }
@@ -64,11 +64,11 @@ pub const KeyPair = struct {
         out: *[58]u8,
     ) []const u8 {
         assert(KeyType.fromByte(
-            @intFromEnum(self.key_type),
+            @backingInt(self.key_type),
         ) != null);
 
         var raw: [36]u8 = undefined;
-        const kt = @intFromEnum(self.key_type);
+        const kt = @backingInt(self.key_type);
         raw[0] = (SEED_PREFIX & 0xF8) | ((kt >> 5) & 0x07);
         raw[1] = (kt & 0x1F) << 3;
         raw[2..34].* = self.kp.secret_key.seed();
@@ -171,7 +171,7 @@ pub const KeyPair = struct {
 
         // Build raw: 1 byte type + 32 bytes pubkey + 2 bytes CRC = 35 bytes
         var raw: [35]u8 = undefined;
-        raw[0] = @intFromEnum(self.key_type);
+        raw[0] = @backingInt(self.key_type);
         raw[1..33].* = self.kp.public_key.toBytes();
 
         const crc = crc16.compute(raw[0..33]);
@@ -269,7 +269,7 @@ test "encodeSeed roundtrip with known seed" {
 }
 
 test "encodeSeed roundtrip with deterministic key" {
-    const test_seed = [_]u8{1} ** 32;
+    const test_seed = @as([32]u8, @splat(1));
     const ed_kp = Ed25519.KeyPair.generateDeterministic(
         test_seed,
     ) catch unreachable;
@@ -290,7 +290,7 @@ test "encodeSeed roundtrip with deterministic key" {
 }
 
 test "seed prefix chars per key type" {
-    const test_seed = [_]u8{42} ** 32;
+    const test_seed = @as([32]u8, @splat(42));
     const ed_kp = Ed25519.KeyPair.generateDeterministic(
         test_seed,
     ) catch unreachable;
@@ -325,7 +325,7 @@ test "seed prefix chars per key type" {
 }
 
 test "server and cluster seed prefix roundtrip" {
-    const test_seed = [_]u8{99} ** 32;
+    const test_seed = @as([32]u8, @splat(99));
     const ed_kp = Ed25519.KeyPair.generateDeterministic(
         test_seed,
     ) catch unreachable;
@@ -363,7 +363,7 @@ test "server and cluster seed prefix roundtrip" {
 }
 
 test "public key prefix for all key types" {
-    const test_seed = [_]u8{77} ** 32;
+    const test_seed = @as([32]u8, @splat(77));
     const ed_kp = Ed25519.KeyPair.generateDeterministic(
         test_seed,
     ) catch unreachable;
@@ -389,7 +389,7 @@ test "public key prefix for all key types" {
 }
 
 test "full crypto chain: encode parse sign verify" {
-    const test_seed = [_]u8{55} ** 32;
+    const test_seed = @as([32]u8, @splat(55));
     const ed_kp = Ed25519.KeyPair.generateDeterministic(
         test_seed,
     ) catch unreachable;
@@ -422,7 +422,7 @@ test "full crypto chain: encode parse sign verify" {
 }
 
 test "CRC16 corruption detection" {
-    const test_seed = [_]u8{88} ** 32;
+    const test_seed = @as([32]u8, @splat(88));
     const ed_kp = Ed25519.KeyPair.generateDeterministic(
         test_seed,
     ) catch unreachable;

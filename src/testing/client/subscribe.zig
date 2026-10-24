@@ -50,7 +50,7 @@ pub fn testClientManySubs(allocator: std.mem.Allocator) void {
     var topics: [NUM_SUBS][]const u8 = undefined;
 
     for (0..NUM_SUBS) |i| {
-        topics[i] = std.fmt.bufPrint(
+        topics[i] = std.mem.print(
             &sub_buf[i],
             "many.{d}",
             .{i},
@@ -85,7 +85,7 @@ pub fn testClientManySubs(allocator: std.mem.Allocator) void {
         reportResult("client_many_subs", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "got {d}/{d}",
             .{ received, NUM_SUBS },
@@ -165,7 +165,7 @@ pub fn testClientWildcard(allocator: std.mem.Allocator) void {
         reportResult("client_wildcard", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "got {d}/3", .{received}) catch "e";
+        const msg = std.mem.print(&buf, "got {d}/3", .{received}) catch "e";
         reportResult("client_wildcard", false, msg);
     }
 }
@@ -611,7 +611,7 @@ pub fn testSubscriptionQueueCapacity(allocator: std.mem.Allocator) void {
         reportResult("sub_queue_cap", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/100",
             .{received},

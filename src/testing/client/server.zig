@@ -168,7 +168,7 @@ pub fn testMaxPayloadRespected(allocator: std.mem.Allocator) void {
         reportResult("max_payload_respected", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "max_payload={d}",
             .{info.?.max_payload},

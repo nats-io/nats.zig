@@ -138,7 +138,7 @@ pub fn testConnectedAddrGetter(allocator: std.mem.Allocator) void {
     }
 
     // Should contain a colon (host:port format)
-    if (std.mem.indexOf(u8, addr.?, ":") == null) {
+    if (std.mem.find(u8, addr.?, ":") == null) {
         reportResult("connected_addr_getter", false, "no colon in addr");
         return;
     }

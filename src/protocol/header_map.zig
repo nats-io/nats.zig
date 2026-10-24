@@ -388,10 +388,10 @@ test "header map encode" {
         std.mem.endsWith(u8, encoded, "\r\n\r\n"),
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, encoded, "Foo: bar\r\n") != null,
+        std.mem.find(u8, encoded, "Foo: bar\r\n") != null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, encoded, "Baz: 123\r\n") != null,
+        std.mem.find(u8, encoded, "Baz: 123\r\n") != null,
     );
 }
 
@@ -449,7 +449,7 @@ test "header map with empty value" {
     defer allocator.free(encoded);
 
     try std.testing.expect(
-        std.mem.indexOf(u8, encoded, "Empty: \r\n") != null,
+        std.mem.find(u8, encoded, "Empty: \r\n") != null,
     );
 }
 

@@ -20,7 +20,7 @@ pub const QueueSize = enum(u32) {
 
     /// Returns the numeric value.
     pub fn value(self: QueueSize) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 

@@ -196,7 +196,7 @@ pub fn testClientHighRate(allocator: std.mem.Allocator) void {
         reportResult("client_high_rate", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "got {d}/100", .{received}) catch "e";
+        const msg = std.mem.print(&buf, "got {d}/100", .{received}) catch "e";
         reportResult("client_high_rate", false, msg);
     }
 }
@@ -364,7 +364,7 @@ pub fn testMultipleSubscribersSameSubject(allocator: std.mem.Allocator) void {
         reportResult("multi_sub_same_subject", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}/3", .{count}) catch "err";
+        const detail = std.mem.print(&buf, "got {d}/3", .{count}) catch "err";
         reportResult("multi_sub_same_subject", false, detail);
     }
 }

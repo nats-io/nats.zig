@@ -110,7 +110,7 @@ pub fn init(client: *Client, opts: Options) !JetStream {
         // "$JS." + domain + ".API." = 9 overhead
         if (d.len > 119) return errors.Error.NameTooLong;
         var buf: [128]u8 = undefined;
-        const p = std.fmt.bufPrint(
+        const p = std.mem.print(
             &buf,
             "$JS.{s}.API.",
             .{d},
@@ -145,7 +145,7 @@ pub fn createStream(
     try validateName(config.name);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "STREAM.CREATE.{s}",
         .{config.name},
@@ -161,7 +161,7 @@ pub fn updateStream(
     try validateName(config.name);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "STREAM.UPDATE.{s}",
         .{config.name},
@@ -177,7 +177,7 @@ pub fn deleteStream(
     try validateName(name);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "STREAM.DELETE.{s}",
         .{name},
@@ -217,7 +217,7 @@ pub fn streamInfo(
     try validateName(name);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "STREAM.INFO.{s}",
         .{name},
@@ -252,7 +252,7 @@ fn purgeStreamFiltered(
     try validateName(name);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "STREAM.PURGE.{s}",
         .{name},
@@ -282,7 +282,7 @@ pub fn getMsg(
     std.debug.assert(seq > 0);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "STREAM.MSG.GET.{s}",
         .{stream},
@@ -304,7 +304,7 @@ pub fn getLastMsgForSubject(
     try pubsub.validateSubscribe(subject);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "STREAM.MSG.GET.{s}",
         .{stream},
@@ -327,7 +327,7 @@ pub fn deleteMsg(
     std.debug.assert(seq > 0);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "STREAM.MSG.DELETE.{s}",
         .{stream},
@@ -353,7 +353,7 @@ pub fn secureDeleteMsg(
     std.debug.assert(seq > 0);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "STREAM.MSG.DELETE.{s}",
         .{stream},
@@ -381,7 +381,7 @@ pub fn createConsumer(
     const name = config.name orelse
         config.durable_name orelse "";
     try validateName(name);
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "CONSUMER.CREATE.{s}.{s}",
         .{ stream, name },
@@ -408,7 +408,7 @@ pub fn createOrUpdateConsumer(
     const name = config.name orelse
         config.durable_name orelse "";
     try validateName(name);
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "CONSUMER.CREATE.{s}.{s}",
         .{ stream, name },
@@ -432,7 +432,7 @@ pub fn updateConsumer(
     const name = config.name orelse
         config.durable_name orelse "";
     try validateName(name);
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "CONSUMER.CREATE.{s}.{s}",
         .{ stream, name },
@@ -454,7 +454,7 @@ pub fn deleteConsumer(
     try validateName(stream);
     try validateName(consumer);
     var buf: [512]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "CONSUMER.DELETE.{s}.{s}",
         .{ stream, consumer },
@@ -474,7 +474,7 @@ pub fn consumerInfo(
     try validateName(stream);
     try validateName(consumer);
     var buf: [512]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "CONSUMER.INFO.{s}.{s}",
         .{ stream, consumer },
@@ -525,7 +525,7 @@ pub fn pauseConsumer(
     std.debug.assert(pause_until.len > 0);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [512]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "CONSUMER.PAUSE.{s}.{s}",
         .{ stream, consumer },
@@ -549,7 +549,7 @@ pub fn resumeConsumer(
     try validateName(consumer);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [512]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "CONSUMER.PAUSE.{s}.{s}",
         .{ stream, consumer },
@@ -620,7 +620,7 @@ pub fn unpinConsumer(
     std.debug.assert(group.len > 0);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [512]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "CONSUMER.UNPIN.{s}.{s}",
         .{ stream, consumer },
@@ -749,7 +749,7 @@ pub fn consumerNamesOffset(
     try validateName(stream);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "CONSUMER.NAMES.{s}",
         .{stream},
@@ -769,7 +769,7 @@ pub fn consumers(
     try validateName(stream);
     std.debug.assert(self.timeout_ms > 0);
     var buf: [256]u8 = undefined;
-    const subj = std.fmt.bufPrint(
+    const subj = std.mem.print(
         &buf,
         "CONSUMER.LIST.{s}",
         .{stream},
@@ -864,7 +864,7 @@ pub fn keyValue(
     try validateBucketName(bucket_name);
 
     var stream_buf: [68]u8 = undefined;
-    const stream_name = std.fmt.bufPrint(
+    const stream_name = std.mem.print(
         &stream_buf,
         "KV_{s}",
         .{bucket_name},
@@ -884,7 +884,7 @@ pub fn deleteKeyValue(
 ) !Response(DeleteResponse) {
     try validateBucketName(bucket_name);
     var stream_buf: [68]u8 = undefined;
-    const stream_name = std.fmt.bufPrint(
+    const stream_name = std.mem.print(
         &stream_buf,
         "KV_{s}",
         .{bucket_name},
@@ -906,7 +906,7 @@ fn initKeyValue(
     kv.bucket_len = @intCast(bucket_name.len);
 
     var stream_buf: [68]u8 = undefined;
-    const sn = std.fmt.bufPrint(
+    const sn = std.mem.print(
         &stream_buf,
         "KV_{s}",
         .{bucket_name},
@@ -992,14 +992,14 @@ fn kvStreamConfig(
     std.debug.assert(cfg.bucket.len <= 64);
     var sc = KvStreamCfg{};
 
-    const sn = std.fmt.bufPrint(
+    const sn = std.mem.print(
         &sc.stream_name_buf,
         "KV_{s}",
         .{cfg.bucket},
     ) catch unreachable;
     sc.stream_name_len = @intCast(sn.len);
 
-    const sp = std.fmt.bufPrint(
+    const sp = std.mem.print(
         &sc.subj_buf,
         "$KV.{s}.>",
         .{cfg.bucket},
@@ -1091,7 +1091,7 @@ pub fn keyValueStores(
 
     for (names) |bucket| {
         var stream_buf: [68]u8 = undefined;
-        const sn = std.fmt.bufPrint(
+        const sn = std.mem.print(
             &stream_buf,
             "KV_{s}",
             .{bucket},
@@ -1304,7 +1304,7 @@ pub fn apiRequest(
     std.debug.assert(prefix.len > 0);
 
     var full_buf: [512]u8 = undefined;
-    const full_subj = std.fmt.bufPrint(
+    const full_subj = std.mem.print(
         &full_buf,
         "{s}{s}",
         .{ prefix, api_subject },
@@ -1342,7 +1342,7 @@ fn apiRequestNoPayload(
     std.debug.assert(prefix.len > 0);
 
     var full_buf: [512]u8 = undefined;
-    const full_subj = std.fmt.bufPrint(
+    const full_subj = std.mem.print(
         &full_buf,
         "{s}{s}",
         .{ prefix, api_subject },

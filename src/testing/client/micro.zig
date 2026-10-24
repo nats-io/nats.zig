@@ -647,7 +647,7 @@ fn testMicroPingById(allocator: std.mem.Allocator) void {
     defer service.deinit();
 
     var subject_buf: [128]u8 = undefined;
-    const subject = std.fmt.bufPrint(
+    const subject = std.mem.print(
         &subject_buf,
         "$SRV.PING.ping-id-svc.{s}",
         .{service.id},

@@ -24,7 +24,7 @@ pub fn testNKeyAuthentication(allocator: std.mem.Allocator) void {
         .nkey_seed = test_nkey_seed,
     }) catch |err| {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "connect: {}", .{err}) catch "fmt";
+        const detail = std.mem.print(&buf, "connect: {}", .{err}) catch "fmt";
         reportResult("nkey_authentication", false, detail);
         return;
     };
@@ -74,7 +74,7 @@ pub fn testNKeyPubSub(allocator: std.mem.Allocator) void {
         .nkey_seed = test_nkey_seed,
     }) catch |err| {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "connect: {}", .{err}) catch "fmt";
+        const detail = std.mem.print(&buf, "connect: {}", .{err}) catch "fmt";
         reportResult("nkey_pubsub", false, detail);
         return;
     };
@@ -175,7 +175,7 @@ pub fn testNKeySeedFile(allocator: std.mem.Allocator) void {
         .nkey_seed_file = seed_file_path,
     }) catch |err| {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "connect: {}", .{err}) catch "fmt";
+        const detail = std.mem.print(&buf, "connect: {}", .{err}) catch "fmt";
         reportResult("nkey_seed_file", false, detail);
         return;
     };
@@ -233,7 +233,7 @@ pub fn testNKeySigningCallback(allocator: std.mem.Allocator) void {
         .nkey_sign_fn = &testSignCallback,
     }) catch |err| {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "connect: {}", .{err}) catch "fmt";
+        const detail = std.mem.print(&buf, "connect: {}", .{err}) catch "fmt";
         reportResult("nkey_signing_callback", false, detail);
         return;
     };

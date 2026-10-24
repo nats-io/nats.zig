@@ -39,7 +39,7 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
 
     const NUM_SUBS = 10;
     var subs: [NUM_SUBS]?*nats.Subscription =
-        [_]?*nats.Subscription{null} ** NUM_SUBS;
+        @splat(null);
     var created: u32 = 0;
 
     defer for (&subs) |*s| {
@@ -48,7 +48,7 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
 
     for (0..NUM_SUBS) |i| {
         var subject_buf: [32]u8 = undefined;
-        const subject = std.fmt.bufPrint(
+        const subject = std.mem.print(
             &subject_buf,
             "concurrent.sub.{d}",
             .{i},
@@ -62,7 +62,7 @@ pub fn testConcurrentSubscribe(allocator: std.mem.Allocator) void {
 
     if (created != NUM_SUBS) {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/10",
             .{created},
@@ -132,7 +132,7 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
 
     if (published != NUM_MSGS) {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "pub {d}/100",
             .{published},
@@ -153,7 +153,7 @@ pub fn testRapidPublish(allocator: std.mem.Allocator) void {
         reportResult("rapid_publish", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/100",
             .{received},
@@ -191,7 +191,7 @@ pub fn testConcurrentSubUnsub(allocator: std.mem.Allocator) void {
         }
 
         var subject_buf: [32]u8 = undefined;
-        const subject = std.fmt.bufPrint(
+        const subject = std.mem.print(
             &subject_buf,
             "cycle.{d}",
             .{i},
@@ -340,7 +340,7 @@ pub fn testSidAllocationRecycling(allocator: std.mem.Allocator) void {
 
     for (0..50) |i| {
         var subject_buf: [32]u8 = undefined;
-        const subject = std.fmt.bufPrint(
+        const subject = std.mem.print(
             &subject_buf,
             "recycle.{d}",
             .{i},
@@ -455,7 +455,7 @@ pub fn testMultipleClientsSeparateIo(allocator: std.mem.Allocator) void {
         reportResult("multi_client_separate_io", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf, "got {d}/2", .{received}) catch "e";
+        const detail = std.mem.print(&buf, "got {d}/2", .{received}) catch "e";
         reportResult("multi_client_separate_io", false, detail);
     }
 }
@@ -523,7 +523,7 @@ pub fn testParallelReceive(allocator: std.mem.Allocator) void {
         reportResult("parallel_recv", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/3",
             .{received},
@@ -560,7 +560,7 @@ pub fn testRapidFlushOperations(allocator: std.mem.Allocator) void {
 
     if (success != 50) {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "flush {d}/50",
             .{success},
@@ -627,7 +627,7 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
 
     if (msgs_out_diff != NUM_MSGS) {
         var buf: [48]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "msgs_out: {d} (expect {d})",
             .{ msgs_out_diff, NUM_MSGS },
@@ -638,7 +638,7 @@ pub fn testStatsConcurrency(allocator: std.mem.Allocator) void {
 
     if (msgs_in_diff < NUM_MSGS) {
         var buf: [48]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "msgs_in: {d} (expect >= {d})",
             .{ msgs_in_diff, NUM_MSGS },
@@ -674,7 +674,7 @@ pub fn testMixedWriteOrderingPublishBeforeSubscribe(
     for (0..iterations) |i| {
         {
             var subject_buf: [48]u8 = undefined;
-            const subject = std.fmt.bufPrint(
+            const subject = std.mem.print(
                 &subject_buf,
                 "ordering.publish.before.sub.{d}",
                 .{i},
@@ -702,7 +702,7 @@ pub fn testMixedWriteOrderingPublishBeforeSubscribe(
             if (sub.nextMsgTimeout(50) catch null) |msg| {
                 msg.deinit();
                 var detail_buf: [64]u8 = undefined;
-                const detail = std.fmt.bufPrint(
+                const detail = std.mem.print(
                     &detail_buf,
                     "pre-sub publish delivered at iter {d}",
                     .{i},

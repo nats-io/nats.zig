@@ -137,7 +137,7 @@ fn handleRequests(
             // "greet.joe" -> "joe"
             const name = r.subject[6..];
             var buf: [64]u8 = undefined;
-            const reply = std.fmt.bufPrint(
+            const reply = std.mem.print(
                 &buf,
                 "hello, {s}",
                 .{name},

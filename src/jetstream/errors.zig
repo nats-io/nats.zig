@@ -108,7 +108,7 @@ test "ApiError.fromJson" {
 }
 
 test "ApiError.fromJson truncates long description" {
-    const long = "x" ** 300;
+    const long = &@as([300]u8, @splat('x'));
     const json_err = ApiErrorJson{
         .code = 400,
         .err_code = ErrCode.bad_request,

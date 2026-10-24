@@ -125,7 +125,7 @@ test "encode CONNECT" {
     try std.testing.expect(std.mem.startsWith(u8, written, "CONNECT {"));
     try std.testing.expect(std.mem.endsWith(u8, written, "}\r\n"));
     try std.testing.expect(
-        std.mem.indexOf(u8, written, "\"name\":\"test-client\"") != null,
+        std.mem.find(u8, written, "\"name\":\"test-client\"") != null,
     );
 }
 
@@ -765,10 +765,10 @@ test "encodeConnect with all options" {
     try std.testing.expect(std.mem.startsWith(u8, written, "CONNECT {"));
     try std.testing.expect(std.mem.endsWith(u8, written, "}\r\n"));
     try std.testing.expect(
-        std.mem.indexOf(u8, written, "\"verbose\":true") != null,
+        std.mem.find(u8, written, "\"verbose\":true") != null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, written, "\"echo\":false") != null,
+        std.mem.find(u8, written, "\"echo\":false") != null,
     );
 }
 
@@ -831,7 +831,7 @@ test "encodePub payload with all byte values" {
         std.mem.startsWith(u8, written, "PUB binary 256\r\n"),
     );
     // Verify payload is intact
-    const payload_start = std.mem.indexOf(u8, written, "\r\n").? + 2;
+    const payload_start = std.mem.find(u8, written, "\r\n").? + 2;
     const payload_end = written.len - 2; // Exclude trailing \r\n
     try std.testing.expectEqualSlices(
         u8,
@@ -855,7 +855,7 @@ test "encodeHPub binary headers and payload" {
 
     const written = writer.buffered();
     // Verify headers and payload are in output
-    try std.testing.expect(std.mem.indexOf(u8, written, headers) != null);
+    try std.testing.expect(std.mem.find(u8, written, headers) != null);
 }
 
 // Section 14: HPUB with Entries Tests
@@ -926,12 +926,12 @@ test "encodeHPubWithEntries multiple headers" {
 
     const written = writer.buffered();
     try std.testing.expect(std.mem.startsWith(u8, written, "HPUB api.request "));
-    try std.testing.expect(std.mem.indexOf(
+    try std.testing.expect(std.mem.find(
         u8,
         written,
         "Content-Type: application/json",
     ) != null);
-    try std.testing.expect(std.mem.indexOf(
+    try std.testing.expect(std.mem.find(
         u8,
         written,
         "Nats-Msg-Id: abc123",

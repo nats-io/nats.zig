@@ -57,7 +57,7 @@ pub fn main(init: std.process.Init) !void {
     // contains the stream name and sequence number.
     for (0..5) |i| {
         var buf: [64]u8 = undefined;
-        const payload = std.fmt.bufPrint(
+        const payload = std.mem.print(
             &buf,
             "order #{d}",
             .{i + 1},

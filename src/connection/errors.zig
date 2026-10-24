@@ -34,10 +34,10 @@ pub const Error = error{
 /// Parses auth-related errors from server -ERR message.
 /// Returns null if the message is not an auth error.
 pub fn parseAuthError(msg: []const u8) ?Error {
-    if (std.mem.indexOf(u8, msg, "Authentication")) |_| {
+    if (std.mem.find(u8, msg, "Authentication")) |_| {
         return error.AuthenticationFailed;
     }
-    if (std.mem.indexOf(u8, msg, "Stale Connection")) |_| {
+    if (std.mem.find(u8, msg, "Stale Connection")) |_| {
         return error.StaleConnection;
     }
     return null;

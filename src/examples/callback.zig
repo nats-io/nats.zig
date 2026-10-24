@@ -92,7 +92,7 @@ pub fn main(init: std.process.Init) !void {
     // Publish messages
     for (0..5) |i| {
         var buf: [32]u8 = undefined;
-        const msg = std.fmt.bufPrint(
+        const msg = std.mem.print(
             &buf,
             "hello {d}",
             .{i + 1},

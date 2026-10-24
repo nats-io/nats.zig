@@ -240,8 +240,8 @@ fn parseImpl(allocator: Allocator, data: []const u8) ParseResult {
     // Parse optional status and description on first line
     if (pos < data.len and data[pos] == ' ') {
         pos += 1;
-        const status_end = std.mem.indexOfPos(u8, data, pos, " ") orelse
-            std.mem.indexOfPos(u8, data, pos, "\r\n") orelse {
+        const status_end = std.mem.findPos(u8, data, pos, " ") orelse
+            std.mem.findPos(u8, data, pos, "\r\n") orelse {
             result.err = .incomplete;
             return result;
         };
@@ -252,7 +252,7 @@ fn parseImpl(allocator: Allocator, data: []const u8) ParseResult {
         // Skip description if present
         if (pos < data.len and data[pos] == ' ') {
             pos += 1;
-            const desc_end = std.mem.indexOfPos(u8, data, pos, "\r\n") orelse {
+            const desc_end = std.mem.findPos(u8, data, pos, "\r\n") orelse {
                 result.err = .incomplete;
                 return result;
             };
@@ -278,7 +278,7 @@ fn parseImpl(allocator: Allocator, data: []const u8) ParseResult {
         }
 
         // Find colon separator
-        const colon = std.mem.indexOfPos(u8, data, pos, ":") orelse {
+        const colon = std.mem.findPos(u8, data, pos, ":") orelse {
             result.err = .invalid_header;
             return result;
         };
@@ -292,7 +292,7 @@ fn parseImpl(allocator: Allocator, data: []const u8) ParseResult {
         }
 
         // Find end of line
-        const line_end = std.mem.indexOfPos(u8, data, value_start, "\r\n") orelse {
+        const line_end = std.mem.findPos(u8, data, value_start, "\r\n") orelse {
             result.err = .incomplete;
             return result;
         };
@@ -359,7 +359,7 @@ fn parseImpl(allocator: Allocator, data: []const u8) ParseResult {
         }
 
         // Skip \r\n after version line
-        pos = std.mem.indexOfPos(u8, data, 8, "\r\n").? + 2;
+        pos = std.mem.findPos(u8, data, 8, "\r\n").? + 2;
 
         // Copy header entries
         while (pos < data.len) {
@@ -367,7 +367,7 @@ fn parseImpl(allocator: Allocator, data: []const u8) ParseResult {
                 break;
             }
 
-            const colon = std.mem.indexOfPos(u8, data, pos, ":").?;
+            const colon = std.mem.findPos(u8, data, pos, ":").?;
             const key_len = colon - pos;
 
             // Copy key
@@ -381,7 +381,7 @@ fn parseImpl(allocator: Allocator, data: []const u8) ParseResult {
                 value_start += 1;
             }
 
-            const line_end = std.mem.indexOfPos(u8, data, value_start, "\r\n").?;
+            const line_end = std.mem.findPos(u8, data, value_start, "\r\n").?;
             const value_len = line_end - value_start;
 
             // Copy value
@@ -521,7 +521,7 @@ test "parse many headers" {
     pos += prefix.len;
 
     for (0..100) |i| {
-        const written = std.fmt.bufPrint(
+        const written = std.mem.print(
             data_buf[pos..],
             "H{d:0>3}: value{d}\r\n",
             .{ i, i },

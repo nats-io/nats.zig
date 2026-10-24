@@ -670,14 +670,14 @@ pub fn build(b: *std.Build) void {
     nbe_nkeys_jwts_cmd.step.dependOn(b.getInstallStep());
 
     const fmt = b.addFmt(.{
-        .paths = &.{ "src", "doc", "build.zig" },
+        .paths = &.{ b.path("src"), b.path("doc"), b.path("build.zig") },
         .check = false,
     });
     const fmt_step = b.step("fmt", "Format source code");
     fmt_step.dependOn(&fmt.step);
 
     const fmt_check = b.addFmt(.{
-        .paths = &.{ "src", "doc", "build.zig" },
+        .paths = &.{ b.path("src"), b.path("doc"), b.path("build.zig") },
         .check = true,
     });
     const fmt_check_step = b.step("fmt-check", "Check formatting");

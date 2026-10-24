@@ -44,7 +44,7 @@ pub const PublishHeaderSet = struct {
             self.count += 1;
         }
         if (opts.expected_last_seq) |v| {
-            const s = std.fmt.bufPrint(
+            const s = std.mem.print(
                 &self.expected_last_seq_buf,
                 "{d}",
                 .{v},
@@ -56,7 +56,7 @@ pub const PublishHeaderSet = struct {
             self.count += 1;
         }
         if (opts.expected_last_subj_seq) |v| {
-            const s = std.fmt.bufPrint(
+            const s = std.mem.print(
                 &self.expected_last_subj_seq_buf,
                 "{d}",
                 .{v},

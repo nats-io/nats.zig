@@ -97,7 +97,7 @@ pub fn testFlushConfirmedMultipleMessages(allocator: std.mem.Allocator) void {
     // Publish 10 messages without flushing
     for (0..10) |i| {
         var buf: [32]u8 = undefined;
-        const payload = std.fmt.bufPrint(&buf, "msg-{d}", .{i}) catch "msg";
+        const payload = std.mem.print(&buf, "msg-{d}", .{i}) catch "msg";
         client.publish("fc.batch", payload) catch {
             reportResult("flush_confirmed_multi", false, "publish failed");
             return;
@@ -123,7 +123,7 @@ pub fn testFlushConfirmedMultipleMessages(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_multi", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/10",
             .{received},
@@ -193,7 +193,7 @@ pub fn testFlushConfirmedNoSideEffects(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_side_effects", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/2",
             .{received},
@@ -400,7 +400,7 @@ pub fn testFlushConfirmedRapidFire(allocator: std.mem.Allocator) void {
     // 20 cycles of publish + flushConfirmed
     for (0..20) |i| {
         var buf: [32]u8 = undefined;
-        const payload = std.fmt.bufPrint(&buf, "rapid-{d}", .{i}) catch "msg";
+        const payload = std.mem.print(&buf, "rapid-{d}", .{i}) catch "msg";
 
         client.publish("fc.rapid", payload) catch {
             reportResult("flush_confirmed_rapid", false, "publish failed");
@@ -426,7 +426,7 @@ pub fn testFlushConfirmedRapidFire(allocator: std.mem.Allocator) void {
         reportResult("flush_confirmed_rapid", true, "");
     } else {
         var buf: [32]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/20",
             .{received},
