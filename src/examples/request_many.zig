@@ -40,7 +40,7 @@ const Worker = struct {
         msg: *const nats.Message,
     ) void {
         var buf: [32]u8 = undefined;
-        const reply = std.fmt.bufPrint(
+        const reply = std.mem.print(
             &buf,
             "worker-{d}",
             .{self.id},

@@ -906,7 +906,7 @@ pub fn testRequestManyCount(allocator: std.mem.Allocator) void {
         reportResult("request_many_count", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d}/{d} term={s}",
             .{ got, responder_count, @tagName(iter.termination) },
@@ -1008,7 +1008,7 @@ pub fn testRequestManySentinel(allocator: std.mem.Allocator) void {
         reportResult("request_many_sentinel", true, "");
     } else {
         var buf: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got {d} term={s}",
             .{ got, @tagName(iter.termination) },
@@ -1073,7 +1073,7 @@ pub fn testRequestManyMaxWait(allocator: std.mem.Allocator) void {
         reportResult("request_many_max_wait", true, "");
     } else {
         var buf: [80]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got={d} term={s} ms={d}",
             .{
@@ -1204,7 +1204,7 @@ pub fn testRequestManyStall(allocator: std.mem.Allocator) void {
         reportResult("request_many_stall", true, "");
     } else {
         var buf: [96]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got={d} term={s} ms={d}",
             .{
@@ -1276,7 +1276,7 @@ pub fn testRequestManyNoResponders(allocator: std.mem.Allocator) void {
         reportResult("request_many_no_responders", true, "");
     } else {
         var buf: [96]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "got={d} term={s} ms={d}",
             .{
@@ -1411,7 +1411,7 @@ pub fn testRequestManyCallback(allocator: std.mem.Allocator) void {
         reportResult("request_many_callback", true, "");
     } else {
         var buf: [96]u8 = undefined;
-        const detail = std.fmt.bufPrint(
+        const detail = std.mem.print(
             &buf,
             "count={d} bytes={d} recv={d} term={s}",
             .{
