@@ -2791,16 +2791,19 @@ pub fn emptyPayloadSentinel() Sentinel {
 
 /// Stop conditions for `requestMany` per ADR-47. All conditions
 /// race; whichever fires first terminates the call. `max_wait_ms`
-/// is a hard upper bound and is always honored.
+/// always applies; `requestManyCallback` excludes time spent in
+/// the handler from it.
 pub const RequestManyOptions = struct {
     /// Overall deadline for the call (ms). Defaults to 1000 ms.
     /// Must be > 0; `requestMany` returns error.InvalidTimeout
     /// for 0.
     max_wait_ms: u32 = 1000,
 
-    /// Stall timer (ms): terminate if no reply arrives within
-    /// this gap from the previous one (or the request itself).
-    /// 0 disables. Effective per-wait deadline is
+    /// Stall timer (ms): after the first reply, terminate when a
+    /// `next()` call waits this long without a new reply. Measured
+    /// per `next()` call (as in orbit.go), so time between calls
+    /// does not count; the first reply gets the full
+    /// `max_wait_ms`. 0 disables. Effective per-wait deadline is
     /// `min(stall_ms, remaining of max_wait_ms)`.
     stall_ms: u32 = 0,
 
@@ -2826,9 +2829,9 @@ pub const RequestManyTermination = enum {
     /// Server reported no responders (503).
     no_responders,
     /// The client closed before the call terminated normally:
-    /// `drain()`/`deinit()`, or a lost connection that will not
-    /// reconnect (reconnect disabled or attempts exhausted).
-    /// While the client is reconnecting the call keeps waiting.
+    /// `drain()`, or a lost connection that will not reconnect
+    /// (reconnect disabled or attempts exhausted). While the
+    /// client is reconnecting the call keeps waiting.
     closed,
 };
 
@@ -2955,8 +2958,7 @@ pub const RequestManyIter = struct {
         assert(wait_ms > 0);
         var left = wait_ms;
         while (true) {
-            // drain() and deinit() leave the sub unsubscribed, and
-            // nextMsgTimeout asserts an active sub.
+            // Fast path: drain() leaves the sub unsubscribed.
             if (!self.sub.isValid()) return error.Closed;
             const slice = @min(left, closed_check_ms);
             if (try self.sub.nextMsgTimeout(slice)) |msg| return msg;
@@ -4882,8 +4884,9 @@ pub const Subscription = struct {
         assert(self.mode == .manual);
         if (self.mode != .manual)
             return error.SubscriptionModeConflict;
-        assert(self.state == .active or
-            self.state == .draining);
+        // No assert on state: drain() on another thread may
+        // unsubscribe at any time, and the loop below returns
+        // error.Closed for that.
         assert(timeout_ms > 0);
 
         const io = self.client.io;

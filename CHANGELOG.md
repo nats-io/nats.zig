@@ -22,12 +22,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   timer (`stall_ms`), delivered count (`max_messages`), and
   user-supplied `Sentinel` predicate. A server-side 503 ("no
   responders") is detected and surfaced as
-  `termination = .no_responders`; a client that closes mid-call
-  ends it with `.closed`. The implementation uses a dedicated
+  `termination = .no_responders`; draining the client or losing
+  the connection for good ends the call with `.closed`. The
+  implementation uses a dedicated
   two-token inbox subscription that does not collide with the
   shared `request()` response multiplexer.
-- **`Sentinel` and `emptyPayloadSentinel()`** are re-exported
-  from the `nats` module. `emptyPayloadSentinel()` provides the
+- **`RequestManyOptions`, `RequestManyIter`, `RequestManyResult`,
+  `RequestManyTermination`, `Sentinel` and
+  `emptyPayloadSentinel()`** are re-exported from the `nats`
+  module. `emptyPayloadSentinel()` provides the
   ADR-47 standard "empty payload terminates the stream" marker;
   user code can also build custom predicates over message
   payload, subject, or headers.

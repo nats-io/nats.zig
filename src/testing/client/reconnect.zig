@@ -366,9 +366,29 @@ fn testReconnectDisabled(
     }
 }
 
+const TimedNext = struct {
+    msg: ?nats.Message = null,
+    err: ?anyerror = null,
+    elapsed_ms: i64 = 0,
+
+    fn run(iter: *nats.RequestManyIter, io: std.Io) TimedNext {
+        var r: TimedNext = .{};
+        const start = std.Io.Timestamp.now(io, .awake);
+        r.msg = iter.next() catch |err| blk: {
+            r.err = err;
+            break :blk null;
+        };
+        const end = std.Io.Timestamp.now(io, .awake);
+        const elapsed_ns: i96 = end.nanoseconds - start.nanoseconds;
+        r.elapsed_ms = @intCast(@divFloor(elapsed_ns, std.time.ns_per_ms));
+        return r;
+    }
+};
+
 // requestMany must notice a connection that is gone for good: with
-// reconnect disabled, next() ends with .closed right away instead of
-// waiting out max_wait_ms (io_task does not close sync-sub queues).
+// reconnect disabled, a next() blocked when the server dies ends
+// with .closed instead of waiting out max_wait_ms (io_task does not
+// close sync-sub queues).
 fn testRequestManyClosedOnDisconnect(
     allocator: std.mem.Allocator,
     manager: *ServerManager,
@@ -401,37 +421,32 @@ fn testRequestManyClosedOnDisconnect(
     };
     defer iter.deinit();
 
+    // Block in next() on another task, then kill the server.
+    var fut = io.io().async(TimedNext.run, .{ &iter, io.io() });
     manager.stopAll(io.io());
-    defer {
-        if (manager.startServer(allocator, io.io(), .{ .port = test_port })) |_| {
-            io.io().sleep(.fromMilliseconds(300), .awake) catch {};
-        } else |_| {
-            reportResult(name, false, "restart failed");
-        }
-    }
+    const r = fut.await(io.io());
 
-    if (!waitForClosed(io.io(), client, 2000)) {
-        reportResult(name, false, "client did not close");
-        return;
-    }
-
-    const start = std.Io.Timestamp.now(io.io(), .awake);
-    const msg = iter.next() catch |err| {
-        utils.reportError(name, "next", err);
+    // Restart before reporting, so later tests get their server.
+    _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
+        if (r.msg) |m| m.deinit();
+        reportResult(name, false, "restart failed");
         return;
     };
-    const end = std.Io.Timestamp.now(io.io(), .awake);
-    if (msg) |m| {
+    io.io().sleep(.fromMilliseconds(300), .awake) catch {};
+
+    if (r.err) |err| {
+        utils.reportError(name, "next", err);
+        return;
+    }
+    if (r.msg) |m| {
         m.deinit();
         reportResult(name, false, "unexpected reply");
         return;
     }
 
-    const elapsed_ns: i96 = end.nanoseconds - start.nanoseconds;
-    const elapsed_ms: i64 = @intCast(
-        @divFloor(elapsed_ns, std.time.ns_per_ms),
-    );
-    if (iter.termination == .closed and elapsed_ms < 1000) {
+    // stopAll kills the server and then sleeps 500ms; next() should
+    // end shortly after the kill, far below the 5000ms budget.
+    if (iter.termination == .closed and r.elapsed_ms < 2500) {
         reportResult(name, true, "");
     } else {
         var buf: [64]u8 = undefined;
@@ -439,7 +454,7 @@ fn testRequestManyClosedOnDisconnect(
         const detail = std.mem.print(
             &buf,
             "term={s} ms={d}",
-            .{ term, elapsed_ms },
+            .{ term, r.elapsed_ms },
         ) catch "e";
         reportResult(name, false, detail);
     }

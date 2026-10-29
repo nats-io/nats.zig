@@ -695,9 +695,9 @@ call:
 | `stall_ms` | `u32` (0 disables) | Terminate if no reply arrives within this gap. Applies only *after* the first reply. |
 | `sentinel` | `?Sentinel` | Custom predicate that marks end-of-stream. Use `nats.emptyPayloadSentinel()` for the ADR-47 standard empty-payload marker. |
 
-A server 503 ("no responders") is always terminal. If the client
-closes during the call (`drain()`, `deinit()`, or a lost connection
-that will not reconnect), the call ends with `.closed`.
+A server 503 ("no responders") is always terminal. If the client is
+drained or its connection is lost for good (reconnect disabled or
+attempts exhausted), the call ends with `.closed`.
 
 `max_wait_ms` is wall-clock time from the request. In the iterator
 form, time your code spends between `next()` calls counts against

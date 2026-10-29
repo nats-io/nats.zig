@@ -1438,14 +1438,14 @@ const SlowHandler = struct {
         msg: *const nats.Message,
     ) void {
         _ = msg;
-        self.io.sleep(.fromMilliseconds(150), .awake) catch {};
+        self.io.sleep(.fromMilliseconds(250), .awake) catch {};
         self.count += 1;
     }
 };
 
 // Verifies ADR-47's rule that time spent in a blocking callback
 // does not count against max_wait_ms. Three replies arrive at once
-// and each takes 150 ms to handle (450 ms in all) against a 250 ms
+// and each takes 250 ms to handle (750 ms in all) against a 400 ms
 // budget. Without the accounting, the deadline would end the call
 // after the second reply with termination=.max_wait.
 pub fn testRequestManyCallbackHandlerTime(
@@ -1480,7 +1480,7 @@ pub fn testRequestManyCallbackHandlerTime(
         "rm.cbtime.service",
         "ping",
         .{
-            .max_wait_ms = 250,
+            .max_wait_ms = 400,
             .max_messages = ScatterGroup.size,
         },
         nats.MsgHandler.init(SlowHandler, &handler),
@@ -1511,8 +1511,7 @@ pub fn testRequestManyCallbackHandlerTime(
 
 // Verifies that draining the client between next() calls ends the
 // call with termination=.closed (rather than tripping the
-// active-subscription assert), and that next() after iter.deinit()
-// returns null.
+// active-subscription assert).
 pub fn testRequestManyClosedOnDrain(allocator: std.mem.Allocator) void {
     const name = "request_many_closed_on_drain";
     var url_buf: [64]u8 = undefined;
@@ -1560,17 +1559,6 @@ pub fn testRequestManyClosedOnDrain(allocator: std.mem.Allocator) void {
         return;
     }
 
-    iter.deinit();
-    const after = iter.next() catch |err| {
-        reportError(name, "next after deinit", err);
-        return;
-    };
-    if (after) |m| {
-        m.deinit();
-        reportResult(name, false, "reply after deinit");
-        return;
-    }
-
     const elapsed_ns: i96 = end.nanoseconds - start.nanoseconds;
     const elapsed_ms: i64 = @intCast(
         @divFloor(elapsed_ns, std.time.ns_per_ms),
@@ -1585,6 +1573,124 @@ pub fn testRequestManyClosedOnDrain(allocator: std.mem.Allocator) void {
             .{ termName(iter.termination), elapsed_ms },
         ) catch "e";
         reportResult(name, false, detail);
+    }
+}
+
+// Verifies that next() on an iterator deinit'ed mid-call returns
+// null at once without touching the freed subscription, and leaves
+// termination unset.
+pub fn testRequestManyDeinitLive(allocator: std.mem.Allocator) void {
+    const name = "request_many_deinit_live";
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const io = utils.newIo(allocator);
+    defer io.deinit();
+    // no_responders = false: no 503, so the call is still live
+    // when it is deinit'ed.
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false, .no_responders = false },
+    ) catch |err| {
+        reportError(name, "connect", err);
+        return;
+    };
+    defer client.deinit();
+
+    var iter = client.requestMany(
+        "rm.deinit.subject",
+        "ping",
+        .{ .max_wait_ms = 3000 },
+    ) catch |err| {
+        reportError(name, "requestMany", err);
+        return;
+    };
+    iter.deinit();
+
+    const start = std.Io.Timestamp.now(io.io(), .awake);
+    const after = iter.next() catch |err| {
+        reportError(name, "next after deinit", err);
+        return;
+    };
+    const end = std.Io.Timestamp.now(io.io(), .awake);
+    if (after) |m| {
+        m.deinit();
+        reportResult(name, false, "reply after deinit");
+        return;
+    }
+
+    const elapsed_ns: i96 = end.nanoseconds - start.nanoseconds;
+    const elapsed_ms: i64 = @intCast(
+        @divFloor(elapsed_ns, std.time.ns_per_ms),
+    );
+    const subs = client.numSubscriptions();
+    if (iter.termination == null and elapsed_ms < 100 and subs == 0) {
+        reportResult(name, true, "");
+    } else {
+        var buf: [64]u8 = undefined;
+        const detail = std.mem.print(
+            &buf,
+            "term={s} ms={d} subs={d}",
+            .{ termName(iter.termination), elapsed_ms, subs },
+        ) catch "e";
+        reportResult(name, false, detail);
+    }
+}
+
+// Verifies that max_wait_ms = 0 is rejected with InvalidTimeout in
+// every build mode, by both forms, without leaving a subscription.
+pub fn testRequestManyZeroWait(allocator: std.mem.Allocator) void {
+    const name = "request_many_zero_wait";
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const io = utils.newIo(allocator);
+    defer io.deinit();
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch |err| {
+        reportError(name, "connect", err);
+        return;
+    };
+    defer client.deinit();
+
+    const opts: nats.RequestManyOptions = .{ .max_wait_ms = 0 };
+
+    if (client.requestMany("rm.zero.subject", "ping", opts)) |it| {
+        var iter = it;
+        iter.deinit();
+        reportResult(name, false, "requestMany accepted 0");
+        return;
+    } else |err| if (err != error.InvalidTimeout) {
+        reportError(name, "requestMany", err);
+        return;
+    }
+
+    var count: u32 = 0;
+    var bytes: u32 = 0;
+    var handler = CollectingHandler{ .count = &count, .bytes = &bytes };
+    if (client.requestManyCallback(
+        "rm.zero.subject",
+        "ping",
+        opts,
+        nats.MsgHandler.init(CollectingHandler, &handler),
+    )) |_| {
+        reportResult(name, false, "requestManyCallback accepted 0");
+        return;
+    } else |err| if (err != error.InvalidTimeout) {
+        reportError(name, "requestManyCallback", err);
+        return;
+    }
+
+    if (client.numSubscriptions() == 0) {
+        reportResult(name, true, "");
+    } else {
+        reportResult(name, false, "subscription left behind");
     }
 }
 
@@ -1608,4 +1714,6 @@ pub fn runAll(allocator: std.mem.Allocator) void {
     testRequestManyCallback(allocator);
     testRequestManyCallbackHandlerTime(allocator);
     testRequestManyClosedOnDrain(allocator);
+    testRequestManyDeinitLive(allocator);
+    testRequestManyZeroWait(allocator);
 }
