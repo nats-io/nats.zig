@@ -1146,10 +1146,11 @@ pub fn testBurstPublish100K(
 
     // Drain until every message arrives. The burst overflows the
     // slab, so most messages use the fallback allocator. In Debug
-    // builds that is the debug allocator, which captures a stack
-    // trace per allocation. Delivery then takes over 2s and varies
-    // with load, so a fixed wait reports in-flight messages as
-    // lost. Stop only after 2s with no message.
+    // builds that is init.gpa, a std.heap.SafeAllocator, which
+    // records stack traces and checksums for every allocation.
+    // Delivery then takes over 2s and varies with load, so a fixed
+    // wait reports in-flight messages as lost. Stop only after 2s
+    // with no message.
     var received: usize = 0;
     while (received < NUM_MSGS) {
         const m = (sub.nextMsgTimeout(2000) catch null) orelse break;

@@ -40,7 +40,19 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const mod_tests = b.addTest(.{ .root_module = nats });
+    // The exported module leaves optimize unset so it inherits the
+    // importer's mode. As a test root it has no importer and would
+    // always build Debug, so tests get their own root module.
+    const mod_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/nats.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "build_options", .module = build_options_mod },
+            },
+        }),
+    });
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
     const test_step = b.step("test", "Run tests");
@@ -56,6 +68,7 @@ pub fn build(b: *std.Build) void {
     const io_backend_mod = b.createModule(.{
         .root_source_file = b.path("src/io_backend.zig"),
         .target = target,
+        .optimize = optimize,
         .imports = &.{
             .{
                 .name = "build_options",
