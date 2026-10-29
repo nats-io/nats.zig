@@ -10358,8 +10358,10 @@ fn runNatsCli(
     const url = formatUrl(&url_buf, js_port);
 
     var full_args: [16][]const u8 = undefined;
-    // --no-context keeps the selected CLI context, and its auth,
-    // away from the local test server.
+    // Run the CLI with only --server: --no-context ignores the
+    // user's selected context (TLS, creds, JS domain, ...), and an
+    // empty environment drops NATS_* variables (NATS_CREDS,
+    // NATS_CA, ...) that the CLI would otherwise apply.
     full_args[0] = nats_cli;
     full_args[1] = "--no-context";
     full_args[2] = "--server";
@@ -10369,8 +10371,13 @@ fn runNatsCli(
         full_args[4 + i] = a;
     }
 
+    // spawn still resolves argv[0] through the parent's PATH.
+    var empty_env: std.process.Environ.Map = .init(allocator);
+    defer empty_env.deinit();
+
     var child = std.process.spawn(io, .{
         .argv = full_args[0 .. 4 + n],
+        .environ_map = &empty_env,
         .stdout = .pipe,
         .stderr = .ignore,
     }) catch return null;

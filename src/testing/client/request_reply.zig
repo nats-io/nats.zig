@@ -639,10 +639,10 @@ pub fn testMuxerLatencyFloor(allocator: std.mem.Allocator) void {
 }
 
 /// Muxer-specific test: proves the muxer's PING/PONG init cost
-/// is amortized to zero. Issues 100 sequential requests on the
-/// same connection and asserts the average round-trip is well
-/// under 1ms (the cold first call is the only one paying for
-/// ensureRespMux + PING/PONG).
+/// is amortized. Issues 100 sequential requests on the same
+/// connection and asserts they all share one wildcard SUB (only
+/// the cold first call pays for ensureRespMux + PING/PONG), with
+/// a loose wall-clock bound against gross regressions.
 pub fn testMuxerRapidSequential(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
@@ -711,23 +711,35 @@ pub fn testMuxerRapidSequential(allocator: std.mem.Allocator) void {
         return;
     }
 
+    // Prove the muxer is on the hot path by counting SUBs, not by
+    // timing: every subscribe takes the next SID, so one wildcard
+    // sub reused by all N requests leaves next_sid at 2, while a
+    // per-request inbox sub would leave it at N + 1.
+    const subs_issued = requester.next_sid - 1;
+    if (subs_issued != 1) {
+        var buf: [64]u8 = undefined;
+        const detail = std.mem.print(
+            &buf,
+            "{d} SUBs for {d} requests (expected 1)",
+            .{ subs_issued, N },
+        ) catch "e";
+        reportResult("muxer_rapid_sequential", false, detail);
+        return;
+    }
+
     const elapsed_ns: u64 = @intCast(start.durationTo(end).nanoseconds);
     const total_ms = elapsed_ns / std.time.ns_per_ms;
 
-    // The old per-request-sub path burned at least 5ms per call
-    // in the artificial sleep alone, so 100 requests would take
-    // >= 500ms even before counting SUB/UNSUB churn. The muxer
-    // amortizes ensureRespMux to one PING/PONG and then uses the
-    // wildcard sub for every subsequent request, so total time
-    // is dominated by per-call dispatch overhead. We assert well
-    // under the old floor to prove the muxer is on the hot path.
-    if (total_ms < 400) {
+    // Loose bound that only catches gross regressions. 100 round
+    // trips take ~200ms on CI, and a tight limit flaked under load
+    // because the requester and responder threads spin-wait.
+    if (total_ms < 2000) {
         reportResult("muxer_rapid_sequential", true, "");
     } else {
         var buf: [64]u8 = undefined;
         const detail = std.mem.print(
             &buf,
-            "100 requests took {d}ms (expected < 400ms)",
+            "100 requests took {d}ms (expected < 2000ms)",
             .{total_ms},
         ) catch "e";
         reportResult("muxer_rapid_sequential", false, detail);
