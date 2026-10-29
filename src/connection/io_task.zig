@@ -15,9 +15,7 @@
 //! Runs as async task started by Client.connect().
 
 const std = @import("std");
-const builtin = @import("builtin");
 const posix = std.posix;
-const native_os = builtin.target.os.tag;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
@@ -287,25 +285,12 @@ const PollResult = enum {
     disconnected,
 };
 
-/// Cross-platform socket poll.
-/// std.posix.poll has a Windows codepath that calls
-/// windows.poll which does not exist in this Zig version.
-/// Use WSAPoll directly on Windows.
+/// Socket poll. POSIX only: Windows is not supported, since
+/// std.posix.pollfd and std.posix.poll are unavailable there.
 fn pollSockets(
     fds: []posix.pollfd,
     timeout: i32,
 ) posix.PollError!usize {
-    if (native_os == .windows) {
-        const ws2 = std.os.windows.ws2_32;
-        const rc = ws2.WSAPoll(
-            fds.ptr,
-            @intCast(fds.len),
-            timeout,
-        );
-        if (rc == ws2.SOCKET_ERROR)
-            return error.NetworkDown;
-        return @intCast(rc);
-    }
     return posix.poll(fds, timeout);
 }
 

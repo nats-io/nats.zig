@@ -11,8 +11,9 @@ const std = @import("std");
 const nats = @import("nats");
 const io_backend = @import("io_backend");
 
-/// Main entry point using Zig 0.16's std.process.Init.
-/// Init provides: gpa (allocator), io (async I/O), arena, args, environ.
+/// Main entry point using std.process.Init.
+/// Init provides: gpa (allocator), io (async I/O), arena,
+/// environ_map, and args/environ via init.minimal.
 ///
 /// IMPORTANT: each Client needs its own Io. We create the backend
 /// here next to the Client so it owns its own execution context.

@@ -1517,7 +1517,8 @@ const client = try nats.Client.connect(allocator, io, "nats://localhost:4222", .
 
 ```zig
 // From environment variable
-const creds = std.posix.getenv("NATS_CREDS") orelse return error.MissingCreds;
+// (init is the std.process.Init passed to main)
+const creds = init.environ_map.get("NATS_CREDS") orelse return error.MissingCreds;
 const client = try nats.Client.connect(allocator, io, url, .{
     .creds = creds,
 });
