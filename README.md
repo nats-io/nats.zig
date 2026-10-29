@@ -690,12 +690,18 @@ call:
 
 | Field | Type | Purpose |
 |-------|------|---------|
-| `max_wait_ms` | `u32` (required, > 0) | Overall deadline for the call. |
+| `max_wait_ms` | `u32` (default 1000, > 0) | Overall deadline for the call. 0 returns `error.InvalidTimeout`. |
 | `max_messages` | `u32` (0 disables) | Terminate after N replies. |
 | `stall_ms` | `u32` (0 disables) | Terminate if no reply arrives within this gap. Applies only *after* the first reply. |
 | `sentinel` | `?Sentinel` | Custom predicate that marks end-of-stream. Use `nats.emptyPayloadSentinel()` for the ADR-47 standard empty-payload marker. |
 
-A server 503 ("no responders") is always terminal.
+A server 503 ("no responders") is always terminal. If the client
+closes during the call (`drain()`, `deinit()`, or a lost connection
+that will not reconnect), the call ends with `.closed`.
+
+`max_wait_ms` is wall-clock time from the request. In the iterator
+form, time your code spends between `next()` calls counts against
+it; the callback form excludes time spent in your handler.
 
 **Iterator form** -- pull replies one at a time, react to each:
 
@@ -705,13 +711,13 @@ var iter = try client.requestMany(
     "ping",
     .{ .max_wait_ms = 2000, .max_messages = 3 },
 );
-defer iter.deinit();
+defer iter.deinit(); // before client.deinit()
 
 while (try iter.next()) |msg| {
     defer msg.deinit();
     std.debug.print("reply: {s}\n", .{msg.data});
 }
-// iter.termination tells you why the call ended:
+// Once next() returns null, iter.termination tells you why:
 //   .max_messages | .max_wait | .stall | .sentinel | .no_responders | .closed
 ```
 
@@ -721,8 +727,10 @@ automatically; returns a summary of the run:
 ```zig
 const Collector = struct {
     count: u32 = 0,
+    bytes: usize = 0,
     pub fn onMessage(self: *@This(), msg: *const nats.Message) void {
         self.count += 1;
+        self.bytes += msg.data.len;
     }
 };
 

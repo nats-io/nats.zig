@@ -18,12 +18,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   over multiple replies to a single request, and
   `Client.requestManyCallback(...)` delivers them through a
   `MsgHandler` and returns a summary. Stop conditions: total
-  deadline (`max_wait_ms`), inter-reply stall timer (`stall_ms`),
-  delivered count (`max_messages`), and user-supplied `Sentinel`
-  predicate. A server-side 503 ("no responders") is detected and
-  surfaced as `termination = .no_responders`. The implementation
-  uses a dedicated two-token inbox subscription that does not
-  collide with the shared `request()` response multiplexer.
+  deadline (`max_wait_ms`, default 1000 ms), inter-reply stall
+  timer (`stall_ms`), delivered count (`max_messages`), and
+  user-supplied `Sentinel` predicate. A server-side 503 ("no
+  responders") is detected and surfaced as
+  `termination = .no_responders`; a client that closes mid-call
+  ends it with `.closed`. The implementation uses a dedicated
+  two-token inbox subscription that does not collide with the
+  shared `request()` response multiplexer.
 - **`Sentinel` and `emptyPayloadSentinel()`** are re-exported
   from the `nats` module. `emptyPayloadSentinel()` provides the
   ADR-47 standard "empty payload terminates the stream" marker;
@@ -33,59 +35,30 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   callback forms against an in-process 3-worker scatter service.
   Run with `zig build run-request-many`.
 
-### Fixed
-
-- **TLS handshake state machine.** `tls://` URLs now fail closed
-  when TLS cannot be negotiated, and reconnect honors each server
-  URL's scheme rather than only the first URL's scheme.
-- **Header validation.** Structured header publish paths
-  (`publishWithHeaders`, `publishRequestWithHeaders`, the
-  micro `respondError` path) reject CR/LF/control bytes, DEL, and
-  colon in keys, blocking header-injection vectors.
-- **Authenticated connects can no longer hang.** A successful
-  auth-required connection no longer blocks on a non-existent
-  server acknowledgement.
-- **KV slice lifetimes.** `KeyLister.next()` and
-  `KvWatcher.next()` previously returned slices into a
-  deinitialized message. The watcher/lister now duplicates the
-  key onto its own allocator and frees it on the next call /
-  deinit.
-- **`PullSubscription.consume()` lifetime.** The consume context
-  is now heap-owned; the background task no longer dereferences
-  a pointer to a stack-local that disappeared when
-  `consume()` returned.
-- **`AsyncPublisher.publishWithOpts()` leak on failure.** A
-  failed publish no longer leaves pending futures in the map or
-  inflates the in-flight count.
-- **`Service.addService()` cleanup on partial failure.** A
-  failure between subscription creation and the final flush no
-  longer leaves orphaned monitor subscriptions alive.
-- **Runtime validation before fixed-buffer copies.** Stream
-  names, consumer names, KV bucket names, and the JetStream API
-  prefix are validated with runtime errors instead of
-  debug-only assertions, so release builds reject malformed
-  input safely.
-- **KV scan error propagation.** `keys()`, `history()`,
-  `historyWithOpts()`, and `purgeDeletes()` no longer silently
-  return partial results when the pull errors mid-iteration.
-- **Connection edge cases.** `rtt()` no longer misses the PONG
-  it triggered; the muxer's PONG race is fixed; subscription
-  routing is preserved during concurrent unsubscribe; the
-  initial-connect leak on overlong TLS host is closed.
-
 ### Changed
 
-- Several JetStream and Micro public setters that previously
-  relied on `std.debug.assert` for input length now return errors
-  at runtime. Callers that fed validated input see no change;
-  callers that relied on the assert in Debug builds will now see
-  the same condition raised as an error in Release builds.
-- The API quick-reference document was removed in favor of the
-  in-code documentation and the JetStream guide.
+- **Requires Zig 0.17.0** (`minimum_zig_version = "0.17.0"`).
+  Zig 0.16 can no longer build the library. Migrated off APIs
+  that 0.17 removed or deprecated (`**` array repeat,
+  `std.fmt.bufPrint`, `std.mem.indexOf*`, `std.fmt.allocPrint`,
+  and others); no public API changes.
+- **`-Dio_backend=evented` is a compile error** instead of a
+  silently unsupported option. Only `threaded` is supported until
+  `std.Io.Evented` gains network read/write. The README now
+  scopes the `std.Io` claim to the public API: the internal
+  io_task uses `poll(2)` and requires `std.Io.Threaded` as host.
 
-### Removed
+### Fixed
 
-- `doc/api-quick-reference.md` (superseded).
+- **BADF panic during disconnect/deinit.** `deinit()`, `drain()`
+  and `forceReconnect()` could race io_task's reconnect path and
+  shut down or close an fd it had already closed or replaced,
+  which panics in Debug (seen on macOS). The stream is now
+  guarded by a mutex. The `fcntl`-based fd-validity check, which
+  misreported closed fds on libc platforms, is gone.
+- **FreeBSD and other BSDs build.** `TCP_NODELAY` now comes from
+  `defaults.Posix.tcp_nodelay` instead of `std.posix.TCP`, which
+  is `void` on those targets.
 
 ## [0.1.0] - 2026-04-29
 
@@ -93,8 +66,8 @@ Initial public release.
 
 ### Highlights
 
-- Core NATS protocol over `std.Io` (Zig 0.16+), no external C
-  dependencies.
+- Core NATS protocol over `std.Io` (built with Zig 0.16.0), no
+  external C dependencies.
 - Pub/sub with three subscription styles: `subscribe()` /
   `subscribeFn()` (callback) and `subscribeSync()` (manual
   receive). Queue group variants for each.

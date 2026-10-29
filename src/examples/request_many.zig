@@ -15,7 +15,8 @@
 //!   2. Callback form  -- replies dispatched via `MsgHandler`.
 //!
 //! Stop conditions (configured via `RequestManyOptions`):
-//!   - `max_wait_ms`   : total deadline for the call (required)
+//!   - `max_wait_ms`   : total deadline for the call
+//!                       (default 1000 ms)
 //!   - `max_messages`  : terminate after N replies
 //!   - `stall_ms`      : terminate after a gap between replies
 //!   - `sentinel`      : terminate on a predicate match. Use
@@ -154,9 +155,10 @@ pub fn main(init: std.process.Init) !void {
             .{ got, msg.data },
         );
     }
+    // Set once next() has returned null.
     std.debug.print(
         "  ended: received={d} termination={s}\n",
-        .{ got, @tagName(iter.termination) },
+        .{ got, @tagName(iter.termination.?) },
     );
 
     // -------- Callback form --------

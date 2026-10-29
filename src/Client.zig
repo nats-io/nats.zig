@@ -2793,7 +2793,9 @@ pub fn emptyPayloadSentinel() Sentinel {
 /// race; whichever fires first terminates the call. `max_wait_ms`
 /// is a hard upper bound and is always honored.
 pub const RequestManyOptions = struct {
-    /// Overall deadline for the call (ms). Must be > 0.
+    /// Overall deadline for the call (ms). Defaults to 1000 ms.
+    /// Must be > 0; `requestMany` returns error.InvalidTimeout
+    /// for 0.
     max_wait_ms: u32 = 1000,
 
     /// Stall timer (ms): terminate if no reply arrives within
@@ -2823,8 +2825,10 @@ pub const RequestManyTermination = enum {
     sentinel,
     /// Server reported no responders (503).
     no_responders,
-    /// Subscription closed before the call terminated normally
-    /// (e.g. connection lost).
+    /// The client closed before the call terminated normally:
+    /// `drain()`/`deinit()`, or a lost connection that will not
+    /// reconnect (reconnect disabled or attempts exhausted).
+    /// While the client is reconnecting the call keeps waiting.
     closed,
 };
 
@@ -2835,8 +2839,9 @@ pub const RequestManyResult = struct {
 };
 
 /// Iterator yielded by `requestMany`. The caller MUST call
-/// `deinit()` regardless of termination path; it unsubscribes
-/// the dedicated inbox and frees its subject buffer.
+/// `deinit()` regardless of termination path, and before
+/// `Client.deinit()`: it unsubscribes the dedicated inbox and
+/// frees its subject buffer, both owned by the client.
 pub const RequestManyIter = struct {
     client: *Client,
     sub: *Sub,
@@ -2844,16 +2849,23 @@ pub const RequestManyIter = struct {
     opts: RequestManyOptions,
     start_ns: u64,
     received: u32,
-    termination: RequestManyTermination,
+    /// Why the call ended. Null until `next()` has returned null,
+    /// and stays null if `next()` returned an error instead.
+    termination: ?RequestManyTermination = null,
     done: bool,
+
+    /// Longest single wait on the inbox queue. io_task does not
+    /// close sync-sub queues when the connection is lost for good,
+    /// so `next()` re-checks the client state at this interval.
+    const closed_check_ms: u32 = 50;
 
     /// Returns the next reply or null if a stop condition fired.
     /// Caller owns the returned message and must call deinit().
     pub fn next(
         self: *RequestManyIter,
     ) !?Message {
-        assert(self.inbox.len > 0);
         if (self.done) return null;
+        assert(self.inbox.len > 0);
         const io = self.client.io;
 
         const total_ns: u64 = @as(u64, self.opts.max_wait_ms) *
@@ -2887,7 +2899,7 @@ pub const RequestManyIter = struct {
         }
         assert(wait_ms > 0);
 
-        const maybe = self.sub.nextMsgTimeout(wait_ms) catch |err| {
+        const maybe = self.waitReply(wait_ms) catch |err| {
             self.done = true;
             if (err == error.Closed) {
                 self.termination = .closed;
@@ -2936,9 +2948,31 @@ pub const RequestManyIter = struct {
         return msg;
     }
 
+    /// Waits up to `wait_ms` for a reply. Returns error.Closed
+    /// once the subscription or client is closed and no reply is
+    /// queued.
+    fn waitReply(self: *RequestManyIter, wait_ms: u32) !?Message {
+        assert(wait_ms > 0);
+        var left = wait_ms;
+        while (true) {
+            // drain() and deinit() leave the sub unsubscribed, and
+            // nextMsgTimeout asserts an active sub.
+            if (!self.sub.isValid()) return error.Closed;
+            const slice = @min(left, closed_check_ms);
+            if (try self.sub.nextMsgTimeout(slice)) |msg| return msg;
+            if (State.atomicLoad(&self.client.state).isTerminal()) {
+                return error.Closed;
+            }
+            left -= slice;
+            if (left == 0) return null;
+        }
+    }
+
     /// Releases the underlying subscription and inbox buffer.
-    /// Safe to call multiple times.
+    /// Call before `Client.deinit()`. Safe to call multiple times;
+    /// `next()` returns null afterwards.
     pub fn deinit(self: *RequestManyIter) void {
+        self.done = true;
         if (self.inbox.len == 0) return;
         self.sub.deinit();
         self.client.allocator.free(self.inbox);
@@ -2954,8 +2988,15 @@ pub const RequestManyIter = struct {
 /// `natsext.RequestMany` and orbit.rs's `request_many`.
 ///
 /// The iterator owns a dedicated inbox subscription; call
-/// `deinit()` on it regardless of how the loop exits. Each
-/// yielded message is owned by the caller (call `deinit()`).
+/// `deinit()` on it regardless of how the loop exits, and before
+/// `deinit()` on the client. Each yielded message is owned by the
+/// caller (call `deinit()`).
+///
+/// `max_wait_ms` is wall-clock time from the request, so time
+/// the caller spends between `next()` calls counts against it,
+/// as in orbit.go and orbit.rs. `requestManyCallback` instead
+/// excludes handler time, as ADR-47 requires for blocking
+/// callbacks.
 ///
 /// Lock-free with respect to the shared response multiplexer
 /// used by single-reply `request()` — the dedicated inbox uses
@@ -2968,7 +3009,7 @@ pub fn requestMany(
     opts: RequestManyOptions,
 ) !RequestManyIter {
     assert(subject.len > 0);
-    assert(opts.max_wait_ms > 0);
+    if (opts.max_wait_ms == 0) return error.InvalidTimeout;
     if (!State.atomicLoad(&self.state).canSend()) {
         return error.NotConnected;
     }
@@ -2989,7 +3030,6 @@ pub fn requestMany(
         .opts = opts,
         .start_ns = getNowNs(self.io),
         .received = 0,
-        .termination = .max_wait,
         .done = false,
     };
 }
@@ -3008,7 +3048,6 @@ pub fn requestManyCallback(
     handler: MsgHandler,
 ) !RequestManyResult {
     assert(subject.len > 0);
-    assert(opts.max_wait_ms > 0);
 
     var iter = try self.requestMany(subject, payload, opts);
     defer iter.deinit();
@@ -3022,9 +3061,10 @@ pub fn requestManyCallback(
         const dispatch_end = getNowNs(self.io);
         iter.start_ns +|= dispatch_end -| dispatch_start;
     }
+    // next() sets termination whenever it returns null.
     return .{
         .received = iter.received,
-        .termination = iter.termination,
+        .termination = iter.termination.?,
     };
 }
 

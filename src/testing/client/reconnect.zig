@@ -69,6 +69,7 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     testMultipleSubscriptionsRestored(allocator, manager);
     testReconnectMaxAttempts(allocator, manager);
     testReconnectDisabled(allocator, manager);
+    testRequestManyClosedOnDisconnect(allocator, manager);
     testPendingBufferFlush(allocator, manager);
     testReconnectStatsIncrement(allocator, manager);
     testReconnectWithQueueGroup(allocator, manager);
@@ -362,6 +363,85 @@ fn testReconnectDisabled(
         reportResult("reconnect_disabled", false, "flush should fail");
     } else |_| {
         reportResult("reconnect_disabled", true, "");
+    }
+}
+
+// requestMany must notice a connection that is gone for good: with
+// reconnect disabled, next() ends with .closed right away instead of
+// waiting out max_wait_ms (io_task does not close sync-sub queues).
+fn testRequestManyClosedOnDisconnect(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
+    const name = "request_many_closed_on_disconnect";
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const io = utils.newIo(allocator);
+    defer io.deinit();
+
+    // no_responders = false: no 503, so only the disconnect can
+    // end the call before max_wait_ms.
+    const client = nats.Client.connect(allocator, io.io(), url, .{
+        .reconnect = false,
+        .no_responders = false,
+    }) catch |err| {
+        utils.reportError(name, "connect", err);
+        return;
+    };
+    defer client.deinit();
+
+    var iter = client.requestMany(
+        "rm.lost.subject",
+        "ping",
+        .{ .max_wait_ms = 5000 },
+    ) catch |err| {
+        utils.reportError(name, "requestMany", err);
+        return;
+    };
+    defer iter.deinit();
+
+    manager.stopAll(io.io());
+    defer {
+        if (manager.startServer(allocator, io.io(), .{ .port = test_port })) |_| {
+            io.io().sleep(.fromMilliseconds(300), .awake) catch {};
+        } else |_| {
+            reportResult(name, false, "restart failed");
+        }
+    }
+
+    if (!waitForClosed(io.io(), client, 2000)) {
+        reportResult(name, false, "client did not close");
+        return;
+    }
+
+    const start = std.Io.Timestamp.now(io.io(), .awake);
+    const msg = iter.next() catch |err| {
+        utils.reportError(name, "next", err);
+        return;
+    };
+    const end = std.Io.Timestamp.now(io.io(), .awake);
+    if (msg) |m| {
+        m.deinit();
+        reportResult(name, false, "unexpected reply");
+        return;
+    }
+
+    const elapsed_ns: i96 = end.nanoseconds - start.nanoseconds;
+    const elapsed_ms: i64 = @intCast(
+        @divFloor(elapsed_ns, std.time.ns_per_ms),
+    );
+    if (iter.termination == .closed and elapsed_ms < 1000) {
+        reportResult(name, true, "");
+    } else {
+        var buf: [64]u8 = undefined;
+        const term = if (iter.termination) |t| @tagName(t) else "none";
+        const detail = std.mem.print(
+            &buf,
+            "term={s} ms={d}",
+            .{ term, elapsed_ms },
+        ) catch "e";
+        reportResult(name, false, detail);
     }
 }
 

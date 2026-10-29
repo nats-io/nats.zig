@@ -7,6 +7,7 @@ const utils = @import("../test_utils.zig");
 const nats = utils.nats;
 
 const reportResult = utils.reportResult;
+const reportError = utils.reportError;
 const formatUrl = utils.formatUrl;
 const formatAuthUrl = utils.formatAuthUrl;
 const test_port = utils.test_port;
@@ -803,62 +804,84 @@ const ScatterResponder = struct {
     }
 };
 
+/// Three responders on one subject, each answering one request
+/// with `tag` via ScatterResponder. Counts what start() created,
+/// so deinit() cleans up correctly when setup fails partway.
+const ScatterGroup = struct {
+    const size = 3;
+
+    io_ctxs: [size]*utils.TestIo = undefined,
+    clients: [size]*nats.Client = undefined,
+    subs: [size]*nats.Subscription = undefined,
+    futs: [size]std.Io.Future(void) = undefined,
+    ready: usize = 0,
+    started: bool = false,
+
+    fn start(
+        self: *ScatterGroup,
+        allocator: std.mem.Allocator,
+        url: []const u8,
+        subject: []const u8,
+        tag: []const u8,
+    ) !void {
+        while (self.ready < size) {
+            const io_ctx = utils.newIo(allocator);
+            errdefer io_ctx.deinit();
+            const client = try nats.Client.connect(
+                allocator,
+                io_ctx.io(),
+                url,
+                .{ .reconnect = false },
+            );
+            errdefer client.deinit();
+            const sub = try client.subscribeSync(subject);
+            self.io_ctxs[self.ready] = io_ctx;
+            self.clients[self.ready] = client;
+            self.subs[self.ready] = sub;
+            self.ready += 1;
+        }
+        self.io_ctxs[0].io().sleep(.fromMilliseconds(50), .awake) catch {};
+
+        for (0..size) |i| {
+            self.futs[i] = self.io_ctxs[i].io().async(
+                ScatterResponder.handle,
+                .{ self.clients[i], self.subs[i], tag },
+            );
+        }
+        self.started = true;
+    }
+
+    fn deinit(self: *ScatterGroup) void {
+        var j: usize = self.ready;
+        while (j > 0) : (j -= 1) {
+            if (self.started) {
+                _ = self.futs[j - 1].cancel(self.io_ctxs[j - 1].io());
+            }
+            self.subs[j - 1].deinit();
+            self.clients[j - 1].deinit();
+            self.io_ctxs[j - 1].deinit();
+        }
+        self.ready = 0;
+    }
+};
+
+/// Termination name for failure details; "none" while unset.
+fn termName(t: ?nats.RequestManyTermination) []const u8 {
+    return if (t) |v| @tagName(v) else "none";
+}
+
 pub fn testRequestManyCount(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const responder_count: u32 = 3;
+    const responder_count: u32 = ScatterGroup.size;
 
-    var io_ctxs: [3]*utils.TestIo = undefined;
-    var responders: [3]*nats.Client = undefined;
-    var subs: [3]*nats.Subscription = undefined;
-    var futs: [3]std.Io.Future(void) = undefined;
-
-    var i: usize = 0;
-    while (i < responder_count) : (i += 1) {
-        io_ctxs[i] = utils.newIo(allocator);
-        responders[i] = nats.Client.connect(
-            allocator,
-            io_ctxs[i].io(),
-            url,
-            .{ .reconnect = false },
-        ) catch {
-            reportResult(
-                "request_many_count",
-                false,
-                "responder connect failed",
-            );
-            return;
-        };
-        subs[i] = responders[i].subscribeSync(
-            "rm.count.service",
-        ) catch {
-            reportResult(
-                "request_many_count",
-                false,
-                "responder sub failed",
-            );
-            return;
-        };
-    }
-    defer {
-        var j: usize = responder_count;
-        while (j > 0) : (j -= 1) {
-            _ = futs[j - 1].cancel(io_ctxs[j - 1].io());
-            subs[j - 1].deinit();
-            responders[j - 1].deinit();
-            io_ctxs[j - 1].deinit();
-        }
-    }
-    io_ctxs[0].io().sleep(.fromMilliseconds(50), .awake) catch {};
-
-    i = 0;
-    while (i < responder_count) : (i += 1) {
-        futs[i] = io_ctxs[i].io().async(
-            ScatterResponder.handle,
-            .{ responders[i], subs[i], "ok" },
-        );
-    }
+    var group: ScatterGroup = .{};
+    defer group.deinit();
+    group.start(allocator, url, "rm.count.service", "ok") catch |err| {
+        reportError("request_many_count", "responder setup", err);
+        return;
+    };
 
     const io_req = utils.newIo(allocator);
     defer io_req.deinit();
@@ -895,12 +918,16 @@ pub fn testRequestManyCount(allocator: std.mem.Allocator) void {
     defer iter.deinit();
 
     var got: u32 = 0;
-    while (iter.next() catch null) |msg| {
+    while (iter.next() catch |err| {
+        reportError("request_many_count", "next", err);
+        return;
+    }) |msg| {
         defer msg.deinit();
         if (std.mem.eql(u8, msg.data, "ok")) got += 1;
     }
 
     if (got == responder_count and
+        iter.received == responder_count and
         iter.termination == .max_messages)
     {
         reportResult("request_many_count", true, "");
@@ -908,8 +935,13 @@ pub fn testRequestManyCount(allocator: std.mem.Allocator) void {
         var buf: [64]u8 = undefined;
         const detail = std.mem.print(
             &buf,
-            "got {d}/{d} term={s}",
-            .{ got, responder_count, @tagName(iter.termination) },
+            "got {d}/{d} recv={d} term={s}",
+            .{
+                got,
+                responder_count,
+                iter.received,
+                termName(iter.termination),
+            },
         ) catch "e";
         reportResult("request_many_count", false, detail);
     }
@@ -998,20 +1030,27 @@ pub fn testRequestManySentinel(allocator: std.mem.Allocator) void {
     };
     defer iter.deinit();
 
+    // Count every yielded message: the empty sentinel reply must be
+    // consumed by the iterator, not yielded.
     var got: u32 = 0;
-    while (iter.next() catch null) |msg| {
+    while (iter.next() catch |err| {
+        reportError("request_many_sentinel", "next", err);
+        return;
+    }) |msg| {
         defer msg.deinit();
-        if (msg.data.len > 0) got += 1;
+        got += 1;
     }
 
-    if (got == 2 and iter.termination == .sentinel) {
+    if (got == 2 and iter.received == 2 and
+        iter.termination == .sentinel)
+    {
         reportResult("request_many_sentinel", true, "");
     } else {
         var buf: [64]u8 = undefined;
         const detail = std.mem.print(
             &buf,
-            "got {d} term={s}",
-            .{ got, @tagName(iter.termination) },
+            "got {d} recv={d} term={s}",
+            .{ got, iter.received, termName(iter.termination) },
         ) catch "e";
         reportResult("request_many_sentinel", false, detail);
     }
@@ -1055,7 +1094,10 @@ pub fn testRequestManyMaxWait(allocator: std.mem.Allocator) void {
     defer iter.deinit();
 
     var got: u32 = 0;
-    while (iter.next() catch null) |msg| {
+    while (iter.next() catch |err| {
+        reportError("request_many_max_wait", "next", err);
+        return;
+    }) |msg| {
         defer msg.deinit();
         got += 1;
     }
@@ -1078,7 +1120,7 @@ pub fn testRequestManyMaxWait(allocator: std.mem.Allocator) void {
             "got={d} term={s} ms={d}",
             .{
                 got,
-                @tagName(iter.termination),
+                termName(iter.termination),
                 elapsed_ms,
             },
         ) catch "e";
@@ -1183,7 +1225,10 @@ pub fn testRequestManyStall(allocator: std.mem.Allocator) void {
     defer iter.deinit();
 
     var got: u32 = 0;
-    while (iter.next() catch null) |msg| {
+    while (iter.next() catch |err| {
+        reportError("request_many_stall", "next", err);
+        return;
+    }) |msg| {
         defer msg.deinit();
         got += 1;
     }
@@ -1209,7 +1254,7 @@ pub fn testRequestManyStall(allocator: std.mem.Allocator) void {
             "got={d} term={s} ms={d}",
             .{
                 got,
-                @tagName(iter.termination),
+                termName(iter.termination),
                 elapsed_ms,
             },
         ) catch "e";
@@ -1258,7 +1303,10 @@ pub fn testRequestManyNoResponders(allocator: std.mem.Allocator) void {
     defer iter.deinit();
 
     var got: u32 = 0;
-    while (iter.next() catch null) |msg| {
+    while (iter.next() catch |err| {
+        reportError("request_many_no_responders", "next", err);
+        return;
+    }) |msg| {
         defer msg.deinit();
         got += 1;
     }
@@ -1281,7 +1329,7 @@ pub fn testRequestManyNoResponders(allocator: std.mem.Allocator) void {
             "got={d} term={s} ms={d}",
             .{
                 got,
-                @tagName(iter.termination),
+                termName(iter.termination),
                 elapsed_ms,
             },
         ) catch "e";
@@ -1309,58 +1357,14 @@ pub fn testRequestManyCallback(allocator: std.mem.Allocator) void {
     var url_buf: [64]u8 = undefined;
     const url = formatUrl(&url_buf, test_port);
 
-    const responder_count: u32 = 3;
+    const responder_count: u32 = ScatterGroup.size;
 
-    var io_ctxs: [3]*utils.TestIo = undefined;
-    var responders: [3]*nats.Client = undefined;
-    var subs: [3]*nats.Subscription = undefined;
-    var futs: [3]std.Io.Future(void) = undefined;
-
-    var i: usize = 0;
-    while (i < responder_count) : (i += 1) {
-        io_ctxs[i] = utils.newIo(allocator);
-        responders[i] = nats.Client.connect(
-            allocator,
-            io_ctxs[i].io(),
-            url,
-            .{ .reconnect = false },
-        ) catch {
-            reportResult(
-                "request_many_callback",
-                false,
-                "responder connect failed",
-            );
-            return;
-        };
-        subs[i] = responders[i].subscribeSync(
-            "rm.cb.service",
-        ) catch {
-            reportResult(
-                "request_many_callback",
-                false,
-                "responder sub failed",
-            );
-            return;
-        };
-    }
-    defer {
-        var j: usize = responder_count;
-        while (j > 0) : (j -= 1) {
-            _ = futs[j - 1].cancel(io_ctxs[j - 1].io());
-            subs[j - 1].deinit();
-            responders[j - 1].deinit();
-            io_ctxs[j - 1].deinit();
-        }
-    }
-    io_ctxs[0].io().sleep(.fromMilliseconds(50), .awake) catch {};
-
-    i = 0;
-    while (i < responder_count) : (i += 1) {
-        futs[i] = io_ctxs[i].io().async(
-            ScatterResponder.handle,
-            .{ responders[i], subs[i], "abc" },
-        );
-    }
+    var group: ScatterGroup = .{};
+    defer group.deinit();
+    group.start(allocator, url, "rm.cb.service", "abc") catch |err| {
+        reportError("request_many_callback", "responder setup", err);
+        return;
+    };
 
     const io_req = utils.newIo(allocator);
     defer io_req.deinit();
@@ -1425,6 +1429,165 @@ pub fn testRequestManyCallback(allocator: std.mem.Allocator) void {
     }
 }
 
+const SlowHandler = struct {
+    io: std.Io,
+    count: u32 = 0,
+
+    pub fn onMessage(
+        self: *@This(),
+        msg: *const nats.Message,
+    ) void {
+        _ = msg;
+        self.io.sleep(.fromMilliseconds(150), .awake) catch {};
+        self.count += 1;
+    }
+};
+
+// Verifies ADR-47's rule that time spent in a blocking callback
+// does not count against max_wait_ms. Three replies arrive at once
+// and each takes 150 ms to handle (450 ms in all) against a 250 ms
+// budget. Without the accounting, the deadline would end the call
+// after the second reply with termination=.max_wait.
+pub fn testRequestManyCallbackHandlerTime(
+    allocator: std.mem.Allocator,
+) void {
+    const name = "request_many_callback_handler_time";
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    var group: ScatterGroup = .{};
+    defer group.deinit();
+    group.start(allocator, url, "rm.cbtime.service", "ok") catch |err| {
+        reportError(name, "responder setup", err);
+        return;
+    };
+
+    const io_req = utils.newIo(allocator);
+    defer io_req.deinit();
+    const requester = nats.Client.connect(
+        allocator,
+        io_req.io(),
+        url,
+        .{ .reconnect = false },
+    ) catch |err| {
+        reportError(name, "requester connect", err);
+        return;
+    };
+    defer requester.deinit();
+
+    var handler: SlowHandler = .{ .io = io_req.io() };
+    const result = requester.requestManyCallback(
+        "rm.cbtime.service",
+        "ping",
+        .{
+            .max_wait_ms = 250,
+            .max_messages = ScatterGroup.size,
+        },
+        nats.MsgHandler.init(SlowHandler, &handler),
+    ) catch |err| {
+        reportError(name, "requestManyCallback", err);
+        return;
+    };
+
+    if (handler.count == ScatterGroup.size and
+        result.received == ScatterGroup.size and
+        result.termination == .max_messages)
+    {
+        reportResult(name, true, "");
+    } else {
+        var buf: [80]u8 = undefined;
+        const detail = std.mem.print(
+            &buf,
+            "count={d} recv={d} term={s}",
+            .{
+                handler.count,
+                result.received,
+                @tagName(result.termination),
+            },
+        ) catch "e";
+        reportResult(name, false, detail);
+    }
+}
+
+// Verifies that draining the client between next() calls ends the
+// call with termination=.closed (rather than tripping the
+// active-subscription assert), and that next() after iter.deinit()
+// returns null.
+pub fn testRequestManyClosedOnDrain(allocator: std.mem.Allocator) void {
+    const name = "request_many_closed_on_drain";
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const io = utils.newIo(allocator);
+    defer io.deinit();
+    // no_responders = false: no 503, so only the drain can end
+    // the call before max_wait_ms.
+    const client = nats.Client.connect(
+        allocator,
+        io.io(),
+        url,
+        .{ .reconnect = false, .no_responders = false },
+    ) catch |err| {
+        reportError(name, "connect", err);
+        return;
+    };
+    defer client.deinit();
+
+    var iter = client.requestMany(
+        "rm.drain.subject",
+        "ping",
+        .{ .max_wait_ms = 3000 },
+    ) catch |err| {
+        reportError(name, "requestMany", err);
+        return;
+    };
+    defer iter.deinit();
+
+    _ = client.drain() catch |err| {
+        reportError(name, "drain", err);
+        return;
+    };
+
+    const start = std.Io.Timestamp.now(io.io(), .awake);
+    const first = iter.next() catch |err| {
+        reportError(name, "next", err);
+        return;
+    };
+    const end = std.Io.Timestamp.now(io.io(), .awake);
+    if (first) |m| {
+        m.deinit();
+        reportResult(name, false, "unexpected reply");
+        return;
+    }
+
+    iter.deinit();
+    const after = iter.next() catch |err| {
+        reportError(name, "next after deinit", err);
+        return;
+    };
+    if (after) |m| {
+        m.deinit();
+        reportResult(name, false, "reply after deinit");
+        return;
+    }
+
+    const elapsed_ns: i96 = end.nanoseconds - start.nanoseconds;
+    const elapsed_ms: i64 = @intCast(
+        @divFloor(elapsed_ns, std.time.ns_per_ms),
+    );
+    if (iter.termination == .closed and elapsed_ms < 1000) {
+        reportResult(name, true, "");
+    } else {
+        var buf: [64]u8 = undefined;
+        const detail = std.mem.print(
+            &buf,
+            "term={s} ms={d}",
+            .{ termName(iter.termination), elapsed_ms },
+        ) catch "e";
+        reportResult(name, false, detail);
+    }
+}
+
 pub fn runAll(allocator: std.mem.Allocator) void {
     testRequestMethod(allocator);
     testRequestReturns(allocator);
@@ -1443,4 +1606,6 @@ pub fn runAll(allocator: std.mem.Allocator) void {
     testRequestManyStall(allocator);
     testRequestManyNoResponders(allocator);
     testRequestManyCallback(allocator);
+    testRequestManyCallbackHandlerTime(allocator);
+    testRequestManyClosedOnDrain(allocator);
 }
