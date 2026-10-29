@@ -69,6 +69,7 @@ pub fn runAll(allocator: std.mem.Allocator, manager: *ServerManager) void {
     testMultipleSubscriptionsRestored(allocator, manager);
     testReconnectMaxAttempts(allocator, manager);
     testReconnectDisabled(allocator, manager);
+    testRequestManyClosedOnDisconnect(allocator, manager);
     testPendingBufferFlush(allocator, manager);
     testReconnectStatsIncrement(allocator, manager);
     testReconnectWithQueueGroup(allocator, manager);
@@ -362,6 +363,100 @@ fn testReconnectDisabled(
         reportResult("reconnect_disabled", false, "flush should fail");
     } else |_| {
         reportResult("reconnect_disabled", true, "");
+    }
+}
+
+const TimedNext = struct {
+    msg: ?nats.Message = null,
+    err: ?anyerror = null,
+    elapsed_ms: i64 = 0,
+
+    fn run(iter: *nats.RequestManyIter, io: std.Io) TimedNext {
+        var r: TimedNext = .{};
+        const start = std.Io.Timestamp.now(io, .awake);
+        r.msg = iter.next() catch |err| blk: {
+            r.err = err;
+            break :blk null;
+        };
+        const end = std.Io.Timestamp.now(io, .awake);
+        const elapsed_ns: i96 = end.nanoseconds - start.nanoseconds;
+        r.elapsed_ms = @intCast(@divFloor(elapsed_ns, std.time.ns_per_ms));
+        return r;
+    }
+};
+
+// requestMany must notice a connection that is gone for good: with
+// reconnect disabled, a next() blocked when the server dies ends
+// with .closed instead of waiting out max_wait_ms (io_task does not
+// close sync-sub queues).
+fn testRequestManyClosedOnDisconnect(
+    allocator: std.mem.Allocator,
+    manager: *ServerManager,
+) void {
+    const name = "request_many_closed_on_disconnect";
+    var url_buf: [64]u8 = undefined;
+    const url = formatUrl(&url_buf, test_port);
+
+    const io = utils.newIo(allocator);
+    defer io.deinit();
+
+    // no_responders = false: no 503, so only the disconnect can
+    // end the call before max_wait_ms.
+    const client = nats.Client.connect(allocator, io.io(), url, .{
+        .reconnect = false,
+        .no_responders = false,
+    }) catch |err| {
+        utils.reportError(name, "connect", err);
+        return;
+    };
+    defer client.deinit();
+
+    var iter = client.requestMany(
+        "rm.lost.subject",
+        "ping",
+        .{ .max_wait_ms = 5000 },
+    ) catch |err| {
+        utils.reportError(name, "requestMany", err);
+        return;
+    };
+    defer iter.deinit();
+
+    // Block in next() on another task, then kill the server.
+    var fut = io.io().async(TimedNext.run, .{ &iter, io.io() });
+    manager.stopAll(io.io());
+    const r = fut.await(io.io());
+
+    // Restart before reporting, so later tests get their server.
+    _ = manager.startServer(allocator, io.io(), .{ .port = test_port }) catch {
+        if (r.msg) |m| m.deinit();
+        reportResult(name, false, "restart failed");
+        return;
+    };
+    io.io().sleep(.fromMilliseconds(300), .awake) catch {};
+
+    if (r.err) |err| {
+        utils.reportError(name, "next", err);
+        return;
+    }
+    if (r.msg) |m| {
+        m.deinit();
+        reportResult(name, false, "unexpected reply");
+        return;
+    }
+
+    // stopAll kills the server and then sleeps 500ms; next() should
+    // end shortly after the kill, far below the 5000ms budget.
+    if (iter.termination == .closed and r.elapsed_ms < 2500) {
+        reportResult(name, true, "");
+    } else {
+        var buf: [64]u8 = undefined;
+        const term = if (iter.termination) |t| @tagName(t) else "none";
+        const detail = std.mem.print(
+            &buf,
+            "term={s} ms={d}",
+            .{ term, r.elapsed_ms },
+        ) catch "e";
+        reportResult(name, false, detail);
     }
 }
 
